@@ -4,24 +4,22 @@ import sys
 
 class URL:
     def __init__(self, url):
-        # 解析 URL Scheme，目前僅支援 http
-        self.scheme, url = url.split("://", 1)
+        # 解析 URL Scheme
+        if url.startswith("data:"):
+            self.scheme="data"
+            self.scheme,self.path = url.split(":", 1)
+        else:
+            self.scheme, url = url.split("://", 1)
 
         # 確保支援的 URL Scheme
-        assert self.scheme in ["http", "https","file"]
+        assert self.scheme in ["http", "https","file","data"]
 
         if self.scheme=="http":
             self.port=80
         elif self.scheme=="https":
             self.port=443
             
-
-        if self.scheme == "file":
-            # 檔案協議沒Host，剩下的url就是路徑
-            # file:///Users/test.txt -> url 變為 /Users/test.txt
-            self.path=url
-            self.host=""
-        else:
+        if self.scheme=="http" or self.scheme=="https":
             # 原本http/https的處理邏輯
             # 確保 URL 包含路徑，若無則補上 "/"
             if "/" not in url:
@@ -35,18 +33,30 @@ class URL:
             if ":" in self.host:
                 self.host,port=self.host.split(":",1)
                 self.port=int(port)
+
+        if self.scheme == "file":
+            # 檔案協議沒Host，剩下的url就是路徑
+            # file:///Users/test.txt -> url 變為 /Users/test.txt
+            self.path=url
+            self.host=""
+
+
             
 
     def request(self):
-        if self.scheme=="file":
-            try:
-                with open(self.path,"r",encoding="utf-8") as f:
-                    return f.read()
 
-            except FileNotFoundError:
-                return "Error: File not found: {}.".format(self.path)
-            except Exception as e:
-                return "Error: {}".format(e)
+        if self.scheme=="data":   
+            #example: text/html,Hello World!
+            if "," in self.path:
+                media_type,body=self.path.split(",",1)
+                return body
+            else:
+                return ""
+
+
+        if self.scheme=="file":
+            with open(self.path,"r",encoding="utf-8") as f:
+                return f.read()
 
 
         # 建立 TCP Socket 連線
@@ -134,15 +144,20 @@ if __name__ == "__main__":
         load(URL(sys.argv[1]))
 
     else:
-        print("未提供 URL，嘗試開啟預設測試檔案...")
 
-        default_url="file:///home/paulboul1013/tai_gar/test.html"
+        default_file="file:///home/paulboul1013/tai_gar/test.html"
+        
 
         try:
-            load(URL(default_url))
+            load(URL(default_file))
         except Exception as e:
-            print(f"無法開啟預設檔案 ({default_url}): {e}")
-            print("請使用方式: python browser.py https://browser.engineering/examples/example1-simple.html")
+            print(f"無法開啟檔案 ({e})")
 
+            
+            print("未提供 URL，使用預設 Data URL 測試...")
+        
+            backup_url = "data:text/html,Hello World! (File not found, used fallback data URL)\n"
+
+            load(URL(backup_url))
 
         
