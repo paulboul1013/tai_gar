@@ -1,5 +1,6 @@
 # tai_gar
 
+![alt text](tai_gar_icon.png)
 
 
 ## introdeuce
