@@ -29,9 +29,6 @@ class URL:
             self.port=int(port)
 
 
-
-
-
     def request(self):
         # 建立 TCP Socket 連線
         s = socket.socket(
@@ -46,12 +43,23 @@ class URL:
             ctx = ssl.create_default_context()
             s = ctx.wrap_socket(s, server_hostname=self.host)
 
-        # 建構 HTTP GET 請求
-        # HTTP/1.0 需要 Host header 以支援虛擬主機
-        request = "GET {} HTTP/1.0\r\n".format(self.path)
-        request += "Host: {}\r\n".format(self.host)
-        request += "\r\n"  # 請求標頭結束，需多一個空行
+
+        # 定義要發送的headers
+        headers = {
+            "Host": self.host,
+            "Connection":"close", # 關閉連線
+            "User-Agent":"MyToyBrowser/1.0"  # 自定義 User-Agent
+        }
         
+        request = "GET {} HTTP/1.1\r\n".format(self.path)
+
+        for header,value in headers.items():
+            request+= "{}: {}\r\n".format(header,value)
+        
+        request += "\r\n"  # 請求標頭結束，需多一個空行
+
+
+
         # 發送編碼後的請求
         s.send(request.encode("utf-8"))
 
