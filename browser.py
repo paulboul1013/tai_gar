@@ -1,5 +1,6 @@
 import socket
 import ssl
+import sys
 
 class URL:
     def __init__(self, url):
@@ -7,29 +8,47 @@ class URL:
         self.scheme, url = url.split("://", 1)
 
         # 確保支援的 URL Scheme
-        assert self.scheme in ["http", "https"]
+        assert self.scheme in ["http", "https","file"]
+
+        if self.scheme=="http":
+            self.port=80
+        elif self.scheme=="https":
+            self.port=443
             
 
-        if self.scheme == "http":
-            self.port=80
-        elif self.scheme == "https":
-            self.port=443
+        if self.scheme == "file":
+            # 檔案協議沒Host，剩下的url就是路徑
+            # file:///Users/test.txt -> url 變為 /Users/test.txt
+            self.path=url
+            self.host=""
+        else:
+            # 原本http/https的處理邏輯
+            # 確保 URL 包含路徑，若無則補上 "/"
+            if "/" not in url:
+                # 如果網址像 "http://google.com"，沒有斜線
+                url = url + "/"
 
-        # 確保 URL 包含路徑，若無則補上 "/"
-        if "/" not in url:
-            # 如果網址像 "http://google.com"，沒有斜線
-            url = url + "/"
+            # 分離主機名稱 (Host) 與路徑 (Path)
+            self.host, url = url.split("/", 1)
+            self.path = "/" + url
 
-        # 分離主機名稱 (Host) 與路徑 (Path)
-        self.host, url = url.split("/", 1)
-        self.path = "/" + url
-
-        if ":" in self.host:
-            self.host,port=self.host.split(":",1)
-            self.port=int(port)
-
+            if ":" in self.host:
+                self.host,port=self.host.split(":",1)
+                self.port=int(port)
+            
 
     def request(self):
+        if self.scheme=="file":
+            try:
+                with open(self.path,"r",encoding="utf-8") as f:
+                    return f.read()
+
+            except FileNotFoundError:
+                return "Error: File not found: {}.".format(self.path)
+            except Exception as e:
+                return "Error: {}".format(e)
+
+
         # 建立 TCP Socket 連線
         s = socket.socket(
             family=socket.AF_INET,
@@ -109,8 +128,21 @@ def load(url):
 
 
 if __name__ == "__main__":
-    import sys
-    # 從命令列參數讀取 URL 並執行
-    load(URL(sys.argv[1]))
+
+    if len(sys.argv) > 1:
+        # 從命令列參數讀取 URL 並執行
+        load(URL(sys.argv[1]))
+
+    else:
+        print("未提供 URL，嘗試開啟預設測試檔案...")
+
+        default_url="file:///home/paulboul1013/tai_gar/test.html"
+
+        try:
+            load(URL(default_url))
+        except Exception as e:
+            print(f"無法開啟預設檔案 ({default_url}): {e}")
+            print("請使用方式: python browser.py https://browser.engineering/examples/example1-simple.html")
+
 
         
