@@ -4,7 +4,15 @@ import sys
 
 class URL:
     def __init__(self, url):
-        # 解析 URL Scheme
+        self.view_source=False
+
+        # 解析 URL Scheme        
+        if url.startswith("view-source:"):
+            # 例如 "view-source:http://google.com" 變成 "http://google.com"
+            self.view_source=True
+            _,url=url.split(":",1)
+
+        # 解析 URL Scheme        
         if url.startswith("data:"):
             self.scheme="data"
             self.scheme,self.path = url.split(":", 1)
@@ -142,7 +150,11 @@ def show(body):
 def load(url):
     # 載入流程：發送請求 -> 取得內容 -> 顯示
     body = url.request()
-    show(body)
+
+    if url.view_source:
+        print(body)
+    else:
+        show(body)
 
 
 if __name__ == "__main__":
@@ -164,8 +176,14 @@ if __name__ == "__main__":
             
             print("未提供 URL，使用預設 Data URL 測試...")
         
-            backup_url = "data:text/html,Hello World! The code is: &lt;div&gt;Content&lt;/div&gt;\n"
+            backup_url = "data:text/html,Hello <b>World</b>! &lt;div&gt;Test&lt;/div&gt;\n"
 
             load(URL(backup_url))
+
+             # 測試 : View-Source 模式
+            print("\n--- 測試 3: View-Source 模式 (顯示原始碼) ---")
+            # 注意這裡前面加了 view-source:
+            view_source_url = "view-source:" + backup_url
+            load(URL(view_source_url))
 
         
