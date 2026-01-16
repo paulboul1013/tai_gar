@@ -69,73 +69,117 @@ class URL:
                 return f.read()
 
         
-        key=(self.scheme,self.host,self.port)
+        current_url=self
+        redirect_limit=10 
 
-        if key in socket_cache:
-            s=socket_cache[key]
-        else:
-            # 建立 TCP Socket 連線
-            s = socket.socket(
-                family=socket.AF_INET,
-                type=socket.SOCK_STREAM,
-                proto=socket.IPPROTO_TCP
-            )
+        while redirect_limit>0:
+            key=(self.scheme,self.host,self.port)
+            
 
-            # 連接到伺服器的Port
-            s.connect((self.host, self.port))
+            if key in socket_cache:
+                s=socket_cache[key]
+            else:
+                # 建立 TCP Socket 連線
+                s = socket.socket(
+                    family=socket.AF_INET,
+                    type=socket.SOCK_STREAM,
+                    proto=socket.IPPROTO_TCP
+                )
 
-            if self.scheme == "https":
-                ctx = ssl.create_default_context()
-                s = ctx.wrap_socket(s, server_hostname=self.host)
+                # 連接到伺服器的Port
+                s.connect((self.host, self.port))
 
-            socket_cache[key]=s
+                if self.scheme == "https":
+                    ctx = ssl.create_default_context()
+                    s = ctx.wrap_socket(s, server_hostname=self.host)
+
+                socket_cache[key]=s
 
 
-        # 定義要發送的headers
-        headers = {
-            "Host": self.host,
-            "Connection":"keep-alive", # 關閉連線
-            "User-Agent":"MyToyBrowser/1.0"  # 自定義 User-Agent
-        }
+            # 定義要發送的headers
+            headers = {
+                    "Host": self.host,
+                    "Connection":"keep-alive", # 關閉連線
+                    "User-Agent":"MyToyBrowser/1.0"  # 自定義 User-Agent
+            }
         
-        request = "GET {} HTTP/1.1\r\n".format(self.path)
+            request = "GET {} HTTP/1.1\r\n".format(current_url.path)
 
-        for header,value in headers.items():
-            request+= "{}: {}\r\n".format(header,value)
+            for header,value in headers.items():
+                request+= "{}: {}\r\n".format(header,value)
         
-        request += "\r\n"  # 請求標頭結束，需多一個空行
+            request += "\r\n"  # 請求標頭結束，需多一個空行
 
 
 
-        # 發送編碼後的請求
-        s.send(request.encode("utf-8"))
+            # 發送編碼後的請求
+            s.send(request.encode("utf-8"))
 
-        # 使用 makefile 建立檔案介面，方便逐行讀取回應
-        response = s.makefile("rb")
+            # 使用 makefile 建立檔案介面，方便逐行讀取回應
+            response = s.makefile("rb")
 
-        # 讀取狀態行 (Status Line)，例如: HTTP/1.0 200 OK
-        statusline = response.readline().decode("utf-8")
-        version, status, explanation = statusline.split(" ", 2)
+            try:
+
+                # 讀取狀態行 (Status Line)，例如: HTTP/1.0 200 OK
+                statusline = response.readline().decode("utf-8")
+                if not statusline:
+                    break
+
+                version, status, explanation = statusline.split(" ", 2)
+                status=int(status)
+
+            except Exception:
+                s.close()
+                if key in socket_cache:
+                    del socket_cache[key]
+                    
+                continue
         
-        # 讀取並解析回應標頭 (Headers)
-        response_headers = {}
-        while True:
-            line = response.readline().decode("utf-8")
-            if line == "\r\n": break  # 遇到空行表示標頭結束
-            header, value = line.split(":", 1)
-            response_headers[header.casefold()] = value.strip()
+            # 讀取並解析回應標頭 (Headers)
+            response_headers = {}
+            while True:
+                line = response.readline().decode("utf-8")
+                if line == "\r\n": break  # 遇到空行表示標頭結束
+                header, value = line.split(":", 1)
+                response_headers[header.casefold()] = value.strip()
 
-        content_bytes=b""
 
-        # 讀取回應內容 (Body)
-        # 根據 Content-Length 讀取指定長度，或直接讀到連線關閉
-        if "content-length" in response_headers:
-            content_length = int(response_headers["content-length"])
-            content_bytes = response.read(content_length)
-        else:
-            content_bytes = response.read()
+            content_bytes=b""
 
-        return content_bytes.decode("utf-8",errors="replace")
+            # 讀取 Body (無論是 200 還是 301，都要把 Body 讀乾淨，才能 reuse socket)
+            if "content-length" in response_headers:
+                content_length = int(response_headers["content-length"])
+                content_bytes = response.read(content_length)
+            else:
+                # 對於 3xx 轉址，如果沒有 Content-Length，有些伺服器可能直接不傳 Body
+                # 但為了安全起見，這裡還是保留 read()，但在 Keep-Alive 下沒 Length 其實很危險
+                content_bytes = response.read()
+
+
+            if 300<=status<400:
+                
+                if "location" in response_headers:
+                    location=response_headers["location"]
+                    
+                     # 處理相對路徑 (例如 "/redirect2")
+                    if location.startswith("/"):
+                        location=current_url.scheme+"://"+current_url.host+location
+                    
+                    #更新current_url,準備下一次迴圈
+                    print(f"Redirecting to: {location}") # 除錯用，讓你知道正在轉址
+                    current_url=URL(location)
+
+                    redirect_limit-=1
+                    continue
+
+            # 如果不是轉址 (200 OK 或其他錯誤)，直接回傳結果
+            return content_bytes.decode("utf-8",errors="replace")
+
+
+
+        raise Exception("Redirect loop detected!")
+
+            
 
 def show(body):
     
@@ -177,12 +221,18 @@ if __name__ == "__main__":
         # default_file="file:///home/paulboul1013/tai_gar/test.html"
 
         try:
-            # 測試：連續請求同一個網站，驗證 Socket Reuse (你可以透過 Wireshark 或觀察延遲來驗證)
-            print("--- 第一次請求 (建立新連線) ---")
-            load(URL("http://browser.engineering/examples/example1-simple.html"))
+            # 測試轉址功能
+            print("--- 測試轉址功能 ---")
+            # 這個網址會轉址回 /http.html
+            load(URL("http://browser.engineering/redirect"))
+
+
+            # # 測試：連續請求同一個網站，驗證 Socket Reuse (你可以透過 Wireshark 或觀察延遲來驗證)
+            # print("--- 第一次請求 (建立新連線) ---")
+            # load(URL("http://browser.engineering/examples/example1-simple.html"))
             
-            print("\n--- 第二次請求 (應該重用 Socket) ---")
-            load(URL("http://browser.engineering/examples/example1-simple.html"))
+            # print("\n--- 第二次請求 (應該重用 Socket) ---")
+            # load(URL("http://browser.engineering/examples/example1-simple.html"))
 
             # load(URL(default_file))
         except Exception as e:
