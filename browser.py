@@ -121,15 +121,23 @@ class URL:
         return content
 
 def show(body):
-    # 簡單的 HTML 解析器：移除角括號 <> 包夾的標籤內容，只顯示文字
+    
     in_tag = False
+    text_buffer ="" # 用來暫存過濾掉標籤後的文字
     for c in body:
         if c == "<":
             in_tag = True
         elif c == ">":
             in_tag = False
         elif not in_tag:
-            print(c, end="")
+            #非標籤文字
+            text_buffer+=c
+
+    #避免 &lt，&gt； 被轉成 <，> 後又被誤認為標籤
+    text_buffer=text_buffer.replace("&lt;","<")
+    text_buffer=text_buffer.replace("&gt;",">")
+    
+    print(text_buffer)
 
 def load(url):
     # 載入流程：發送請求 -> 取得內容 -> 顯示
@@ -156,7 +164,7 @@ if __name__ == "__main__":
             
             print("未提供 URL，使用預設 Data URL 測試...")
         
-            backup_url = "data:text/html,Hello World! (File not found, used fallback data URL)\n"
+            backup_url = "data:text/html,Hello World! The code is: &lt;div&gt;Content&lt;/div&gt;\n"
 
             load(URL(backup_url))
 
