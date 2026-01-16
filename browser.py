@@ -2,6 +2,10 @@ import socket
 import ssl
 import sys
 
+#key:(scheme,host,port)
+#value:socket object
+socket_cache={}
+
 class URL:
     def __init__(self, url):
         self.view_source=False
@@ -49,8 +53,6 @@ class URL:
             self.host=""
 
 
-            
-
     def request(self):
 
         if self.scheme=="data":   
@@ -66,25 +68,33 @@ class URL:
             with open(self.path,"r",encoding="utf-8") as f:
                 return f.read()
 
+        
+        key=(self.scheme,self.host,self.port)
 
-        # 建立 TCP Socket 連線
-        s = socket.socket(
-            family=socket.AF_INET,
-            type=socket.SOCK_STREAM,
-            proto=socket.IPPROTO_TCP
-        )
+        if key in socket_cache:
+            s=socket_cache[key]
+        else:
+            # 建立 TCP Socket 連線
+            s = socket.socket(
+                family=socket.AF_INET,
+                type=socket.SOCK_STREAM,
+                proto=socket.IPPROTO_TCP
+            )
 
-        # 連接到伺服器的 80 Port (HTTP 標準埠號)
-        s.connect((self.host, self.port))
-        if self.scheme == "https":
-            ctx = ssl.create_default_context()
-            s = ctx.wrap_socket(s, server_hostname=self.host)
+            # 連接到伺服器的Port
+            s.connect((self.host, self.port))
+
+            if self.scheme == "https":
+                ctx = ssl.create_default_context()
+                s = ctx.wrap_socket(s, server_hostname=self.host)
+
+            socket_cache[key]=s
 
 
         # 定義要發送的headers
         headers = {
             "Host": self.host,
-            "Connection":"close", # 關閉連線
+            "Connection":"keep-alive", # 關閉連線
             "User-Agent":"MyToyBrowser/1.0"  # 自定義 User-Agent
         }
         
@@ -101,32 +111,31 @@ class URL:
         s.send(request.encode("utf-8"))
 
         # 使用 makefile 建立檔案介面，方便逐行讀取回應
-        response = s.makefile("r", encoding="utf8", newline="\r\n")
+        response = s.makefile("rb")
 
         # 讀取狀態行 (Status Line)，例如: HTTP/1.0 200 OK
-        statusline = response.readline()
+        statusline = response.readline().decode("utf-8")
         version, status, explanation = statusline.split(" ", 2)
         
         # 讀取並解析回應標頭 (Headers)
         response_headers = {}
         while True:
-            line = response.readline()
+            line = response.readline().decode("utf-8")
             if line == "\r\n": break  # 遇到空行表示標頭結束
             header, value = line.split(":", 1)
             response_headers[header.casefold()] = value.strip()
+
+        content_bytes=b""
 
         # 讀取回應內容 (Body)
         # 根據 Content-Length 讀取指定長度，或直接讀到連線關閉
         if "content-length" in response_headers:
             content_length = int(response_headers["content-length"])
-            content = response.read(content_length)
+            content_bytes = response.read(content_length)
         else:
-            content = response.read()
+            content_bytes = response.read()
 
-        # 關閉 Socket
-        s.close()
-
-        return content
+        return content_bytes.decode("utf-8",errors="replace")
 
 def show(body):
     
@@ -165,11 +174,17 @@ if __name__ == "__main__":
 
     else:
 
-        default_file="file:///home/paulboul1013/tai_gar/test.html"
-        
+        # default_file="file:///home/paulboul1013/tai_gar/test.html"
 
         try:
-            load(URL(default_file))
+            # 測試：連續請求同一個網站，驗證 Socket Reuse (你可以透過 Wireshark 或觀察延遲來驗證)
+            print("--- 第一次請求 (建立新連線) ---")
+            load(URL("http://browser.engineering/examples/example1-simple.html"))
+            
+            print("\n--- 第二次請求 (應該重用 Socket) ---")
+            load(URL("http://browser.engineering/examples/example1-simple.html"))
+
+            # load(URL(default_file))
         except Exception as e:
             print(f"無法開啟檔案 ({e})")
 
