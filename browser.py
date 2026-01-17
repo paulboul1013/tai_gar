@@ -1,10 +1,16 @@
 import socket
 import ssl
 import sys
+import time 
 
 #key:(scheme,host,port)
 #value:socket object
 socket_cache={}
+
+# http cache
+# key:url string
+# value:(body_bytes,expires_at_timestamp)
+http_cache={}
 
 class URL:
     def __init__(self, url):
@@ -52,6 +58,12 @@ class URL:
             self.path=url
             self.host=""
 
+        # save origin url string，for cache key
+        if self.scheme in ["http","https"]:
+            self.url_string=f"{self.scheme}://{self.host}:{self.port}{self.path}"
+        else:
+            self.url_string=url
+
 
     def request(self):
 
@@ -73,6 +85,21 @@ class URL:
         redirect_limit=10 
 
         while redirect_limit>0:
+            
+            if current_url.url_string in http_cache:
+                cached_body,expires_at=http_cache[current_url.url_string]
+
+                if time.time() < expires_at:
+                    
+                    print(f"Cache Hit! (Expires in {int(expires_at - time.time())}s)")
+                    return cached_body.decode("utf-8",errors="replace")
+
+                else:
+                    print("Cache Expired! Re-downloading...")
+                    del http_cache[current_url.url_string]
+
+
+
             key=(self.scheme,self.host,self.port)
             
 
@@ -155,7 +182,7 @@ class URL:
                 # 但為了安全起見，這裡還是保留 read()，但在 Keep-Alive 下沒 Length 其實很危險
                 content_bytes = response.read()
 
-
+            # --- 轉址處理 ---
             if 300<=status<400:
                 
                 if "location" in response_headers:
@@ -172,8 +199,44 @@ class URL:
                     redirect_limit-=1
                     continue
 
+            # 檢查 Cache-Control
+            if status==200 and "cache-control" in response_headers:
+                cache_control=response_headers["cache-control"]
+
+                cache_control = cache_control.lower()
+                
+                if "no-store" in cache_control:
+                    pass
+
+                elif "max-age" in cache_control:
+                    try:
+                        directives=cache_control.split(",")
+                        for directive in directives:
+                            directive=directive.strip()
+
+                            if directive.startswith("max-age="):
+                                _,seconds=directive.split("=",1)
+                                
+
+                                if seconds.isdigit():
+                                    max_age=int(seconds)
+                                    expires_at=time.time()+max_age
+                                    http_cache[current_url.url_string]=(content_bytes,expires_at)
+                                    print(f"Cached! (max-age={max_age})")
+
+                                break
+
+                    except ValueError:
+                        pass
+                    
+            print(f"Debug - Headers: {response_headers.keys()}")
+            if "cache-control" in response_headers:
+                print(f"Debug - Cache-Control value: {response_headers['cache-control']}")
+
             # 如果不是轉址 (200 OK 或其他錯誤)，直接回傳結果
             return content_bytes.decode("utf-8",errors="replace")
+
+
 
 
 
@@ -221,10 +284,19 @@ if __name__ == "__main__":
         # default_file="file:///home/paulboul1013/tai_gar/test.html"
 
         try:
-            # 測試轉址功能
-            print("--- 測試轉址功能 ---")
-            # 這個網址會轉址回 /http.html
-            load(URL("http://browser.engineering/redirect"))
+            # 測試快取功能
+            test_url = "http://httpbin.org/cache/10"
+            
+            print(f"--- 第一次請求: {test_url} ---")
+            load(URL(test_url))
+            
+            print(f"\n--- 第二次請求 (應該命中快取) ---")
+            load(URL(test_url))
+
+            # # 測試轉址功能
+            # print("--- 測試轉址功能 ---")
+            # # 這個網址會轉址回 /http.html
+            # load(URL("http://browser.engineering/redirect"))
 
 
             # # 測試：連續請求同一個網站，驗證 Socket Reuse (你可以透過 Wireshark 或觀察延遲來驗證)
