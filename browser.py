@@ -2,7 +2,7 @@ import socket
 import ssl
 import sys
 import time 
-
+import gzip
 #key:(scheme,host,port)
 #value:socket object
 socket_cache={}
@@ -125,9 +125,10 @@ class URL:
 
             # 定義要發送的headers
             headers = {
-                    "Host": self.host,
+                    "Host": current_url.host, # 注意：轉址後 Host 也要變，所以用 current_url.host
                     "Connection":"keep-alive", # 關閉連線
-                    "User-Agent":"MyToyBrowser/1.0"  # 自定義 User-Agent
+                    "User-Agent":"MyToyBrowser/1.0", # 自定義 User-Agent
+                    "Accept-Encoding":"gzip" # support gzip
             }
         
             request = "GET {} HTTP/1.1\r\n".format(current_url.path)
@@ -173,14 +174,42 @@ class URL:
 
             content_bytes=b""
 
+            if response_headers.get("transfer-encoding") == "chunked":
+                # chucked transfer read mode
+                while True:
+                    #1. read line (16 bits) b"1F\r\n"
+                    line=response.readline().strip() # remove \r\n
+                    if not line:
+                        break
+
+                    # let 16 bits string into int
+                    chunk_len=int(line,16)
+
+                    # check 0 len
+                    if chunk_len==0:
+                        break
+
+                    # 3. read data blocks
+                    chuck_data=response.read(check_len)
+                    content_bytes+=chuck_data 
+
+                    # 4. read and throw away data blocks after \r\n
+                    response.read(2)
+
+
             # 讀取 Body (無論是 200 還是 301，都要把 Body 讀乾淨，才能 reuse socket)
-            if "content-length" in response_headers:
+            elif "content-length" in response_headers:
                 content_length = int(response_headers["content-length"])
                 content_bytes = response.read(content_length)
             else:
                 # 對於 3xx 轉址，如果沒有 Content-Length，有些伺服器可能直接不傳 Body
                 # 但為了安全起見，這裡還是保留 read()，但在 Keep-Alive 下沒 Length 其實很危險
                 content_bytes = response.read()
+
+            #gzip decompression
+            if response_headers.get("content-encoding") == "gzip":
+                # if sever say it's gzip ，then decompression
+                content_bytes=gzip.decompress(content_bytes)
 
             # --- 轉址處理 ---
             if 300<=status<400:
@@ -233,6 +262,12 @@ class URL:
             if "cache-control" in response_headers:
                 print(f"Debug - Cache-Control value: {response_headers['cache-control']}")
 
+
+            if "content-encoding" in response_headers:
+                print(f"Debug - Content-Encoding: {response_headers['content-encoding']}")
+            if "transfer-encoding" in response_headers:
+                print(f"Debug - Transfer-Encoding: {response_headers['transfer-encoding']}")
+
             # 如果不是轉址 (200 OK 或其他錯誤)，直接回傳結果
             return content_bytes.decode("utf-8",errors="replace")
 
@@ -284,14 +319,22 @@ if __name__ == "__main__":
         # default_file="file:///home/paulboul1013/tai_gar/test.html"
 
         try:
-            # 測試快取功能
-            test_url = "http://httpbin.org/cache/10"
+            # 測試 Gzip 壓縮
+            # httpbin 的 /gzip 接口會回傳 gzip 壓縮後的 json 資料
+            test_url = "http://httpbin.org/gzip"
             
-            print(f"--- 第一次請求: {test_url} ---")
+            print(f"--- 測試 Gzip 壓縮: {test_url} ---")
             load(URL(test_url))
+
+
+            # # 測試快取功能
+            # test_url = "http://httpbin.org/cache/10"
             
-            print(f"\n--- 第二次請求 (應該命中快取) ---")
-            load(URL(test_url))
+            # print(f"--- 第一次請求: {test_url} ---")
+            # load(URL(test_url))
+            
+            # print(f"\n--- 第二次請求 (應該命中快取) ---")
+            # load(URL(test_url))
 
             # # 測試轉址功能
             # print("--- 測試轉址功能 ---")
