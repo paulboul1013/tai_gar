@@ -30,13 +30,48 @@ class Browser:
         # 載入流程：發送請求 -> 取得內容 -> 顯示
         body = url.request()
 
+        def lex(body):
+            text=""
+
+            in_tag = False
+            # text_buffer ="" # 用來暫存過濾掉標籤後的文字
+            for c in body:
+                if c == "<":
+                    in_tag = True
+                elif c == ">":
+                    in_tag = False
+                elif not in_tag:
+                    #非標籤文字
+                    text+=c
+
+
+            #避免 &lt，&gt； 被轉成 <，> 後又被誤認為標籤
+            text=text.replace("&lt;","<")
+            text=text.replace("&gt;",">")
+        
+            return text
+
         if url.view_source:
             print(body)
+            text = ""
         else:
-            show(body)
-        self.canvas.create_rectangle(10,20,400,300)
-        self.canvas.create_oval(100,100,150,150)
-        self.canvas.create_text(200,150,text="Hi")
+            text = lex(body)
+
+        # self.canvas.create_rectangle(10,20,400,300)
+        # self.canvas.create_oval(100,100,150,150)
+        # self.canvas.create_text(200,150,text="Hi")
+
+        HSTEP,VSTEP=13,18
+        cursor_x,cursor_y=HSTEP,VSTEP
+        for c in text:
+            self.canvas.create_text(cursor_x,cursor_y,text=c)
+            cursor_x+=HSTEP
+
+            if cursor_x >= WIDTH-HSTEP:
+                cursor_y+=VSTEP
+                cursor_x=HSTEP
+
+
 
 
 class URL:
