@@ -3,6 +3,8 @@ import ssl
 import sys
 import time 
 import gzip
+import tkinter
+
 #key:(scheme,host,port)
 #value:socket object
 socket_cache={}
@@ -12,8 +14,35 @@ socket_cache={}
 # value:(body_bytes,expires_at_timestamp)
 http_cache={}
 
+WIDTH,HEIGHT=800,600
+
+class Browser:
+    def __init__(self):
+        self.window=tkinter.Tk()
+        self.canvas=tkinter.Canvas(
+            self.window,
+            width=WIDTH,
+            height=HEIGHT
+        )
+        self.canvas.pack()
+    
+    def load(self,url):
+        # 載入流程：發送請求 -> 取得內容 -> 顯示
+        body = url.request()
+
+        if url.view_source:
+            print(body)
+        else:
+            show(body)
+        self.canvas.create_rectangle(10,20,400,300)
+        self.canvas.create_oval(100,100,150,150)
+        self.canvas.create_text(200,150,text="Hi")
+
+
 class URL:
     def __init__(self, url):
+
+
         self.view_source=False
 
         # 解析 URL Scheme        
@@ -190,7 +219,7 @@ class URL:
                         break
 
                     # 3. read data blocks
-                    chuck_data=response.read(check_len)
+                    chuck_data=response.read(chunk_len)
                     content_bytes+=chuck_data 
 
                     # 4. read and throw away data blocks after \r\n
@@ -272,9 +301,6 @@ class URL:
             return content_bytes.decode("utf-8",errors="replace")
 
 
-
-
-
         raise Exception("Redirect loop detected!")
 
             
@@ -307,24 +333,29 @@ def load(url):
     else:
         show(body)
 
-
 if __name__ == "__main__":
 
-    if len(sys.argv) > 1:
-        # 從命令列參數讀取 URL 並執行
-        load(URL(sys.argv[1]))
+    Browser().load(URL(sys.argv[1]))
+    tkinter.mainloop()
 
-    else:
+
+    # if len(sys.argv) > 1:
+        # 從命令列參數讀取 URL 並執行
+        # load(URL(sys.argv[1]))
+
+    # else:
+    #     window=tkinter.Tk()
+    #     tkinter.mainloop()
 
         # default_file="file:///home/paulboul1013/tai_gar/test.html"
 
-        try:
+        # try:
             # 測試 Gzip 壓縮
             # httpbin 的 /gzip 接口會回傳 gzip 壓縮後的 json 資料
-            test_url = "http://httpbin.org/gzip"
+            # test_url = "http://httpbin.org/gzip"
             
-            print(f"--- 測試 Gzip 壓縮: {test_url} ---")
-            load(URL(test_url))
+            # print(f"--- 測試 Gzip 壓縮: {test_url} ---")
+            # load(URL(test_url))
 
 
             # # 測試快取功能
@@ -350,20 +381,20 @@ if __name__ == "__main__":
             # load(URL("http://browser.engineering/examples/example1-simple.html"))
 
             # load(URL(default_file))
-        except Exception as e:
-            print(f"無法開啟檔案 ({e})")
+        # except Exception as e:
+        #     print(f"無法開啟檔案 ({e})")
 
             
-            print("未提供 URL，使用預設 Data URL 測試...")
+        #     print("未提供 URL，使用預設 Data URL 測試...")
         
-            backup_url = "data:text/html,Hello <b>World</b>! &lt;div&gt;Test&lt;/div&gt;\n"
+        #     backup_url = "data:text/html,Hello <b>World</b>! &lt;div&gt;Test&lt;/div&gt;\n"
 
-            load(URL(backup_url))
+        #     load(URL(backup_url))
 
-             # 測試 : View-Source 模式
-            print("\n--- 測試 3: View-Source 模式 (顯示原始碼) ---")
-            # 注意這裡前面加了 view-source:
-            view_source_url = "view-source:" + backup_url
-            load(URL(view_source_url))
+        #      # 測試 : View-Source 模式
+        #     print("\n--- 測試 3: View-Source 模式 (顯示原始碼) ---")
+        #     # 注意這裡前面加了 view-source:
+        #     view_source_url = "view-source:" + backup_url
+        #     load(URL(view_source_url))
 
         
