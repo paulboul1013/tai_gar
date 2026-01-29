@@ -18,7 +18,7 @@ WIDTH,HEIGHT=800,600
 HSTEP, VSTEP = 13, 18
 SCROLL_STEP = 100
 
-def layout(text):
+def layout(text,width):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
     for c in text:
@@ -34,7 +34,7 @@ def layout(text):
         cursor_x += HSTEP
 
 
-        if cursor_x >= WIDTH - HSTEP:
+        if cursor_x >= width - HSTEP:
             cursor_y += VSTEP
             cursor_x = HSTEP
 
@@ -64,12 +64,20 @@ def lex(body):
 class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
+
+        self.width=WIDTH
+        self.height=HEIGHT
+
+        self.text=""
+
         self.canvas = tkinter.Canvas(
             self.window,
             width=WIDTH,
             height=HEIGHT
         )
-        self.canvas.pack()
+        # let canvas fill the window
+        self.canvas.pack(fill=tkinter.BOTH,expand=True)
+        self.window.bind("<Configure>",self.resize)
         self.scroll = 0
 
         # bind keyboard events
@@ -83,16 +91,20 @@ class Browser:
         self.window.bind("<Button-4>",self.scrollup)
         self.window.bind("<Button-5>",self.scrolldown)
 
+        
+
     def load(self, url):
         body = url.request()
-        text = lex(body)
-        self.display_list = layout(text)
+        self.text = lex(body)
+
+        self.display_list = layout(self.text,self.width)
         self.draw()
 
     def draw(self):
         self.canvas.delete("all")
         for x, y, c in self.display_list:
-            if y > self.scroll + HEIGHT: continue
+
+            if y > self.scroll + self.height: continue
             if y + VSTEP < self.scroll: continue
             self.canvas.create_text(x, y - self.scroll, text=c)
 
@@ -111,6 +123,16 @@ class Browser:
             self.scrollup(e)
         else:
             self.scrolldown(e)
+
+    def resize(self,e):
+        # read new window size
+        self.width=e.width
+        self.height=e.height
+        
+        #recalculate layout
+        self.display_list=layout(self.text,self.width)
+
+        self.draw()
 
 
 class URL:
