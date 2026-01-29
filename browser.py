@@ -22,11 +22,22 @@ def layout(text):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
     for c in text:
+
+
+        if c=="\n":
+            cursor_y+=VSTEP*1.5
+            cursor_x=HSTEP
+            continue
+
+
         display_list.append((cursor_x, cursor_y, c))
         cursor_x += HSTEP
+
+
         if cursor_x >= WIDTH - HSTEP:
             cursor_y += VSTEP
             cursor_x = HSTEP
+
     return display_list
 
 def lex(body):
@@ -72,7 +83,7 @@ class Browser:
         self.canvas.delete("all")
         for x, y, c in self.display_list:
             if y > self.scroll + HEIGHT: continue
-            if y < self.scroll: continue
+            if y + VSTEP < self.scroll: continue
             self.canvas.create_text(x, y - self.scroll, text=c)
 
     def scrolldown(self, e):
