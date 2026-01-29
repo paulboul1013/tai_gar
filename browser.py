@@ -18,6 +18,8 @@ WIDTH,HEIGHT=800,600
 HSTEP, VSTEP = 13, 18
 SCROLL_STEP = 100
 
+SCROLLBAR_WIDTH=12
+
 def layout(text,width):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
@@ -108,8 +110,60 @@ class Browser:
             if y + VSTEP < self.scroll: continue
             self.canvas.create_text(x, y - self.scroll, text=c)
 
+            #scrollbar section
+            
+            #calculate web total height
+            if self.display_list:
+                # last word y coord  + height
+                document_height=self.display_list[-1][1]+VSTEP
+            else:
+                document_height=0
+
+            # only web longer than window height need scrollbar
+            if document_height>self.height:
+                # calculate ratio
+                ratio_visible=self.height/document_height
+                ratio_scroll=self.scroll/document_height
+
+                # calculate scrollbar size and position
+                bar_h=self.height*ratio_visible
+                bar_y=self.height*ratio_scroll
+
+                #draw blue rectangle
+                #pos:(right edge - width bound, top edge,right edge,down edge)
+                self.canvas.create_rectangle(
+                    self.width-SCROLLBAR_WIDTH,
+                    bar_y,
+                    self.width,
+                    bar_y+bar_h,
+                    fill="blue",outline=""
+                )
+
+            
+
     def scrolldown(self, e):
-        self.scroll += SCROLL_STEP
+        
+        # calculate web total height
+        if self.display_list:
+            document_height=self.display_list[-1][1]+VSTEP
+        else:
+            document_height=0
+
+        # calculate max scroll distance(web total height - window height)
+        max_scroll=document_height-self.height
+
+
+        # execute scroll and limit edge
+        self.scroll+=SCROLL_STEP
+
+        # if scroll is greater than max scroll, limit it
+        if self.scroll>max_scroll:
+            self.scroll=max_scroll
+
+        # if web less than window (max_scroll < 0)
+        if self.scroll<0:
+            self.scroll=0
+
         self.draw()
 
     def scrollup(self,e):
