@@ -71,7 +71,17 @@ class Browser:
         )
         self.canvas.pack()
         self.scroll = 0
+
+        # bind keyboard events
+        self.window.bind("<Up>",self.scrollup)
         self.window.bind("<Down>", self.scrolldown)
+
+        #bind mouse events
+        self.window.bind("<MouseWheel>",self.mousewheel)
+
+        #use buttion4 and button5 to scroll
+        self.window.bind("<Button-4>",self.scrollup)
+        self.window.bind("<Button-5>",self.scrolldown)
 
     def load(self, url):
         body = url.request()
@@ -89,6 +99,18 @@ class Browser:
     def scrolldown(self, e):
         self.scroll += SCROLL_STEP
         self.draw()
+
+    def scrollup(self,e):
+        self.scroll-=SCROLL_STEP
+        if self.scroll<0:
+            self.scroll=0
+        self.draw()
+
+    def mousewheel(self,e):
+        if e.delta>0:
+            self.scrollup(e)
+        else:
+            self.scrolldown(e)
 
 
 class URL:
