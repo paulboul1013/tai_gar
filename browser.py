@@ -4,6 +4,11 @@ import sys
 import time 
 import gzip
 import tkinter
+import os
+
+# key: character (e.g. "😀")
+# value: tkinter.PhotoImage object
+emoji_cache={}
 
 #key:(scheme,host,port)
 #value:socket object
@@ -20,6 +25,49 @@ SCROLL_STEP = 100
 
 SCROLLBAR_WIDTH=12
 
+def get_emoji(char):
+
+    if char in emoji_cache:
+        return emoji_cache[char]
+
+    # convert char to unicode hex strings (e.g. "😀" -> "U+1F600")
+    code_point="{:X}".format(ord(char))
+
+    # pic in the openmoji dir
+    possible_filenames=[
+        f"openmoji/{code_point}_color.png",
+        f"openmoji/{code_point}.png"
+    ]
+    
+    for file_path in possible_filenames:
+        if os.path.exists(file_path):
+            try:
+                #loading pic
+                img=tkinter.PhotoImage(file=file_path)
+
+                target_size=50
+                w=img.width()
+
+                # opemoji pic is very big
+                # need to shrink it 16x16
+                # subsample(x) represent to shrink x times
+                # 72x72 shrink 4 times-> 18x18 close to VSTEP(18)
+                scale_factor=w//target_size
+
+                if scale_factor<1:
+                    scale_factor=1
+
+                img=img.subsample(scale_factor,scale_factor)
+
+                #save into cache
+                emoji_cache[char]=img
+                return img
+            except Exception as e:
+                print(f"Error loading emoji {char}: {e}")
+                return None
+
+    return None
+
 def layout(text,width):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
@@ -31,11 +79,20 @@ def layout(text,width):
             cursor_x=HSTEP
             continue
 
+        
+        # loading emoji
+        img=get_emoji(c)
 
-        display_list.append((cursor_x, cursor_y, c))
-        cursor_x += HSTEP
+        if img:
+            display_list.append((cursor_x, cursor_y, img))
+            cursor_x += img.width()+2
+            continue
 
+        else:
+            display_list.append((cursor_x, cursor_y, c))
+            cursor_x += HSTEP
 
+        # auto change line
         if cursor_x >= width - HSTEP:
             cursor_y += VSTEP
             cursor_x = HSTEP
@@ -108,7 +165,13 @@ class Browser:
 
             if y > self.scroll + self.height: continue
             if y + VSTEP < self.scroll: continue
-            self.canvas.create_text(x, y - self.scroll, text=c)
+
+            if isinstance(c,tkinter.PhotoImage):
+                self.canvas.create_image(x,y-self.scroll+2,image=c,anchor="nw")
+
+            else:
+                self.canvas.create_text(x,y-self.scroll,text=c,anchor="nw")
+
 
             #scrollbar section
             
