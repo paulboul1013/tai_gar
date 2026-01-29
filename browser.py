@@ -45,7 +45,7 @@ def get_emoji(char):
                 #loading pic
                 img=tkinter.PhotoImage(file=file_path)
 
-                target_size=50
+                target_size=40
                 w=img.width()
 
                 # opemoji pic is very big
@@ -71,12 +71,17 @@ def get_emoji(char):
 def layout(text,width):
     display_list = []
     cursor_x, cursor_y = HSTEP, VSTEP
+    item_width = 0
+    item_height=0
+
+    current_line_max_height=VSTEP
+
     for c in text:
 
-
         if c=="\n":
-            cursor_y+=VSTEP*1.5
+            cursor_y+=current_line_max_height*1.2
             cursor_x=HSTEP
+            current_line_max_height=VSTEP
             continue
 
         
@@ -84,18 +89,29 @@ def layout(text,width):
         img=get_emoji(c)
 
         if img:
-            display_list.append((cursor_x, cursor_y, img))
-            cursor_x += img.width()+2
-            continue
+            item_width += img.width()+2
+            item_height=img.height()
 
         else:
-            display_list.append((cursor_x, cursor_y, c))
-            cursor_x += HSTEP
+            item_width = HSTEP
+            item_height=VSTEP
 
         # auto change line
-        if cursor_x >= width - HSTEP:
-            cursor_y += VSTEP
+        if cursor_x +item_width >= width - HSTEP:
+            cursor_y += current_line_max_height
             cursor_x = HSTEP
+
+            current_line_max_height=VSTEP
+
+        if item_height>current_line_max_height:
+            current_line_max_height=item_height
+
+        if img:
+            display_list.append((cursor_x, cursor_y, img))
+        else:
+            display_list.append((cursor_x, cursor_y, c))
+        
+        cursor_x+=item_width
 
     return display_list
 
