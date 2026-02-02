@@ -5,6 +5,7 @@ import time
 import gzip
 import tkinter
 import os
+import tkinter.font
 
 # key: character (e.g. "😀")
 # value: tkinter.PhotoImage object
@@ -71,9 +72,19 @@ def get_emoji(char):
     return None
 
 def layout(text,width):
+
+    font=tkinter.font.Font()
+
     display_list = []
 
-    cursor_y =  VSTEP
+    # get font basic height(linespace)
+    # mulitply 1.25 to make 行距(leading) more readable
+    base_line_height=font.metrics("linespace")*1.25
+
+    # get space width(because split() will remove space，need to add it back)
+    space_width=font.measure(" ")
+
+    cursor_y=base_line_height
 
     #restore current line all objects
     # format [(width,object),(width,object),(..)]
@@ -81,7 +92,7 @@ def layout(text,width):
 
     current_line_width=0
 
-    current_line_max_height=VSTEP
+    current_line_max_height=base_line_height
 
     def flush_line():
         nonlocal cursor_y,current_line_max_height
@@ -114,47 +125,65 @@ def layout(text,width):
         line_buffer.clear()
         
         # reset buffer variable
-        current_line_max_height=VSTEP
+        current_line_max_height=base_line_height
 
+    
+    # text parse loop
+    # can't not use text.split() because it will remove \n
+    # first use split('\n') split some  lines，the deal with word one by one
+    paragraphs=text.split("\n")
 
-    for c in text:
+    for paragraph in paragraphs:
 
-        if c=="\n":
-            flush_line()
-            cursor_y+=VSTEP*0.2
-            current_line_width=0
+        # every line,use space split into words
+        words=paragraph.split()
+
+        # if this line is empty (example double \n)，words will be empty list
+        if not words:
+            # have empty line，auto add height
+            cursor_y+=base_line_height
             continue
 
+        for word in words:
+            # check is emoji or text
+            # because now use word for basic unit，if word is emoji (and len is 1)，loading picture
+            img=None
+
+            if len(word)==1:
+                img=get_emoji(word)
+
+
+            if img:
+                w=img.width()
+                h=img.height()
+                content=img
+
+            else:
+                #use font.measure to get width of text
+                w=font.measure(word)
+                h=base_line_height
+                content=word
+
+            # count object total width
+            #because split() remove space，so add space width back
+            total_item_width =w+space_width
+
+            # auto change line
+            if current_line_width +total_item_width >= width - HSTEP*2:# *2 是預留左右邊距
+                flush_line()
+                current_line_width=0
+
+            # add buffer(not decide coord yet)
+            line_buffer.append((total_item_width,content))
+            current_line_width+=total_item_width
+
+            # update current line max height
+            if h > current_line_max_height:
+                current_line_max_height=h
+
         
-        # loading emoji
-        img=get_emoji(c)
-
-        if img:
-            item_width = img.width()+2
-            item_height=img.height()
-            content=img
-
-        else:
-            item_width = HSTEP
-            item_height=VSTEP
-            content=c
-
-        # auto change line
-        if current_line_width +item_width >= width - HSTEP*2:# *2 是預留左右邊距
-            flush_line()
-            current_line_width=0
-
-        # add buffer(not decide coord yet)
-        line_buffer.append((item_width,content))
-        current_line_width+=item_width
-
-        # update current line max height
-        if item_height > current_line_max_height:
-            current_line_max_height=item_height
-
-        
-    # flush last line
-    flush_line()
+        # flush last line
+        flush_line()
 
     return display_list
 
@@ -182,7 +211,6 @@ def lex(body):
 class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
-
         self.width=WIDTH
         self.height=HEIGHT
 
