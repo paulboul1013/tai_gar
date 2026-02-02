@@ -270,60 +270,86 @@ class Browser:
 
 class URL:
     def __init__(self, url):
-
-
         self.view_source=False
+        self.scheme=""
+        self.host=""
+        self.path=""
+        self.port=0
+        self.url_string=url
+        
+        try:
 
-        # 解析 URL Scheme        
-        if url.startswith("view-source:"):
-            # 例如 "view-source:http://google.com" 變成 "http://google.com"
-            self.view_source=True
-            _,url=url.split(":",1)
+            # parse view-source        
+            if url.startswith("view-source:"):
+                # 例如 "view-source:http://google.com" 變成 "http://google.com"
+                self.view_source=True
+                _,url=url.split(":",1)
 
-        # 解析 URL Scheme        
-        if url.startswith("data:"):
-            self.scheme="data"
-            self.scheme,self.path = url.split(":", 1)
-        else:
-            self.scheme, url = url.split("://", 1)
+            if url=="about:blank":
+                self.scheme="about"
+                self.path="blank"
+                return
 
-        # 確保支援的 URL Scheme
-        assert self.scheme in ["http", "https","file","data"]
-
-        if self.scheme=="http":
-            self.port=80
-        elif self.scheme=="https":
-            self.port=443
             
-        if self.scheme=="http" or self.scheme=="https":
-            # 原本http/https的處理邏輯
-            # 確保 URL 包含路徑，若無則補上 "/"
-            if "/" not in url:
-                # 如果網址像 "http://google.com"，沒有斜線
-                url = url + "/"
+            if url.startswith("data:"):
+                self.scheme="data"
+                self.scheme,self.path = url.split(":", 1)
+            else:
+                if "://"  not in url:
+                    raise ValueError("Malformed URL: missing ://")
+                
+                self.scheme, url = url.split("://", 1)
 
-            # 分離主機名稱 (Host) 與路徑 (Path)
-            self.host, url = url.split("/", 1)
-            self.path = "/" + url
+            # 支援的 URL Scheme
+            if self.scheme not in ["http", "https","file","data","about"]:
+                raise ValueError(f"Unsupported scheme: {self.scheme}")
+            
 
-            if ":" in self.host:
-                self.host,port=self.host.split(":",1)
-                self.port=int(port)
+            if self.scheme=="http":
+                self.port=80
+            elif self.scheme=="https":
+                self.port=443
+                
+            if self.scheme=="http" or self.scheme=="https":
+                # 原本http/https的處理邏輯
+                # 確保 URL 包含路徑，若無則補上 "/"
+                if "/" not in url:
+                    # 如果網址像 "http://google.com"，沒有斜線
+                    url = url + "/"
 
-        if self.scheme == "file":
-            # 檔案協議沒Host，剩下的url就是路徑
-            # file:///Users/test.txt -> url 變為 /Users/test.txt
-            self.path=url
-            self.host=""
+                # 分離主機名稱 (Host) 與路徑 (Path)
+                self.host, url = url.split("/", 1)
+                self.path = "/" + url
 
-        # save origin url string，for cache key
-        if self.scheme in ["http","https"]:
-            self.url_string=f"{self.scheme}://{self.host}:{self.port}{self.path}"
-        else:
-            self.url_string=url
+                if ":" in self.host:
+                    self.host,port=self.host.split(":",1)
+                    self.port=int(port)
+
+            if self.scheme == "file":
+                # 檔案協議沒Host，剩下的url就是路徑
+                # file:///Users/test.txt -> url 變為 /Users/test.txt
+                self.path=url
+                self.host=""
+
+            # save origin url string，for cache key
+            if self.scheme in ["http","https"]:
+                self.url_string=f"{self.scheme}://{self.host}:{self.port}{self.path}"
+            else:
+                self.url_string=url
+
+        except Exception as e:
+            # 只要解析失敗，自動降級為 about:blank
+            print(f"URL Parse Error: {e}. Falling back to about:blank")
+            self.scheme="about"
+            self.path="blank"
+            self.url_string="about:blank"
+
 
 
     def request(self):
+
+        if self.scheme=="about":
+            return ""
 
         if self.scheme=="data":   
             #example: text/html,Hello World!
@@ -335,9 +361,11 @@ class URL:
 
 
         if self.scheme=="file":
-            with open(self.path,"r",encoding="utf-8") as f:
-                return f.read()
-
+            try:
+                with open(self.path,"r",encoding="utf-8") as f:
+                    return f.read()
+            except Exception as e:
+                print(f"File read error: {e}")
         
         current_url=self
         redirect_limit=10 
@@ -478,6 +506,8 @@ class URL:
                      # 處理相對路徑 (例如 "/redirect2")
                     if location.startswith("/"):
                         location=current_url.scheme+"://"+current_url.host+location
+                    
+                    print(f"Redirect location: {location}")
                     
                     #更新current_url,準備下一次迴圈
                     print(f"Redirecting to: {location}") # 除錯用，讓你知道正在轉址
