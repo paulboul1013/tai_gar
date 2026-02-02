@@ -25,6 +25,8 @@ SCROLL_STEP = 100
 
 SCROLLBAR_WIDTH=12
 
+USE_RTL=False
+
 def get_emoji(char):
 
     if char in emoji_cache:
@@ -70,18 +72,57 @@ def get_emoji(char):
 
 def layout(text,width):
     display_list = []
-    cursor_x, cursor_y = HSTEP, VSTEP
-    item_width = 0
-    item_height=0
+
+    cursor_y =  VSTEP
+
+    #restore current line all objects
+    # format [(width,object),(width,object),(..)]
+    line_buffer=[]
+
+    current_line_width=0
 
     current_line_max_height=VSTEP
+
+    def flush_line():
+        nonlocal cursor_y,current_line_max_height
+
+        if not line_buffer:
+            return
+
+        if USE_RTL:
+            #reset cursor_x to right
+            cursor_x=width-current_line_width
+
+            if cursor_x < HSTEP:
+                cursor_x=HSTEP
+            
+        else:
+            # origin left align
+            cursor_x=HSTEP
+
+        #put buffer object add coord，into display_list
+        for item_w,item_content in line_buffer:
+            display_list.append((cursor_x,cursor_y,item_content))
+
+            # move x cursor (from left to right)
+            cursor_x+=item_w
+
+        # update y cursor
+        cursor_y+=current_line_max_height
+
+        # reset line buffer
+        line_buffer.clear()
+        
+        # reset buffer variable
+        current_line_max_height=VSTEP
+
 
     for c in text:
 
         if c=="\n":
-            cursor_y+=current_line_max_height*1.2
-            cursor_x=HSTEP
-            current_line_max_height=VSTEP
+            flush_line()
+            cursor_y+=VSTEP*0.2
+            current_line_width=0
             continue
 
         
@@ -89,29 +130,31 @@ def layout(text,width):
         img=get_emoji(c)
 
         if img:
-            item_width += img.width()+2
+            item_width = img.width()+2
             item_height=img.height()
+            content=img
 
         else:
             item_width = HSTEP
             item_height=VSTEP
+            content=c
 
         # auto change line
-        if cursor_x +item_width >= width - HSTEP:
-            cursor_y += current_line_max_height
-            cursor_x = HSTEP
+        if current_line_width +item_width >= width - HSTEP*2:# *2 是預留左右邊距
+            flush_line()
+            current_line_width=0
 
-            current_line_max_height=VSTEP
+        # add buffer(not decide coord yet)
+        line_buffer.append((item_width,content))
+        current_line_width+=item_width
 
-        if item_height>current_line_max_height:
+        # update current line max height
+        if item_height > current_line_max_height:
             current_line_max_height=item_height
 
-        if img:
-            display_list.append((cursor_x, cursor_y, img))
-        else:
-            display_list.append((cursor_x, cursor_y, c))
         
-        cursor_x+=item_width
+    # flush last line
+    flush_line()
 
     return display_list
 
@@ -594,7 +637,18 @@ def load(url):
 
 if __name__ == "__main__":
 
-    Browser().load(URL(sys.argv[1]))
+    if "--rtl" in sys.argv:
+        USE_RTL=True
+        sys.argv.remove("--rtl")
+        print("RTL mode enabled")
+
+    
+    if len(sys.argv) > 1:
+        url_arg=sys.argv[1]
+    else:
+        url_arg = "data:text/html,Hello World! This is a test for RTL layout. 😀\nNext line should align right."        
+
+    Browser().load(URL(url_arg))
     tkinter.mainloop()
 
 
