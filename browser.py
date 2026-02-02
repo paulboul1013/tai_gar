@@ -71,28 +71,38 @@ def get_emoji(char):
 
     return None
 
-def layout(text,width):
+def layout(tokens,width):
 
-    font=tkinter.font.Font()
+    # word type status management
+    weight="normal"
+    style="roman"
+
 
     display_list = []
-
-    # get font basic height(linespace)
-    # mulitply 1.25 to make 行距(leading) more readable
-    base_line_height=font.metrics("linespace")*1.25
-
-    # get space width(because split() will remove space，need to add it back)
-    space_width=font.measure(" ")
-
-    cursor_y=base_line_height
 
     #restore current line all objects
     # format [(width,object),(width,object),(..)]
     line_buffer=[]
-
     current_line_width=0
 
-    current_line_max_height=base_line_height
+    # 預先定義字體緩存，避免重複創建物件
+    font_cache = {}
+
+    def get_cached_font(weight, style):
+        key = (weight, style)
+        if key not in font_cache:
+            font_cache[key] = tkinter.font.Font(size=16, weight=weight, slant=style)
+        return font_cache[key]
+
+
+
+    # get font basic height(linespace)
+    # mulitply 1.25 to make 行距(leading) more readable
+    default_font=tkinter.font.Font(size=16)
+    current_line_max_height = default_font.metrics("linespace")*1.25
+
+
+    cursor_y=current_line_max_height
 
     def flush_line():
         nonlocal cursor_y,current_line_max_height
@@ -111,9 +121,18 @@ def layout(text,width):
             # origin left align
             cursor_x=HSTEP
 
-        #put buffer object add coord，into display_list
+        # let buffer object draw into display_list
+        # item_content now is:
+        # 1. picture(emoji)
+        # 2. (text,font object) (text)
         for item_w,item_content in line_buffer:
-            display_list.append((cursor_x,cursor_y,item_content))
+
+            if isinstance(item_content,tuple):
+                word,font=item_content
+                display_list.append((cursor_x,cursor_y,word,font))    
+                
+            else:
+                display_list.append((cursor_x,cursor_y,item_content))
 
             # move x cursor (from left to right)
             cursor_x+=item_w
@@ -125,88 +144,122 @@ def layout(text,width):
         line_buffer.clear()
         
         # reset buffer variable
-        current_line_max_height=base_line_height
+        current_line_max_height=default_font.metrics("linespace")*1.25
 
-    
-    # text parse loop
-    # can't not use text.split() because it will remove \n
-    # first use split('\n') split some  lines，the deal with word one by one
-    paragraphs=text.split("\n")
+    for tok in tokens:
+        # deal with tag
+        if isinstance(tok,Tag):
+            if tok.tag=="b":
+                weight="bold"
+            elif tok.tag=="/b":
+                weight="normal"
+            elif tok.tag=="i":
+                style="italic"
+            elif tok.tag=="/i":
+                style="roman"
 
-    for paragraph in paragraphs:
-
-        # every line,use space split into words
-        words=paragraph.split()
-
-        # if this line is empty (example double \n)，words will be empty list
-        if not words:
-            # have empty line，auto add height
-            cursor_y+=base_line_height
-            continue
-
-        for word in words:
-            # check is emoji or text
-            # because now use word for basic unit，if word is emoji (and len is 1)，loading picture
-            img=None
-
-            if len(word)==1:
-                img=get_emoji(word)
-
-
-            if img:
-                w=img.width()
-                h=img.height()
-                content=img
-
-            else:
-                #use font.measure to get width of text
-                w=font.measure(word)
-                h=base_line_height
-                content=word
-
-            # count object total width
-            #because split() remove space，so add space width back
-            total_item_width =w+space_width
-
-            # auto change line
-            if current_line_width +total_item_width >= width - HSTEP*2:# *2 是預留左右邊距
+            elif tok.tag=="br":
                 flush_line()
                 current_line_width=0
 
-            # add buffer(not decide coord yet)
-            line_buffer.append((total_item_width,content))
-            current_line_width+=total_item_width
+        # deal with text
+        elif isinstance(tok,Text):
+            # from html rules，let text split into words with space
+            words=tok.text.split()
 
-            # update current line max height
-            if h > current_line_max_height:
-                current_line_max_height=h
+            # if this line is empty (example double \n)，words will be empty list
+            if not words:
+                # have empty line，auto add height
+                cursor_y+=default_font.metrics("linespace")*1.25
+                continue
+
+            for word in words:
+                # check is emoji or text
+                # because now use word for basic unit，if word is emoji (and len is 1)，loading picture
+                img=None
+
+                if len(word)==1:
+                    img=get_emoji(word)
+
+
+                if img:
+                    w=img.width()
+                    h=img.height()
+                    content=img
+                    w+=2
+
+                else:
+                    # 使用快取的字體，測量會更精準且快速
+                    font = get_cached_font(weight, style)
+
+                    #use font.measure to get width of text
+                    w=font.measure(word)
+                    h=font.metrics("linespace")*1.25
+
+                    # content save，because draw need to know font object to draw text
+                    content=(word,font)
+                    space_w=font.measure(" ")
+
+                if img:
+                    space_w=0 # picture no fill space
+
+                else:
+                    space_w=font.measure(" ")
+
+                # count object total width
+                #because split() remove space，so add space width back
+                total_item_width =w+space_w
+
+                # auto change line
+                if current_line_width +total_item_width >= width - HSTEP*2:# *2 是預留左右邊距
+                    flush_line()
+                    current_line_width=0
+
+                # add buffer(not decide coord yet)
+                line_buffer.append((total_item_width,content))
+                current_line_width+=total_item_width
+
+                # update current line max height
+                if h > current_line_max_height:
+                    current_line_max_height=h
 
         
-        # flush last line
-        flush_line()
+    # flush last line
+    flush_line()
 
     return display_list
 
 def lex(body):
-    text=""
-
+    out=[]
+    buffer=""
     in_tag = False
-    # text_buffer ="" # 用來暫存過濾掉標籤後的文字
+
     for c in body:
         if c == "<":
             in_tag = True
+            if buffer:
+                decode_text=buffer.replace("&lt;","<").replace("&gt;",">")
+                out.append(Text(decode_text))
+                buffer=""
         elif c == ">":
             in_tag = False
-        elif not in_tag:
-            #非標籤文字
-            text+=c
+            out.append(Tag(buffer))
+            buffer=""
+        else:
+            buffer+=c
 
-
-    #避免 &lt，&gt； 被轉成 <，> 後又被誤認為標籤
-    text=text.replace("&lt;","<")
-    text=text.replace("&gt;",">")
+    if not in_tag and buffer:
+        decode_text=buffer.replace("&lt;","<").replace("&gt;",">")
+        out.append(Text(decode_text))
         
-    return text
+    return out
+
+class Text:
+    def __init__(self,text):
+        self.text=text
+class Tag:
+    def __init__(self,tag):
+        self.tag=tag
 
 class Browser:
     def __init__(self):
@@ -214,7 +267,7 @@ class Browser:
         self.width=WIDTH
         self.height=HEIGHT
 
-        self.text=""
+        self.tokens=[]
 
         self.canvas = tkinter.Canvas(
             self.window,
@@ -223,7 +276,7 @@ class Browser:
         )
         # let canvas fill the window
         self.canvas.pack(fill=tkinter.BOTH,expand=True)
-        self.window.bind("<Configure>",self.resize)
+        self.canvas.bind("<Configure>",self.resize)
         self.scroll = 0
 
         # bind keyboard events
@@ -241,23 +294,29 @@ class Browser:
 
     def load(self, url):
         body = url.request()
-        self.text = lex(body)
+        self.tokens=lex(body)
 
-        self.display_list = layout(self.text,self.width)
+        self.display_list = layout(self.tokens,self.width)
         self.draw()
 
     def draw(self):
         self.canvas.delete("all")
-        for x, y, c in self.display_list:
+        for item in self.display_list:
 
-            if y > self.scroll + self.height: continue
-            if y + VSTEP < self.scroll: continue
+            item_y=item[1]
+            if item_y>self.scroll +self.height :continue
+            if item_y+VSTEP < self.scroll: continue
 
-            if isinstance(c,tkinter.PhotoImage):
-                self.canvas.create_image(x,y-self.scroll+2,image=c,anchor="nw")
+            if len(item)==4:
+                #this is all text information
+                x,y,word,font=item
+                self.canvas.create_text(x,y-self.scroll,text=word,font=font,anchor="nw")
 
-            else:
-                self.canvas.create_text(x,y-self.scroll,text=c,anchor="nw")
+            elif len(item)==3:
+                #this is image information
+                x,y,img=item
+
+                self.canvas.create_image(x,y-self.scroll-2,image=img,anchor="nw")
 
 
             #scrollbar section
@@ -329,14 +388,24 @@ class Browser:
             self.scrolldown(e)
 
     def resize(self,e):
+        if e.width <=10 or e.height <=10:
+            return
+
+        if self.width == e.width and self.height == e.height:
+            return
+
+        
         # read new window size
         self.width=e.width
         self.height=e.height
         
         #recalculate layout
-        self.display_list=layout(self.text,self.width)
+        if self.tokens:
+            self.display_list=layout(self.tokens,self.width)
+            self.draw()
 
-        self.draw()
+
+        
 
 
 class URL:
