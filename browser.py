@@ -7,10 +7,12 @@ import tkinter
 import os
 import tkinter.font
 
+# emolji cache
 # key: character (e.g. "😀")
 # value: tkinter.PhotoImage object
 emoji_cache={}
 
+# socket cache
 #key:(scheme,host,port)
 #value:socket object
 socket_cache={}
@@ -20,6 +22,10 @@ socket_cache={}
 # value:(body_bytes,expires_at_timestamp)
 http_cache={}
 
+#global FONT cache
+FONTS={}
+
+
 WIDTH,HEIGHT=800,600
 HSTEP, VSTEP = 13, 18
 SCROLL_STEP = 100
@@ -27,6 +33,16 @@ SCROLL_STEP = 100
 SCROLLBAR_WIDTH=12
 
 USE_RTL=False
+
+def get_font(size,weight,style):
+    key=(size,weight,style)
+    if key not in FONTS:
+        font=tkinter.font.Font(size=size,weight=weight,slant=style)
+        # create a Label and associate this font can raise up metrics performance
+        label=tkinter.Label(font=font)
+        FONTS[key]=(font,label)
+
+    return FONTS[key][0]
 
 def get_emoji(char):
 
@@ -87,11 +103,8 @@ class Layout:
         self.style="roman"
         self.size=12
 
-        # pre define font cache
-        self.font_cache={}
-
         # get font basic height(linespace)
-        self.default_font=tkinter.font.Font(size=self.size)
+        self.default_font=get_font(self.size,self.weight,self.style)
         # self.current_line_max_height=self.default_font.metrics("linespace")*1.25
 
         # traversal tokesn and deal with
@@ -99,13 +112,6 @@ class Layout:
             self.token(tok)
 
         self.flush_line()
-
-    def get_cached_font(self,weight,style):
-        key=(weight,style,self.size)
-        if key not in self.font_cache:
-            self.font_cache[key]=tkinter.font.Font(size=self.size,weight=weight,slant=style)  
-
-        return self.font_cache[key]
 
     def token(self,tok):
         if isinstance(tok,Tag):
@@ -164,7 +170,7 @@ class Layout:
 
         else:
             # use font cache
-            font = self.get_cached_font(self.weight, self.style)
+            font = get_font(self.size,self.weight, self.style)
 
             #use font measure to get width of text
             w=font.measure(word)
