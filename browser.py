@@ -71,96 +71,62 @@ def get_emoji(char):
 
     return None
 
-def layout(tokens,width):
+class Layout:
+    def __init__(self,tokens,width):
+        self.display_list=[]
+        #restore current line all objects
+        # format [(width,object),(width,object),(..)]
+        self.line_buffer=[]
+        self.width =width
 
-    # word type status management
-    weight="normal"
-    style="roman"
+        self.cursor_x=HSTEP
+        self.cursor_y=VSTEP
 
+        # word type status management
+        self.weight="normal"
+        self.style="roman"
+        self.size=12
 
-    display_list = []
+        # pre define font cache
+        self.font_cache={}
 
-    #restore current line all objects
-    # format [(width,object),(width,object),(..)]
-    line_buffer=[]
-    current_line_width=0
+        # get font basic height(linespace)
+        # mulitply 1.25 to make 行距(leading) more readable
+        self.default_font=tkinter.font.Font(size=self.size)
+        self.current_line_max_height=self.default_font.metrics("linespace")*1.25
 
-    # 預先定義字體緩存，避免重複創建物件
-    font_cache = {}
+        # traversal tokesn and deal with
+        for tok in tokens:
+            self.token(tok)
+        self.flush_line()
 
-    def get_cached_font(weight, style):
-        key = (weight, style)
-        if key not in font_cache:
-            font_cache[key] = tkinter.font.Font(size=16, weight=weight, slant=style)
-        return font_cache[key]
+    def get_cached_font(self,weight,style):
+        key=(weight,style,self.size)
+        if key not in self.font_cache:
+            self.font_cache[key]=tkinter.font.Font(size=self.size,weight=weight,slant=style)  
 
+        return self.font_cache[key]
 
-
-    # get font basic height(linespace)
-    # mulitply 1.25 to make 行距(leading) more readable
-    default_font=tkinter.font.Font(size=16)
-    current_line_max_height = default_font.metrics("linespace")*1.25
-
-
-    cursor_y=current_line_max_height
-
-    def flush_line():
-        nonlocal cursor_y,current_line_max_height
-
-        if not line_buffer:
-            return
-
-        if USE_RTL:
-            #reset cursor_x to right
-            cursor_x=width-current_line_width
-
-            if cursor_x < HSTEP:
-                cursor_x=HSTEP
-            
-        else:
-            # origin left align
-            cursor_x=HSTEP
-
-        # let buffer object draw into display_list
-        # item_content now is:
-        # 1. picture(emoji)
-        # 2. (text,font object) (text)
-        for item_w,item_content in line_buffer:
-
-            if isinstance(item_content,tuple):
-                word,font=item_content
-                display_list.append((cursor_x,cursor_y,word,font))    
-                
-            else:
-                display_list.append((cursor_x,cursor_y,item_content))
-
-            # move x cursor (from left to right)
-            cursor_x+=item_w
-
-        # update y cursor
-        cursor_y+=current_line_max_height
-
-        # reset line buffer
-        line_buffer.clear()
-        
-        # reset buffer variable
-        current_line_max_height=default_font.metrics("linespace")*1.25
-
-    for tok in tokens:
-        # deal with tag
+    def token(self,tok):
         if isinstance(tok,Tag):
             if tok.tag=="b":
-                weight="bold"
+                self.weight="bold"
             elif tok.tag=="/b":
-                weight="normal"
+                self.weight="normal"
             elif tok.tag=="i":
-                style="italic"
+                self.style="italic"
             elif tok.tag=="/i":
-                style="roman"
-
+                self.style="roman"
             elif tok.tag=="br":
-                flush_line()
-                current_line_width=0
+                self.flush_line()
+            elif tok.tag=="small":
+                self.size-=2
+            elif tok.tag=="/small":
+                self.size+=2
+            elif tok.tag == "big":
+                self.size += 4
+            elif tok.tag == "/big":
+                self.size -= 4
 
         # deal with text
         elif isinstance(tok,Text):
@@ -170,64 +136,88 @@ def layout(tokens,width):
             # if this line is empty (example double \n)，words will be empty list
             if not words:
                 # have empty line，auto add height
-                cursor_y+=default_font.metrics("linespace")*1.25
-                continue
-
+                self.cursor_y+=self.default_font.metrics("linespace")*1.25
+                return
+            
             for word in words:
-                # check is emoji or text
-                # because now use word for basic unit，if word is emoji (and len is 1)，loading picture
-                img=None
+                self.word(word)
 
-                if len(word)==1:
-                    img=get_emoji(word)
+    def word(self,word):
+        # check is emoji or text
+        # because now use word for basic unit，if word is emoji (and len is 1)，loading picture
+        img=None
+
+        if len(word)==1:
+            img=get_emoji(word)
+
+        if img:
+            w=img.width()
+            h=img.height()
+            content=img
+            space_w=0
+
+        else:
+            # use font cache
+            font = self.get_cached_font(self.weight, self.style)
+
+            #use font measure to get width of text
+            w=font.measure(word)
+            h=font.metrics("linespace")*1.25
+
+            # content save，because draw need to know font object to draw text
+            content=(word,font)
+            space_w=font.measure(" ")
+
+        # count object total width
+        #because split() remove space，so add space width back
+        total_item_width =w+space_w
+
+        # auto change line
+        # calcuate line_buffer total object width sum
+        current_line_w=line_width=sum(item[0] for item in self.line_buffer)
+        if current_line_w +total_item_width >= self.width - HSTEP*2:# *2 是預留左右邊距
+            self.flush_line()
 
 
-                if img:
-                    w=img.width()
-                    h=img.height()
-                    content=img
-                    w+=2
+            # add buffer(not decide coord yet)
+        self.line_buffer.append((total_item_width,content))
 
-                else:
-                    # 使用快取的字體，測量會更精準且快速
-                    font = get_cached_font(weight, style)
+        # update current line max height
+        if h > self.current_line_max_height:
+            self.current_line_max_height=h
 
-                    #use font.measure to get width of text
-                    w=font.measure(word)
-                    h=font.metrics("linespace")*1.25
+    def flush_line(self):
 
-                    # content save，because draw need to know font object to draw text
-                    content=(word,font)
-                    space_w=font.measure(" ")
+        if not self.line_buffer:
+            return
 
-                if img:
-                    space_w=0 # picture no fill space
+        # calculate current line total width
+        line_width=sum(item[0] for item in self.line_buffer)
 
-                else:
-                    space_w=font.measure(" ")
+        if USE_RTL:
+            #reset cursor_x to right
+            cursor_x=self.width-line_width
 
-                # count object total width
-                #because split() remove space，so add space width back
-                total_item_width =w+space_w
-
-                # auto change line
-                if current_line_width +total_item_width >= width - HSTEP*2:# *2 是預留左右邊距
-                    flush_line()
-                    current_line_width=0
-
-                # add buffer(not decide coord yet)
-                line_buffer.append((total_item_width,content))
-                current_line_width+=total_item_width
-
-                # update current line max height
-                if h > current_line_max_height:
-                    current_line_max_height=h
-
+            if cursor_x < HSTEP:
+                cursor_x=HSTEP
         
-    # flush last line
-    flush_line()
+        else:
+            cursor_x=HSTEP
 
-    return display_list
+        # buffer object into the display_list
+        for item_w,item_content in self.line_buffer:
+            if isinstance(item_content,tuple):
+                word,font=item_content
+                self.display_list.append((cursor_x,self.cursor_y,word,font))
+            else:
+                self.display_list.append((cursor_x,self.cursor_y,item_content))
+
+            cursor_x+=item_w
+
+        # update y coord and reset 
+        self.cursor_y+=self.current_line_max_height
+        self.line_buffer.clear()
+        self.current_line_max_height=self.default_font.metrics("linespace") * 1.25
 
 def lex(body):
     out=[]
@@ -296,7 +286,7 @@ class Browser:
         body = url.request()
         self.tokens=lex(body)
 
-        self.display_list = layout(self.tokens,self.width)
+        self.display_list = Layout(self.tokens,self.width).display_list
         self.draw()
 
     def draw(self):
@@ -401,11 +391,8 @@ class Browser:
         
         #recalculate layout
         if self.tokens:
-            self.display_list=layout(self.tokens,self.width)
+            self.display_list=Layout(self.tokens,self.width).display_list
             self.draw()
-
-
-        
 
 
 class URL:
