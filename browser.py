@@ -48,7 +48,7 @@ def get_emoji(char):
                 #loading pic
                 img=tkinter.PhotoImage(file=file_path)
 
-                target_size=40
+                target_size=35
                 w=img.width()
 
                 # opemoji pic is very big
@@ -91,13 +91,13 @@ class Layout:
         self.font_cache={}
 
         # get font basic height(linespace)
-        # mulitply 1.25 to make 行距(leading) more readable
         self.default_font=tkinter.font.Font(size=self.size)
-        self.current_line_max_height=self.default_font.metrics("linespace")*1.25
+        # self.current_line_max_height=self.default_font.metrics("linespace")*1.25
 
         # traversal tokesn and deal with
         for tok in tokens:
             self.token(tok)
+
         self.flush_line()
 
     def get_cached_font(self,weight,style):
@@ -119,6 +119,11 @@ class Layout:
                 self.style="roman"
             elif tok.tag=="br":
                 self.flush_line()
+            elif tok.tag=="p":
+                self.flush_line()
+            elif tok.tag=="/p":
+                self.flush_line()
+                self.cursor_y+=VSTEP
             elif tok.tag=="small":
                 self.size-=2
             elif tok.tag=="/small":
@@ -136,7 +141,7 @@ class Layout:
             # if this line is empty (example double \n)，words will be empty list
             if not words:
                 # have empty line，auto add height
-                self.cursor_y+=self.default_font.metrics("linespace")*1.25
+                self.flush_line()
                 return
             
             for word in words:
@@ -151,6 +156,7 @@ class Layout:
             img=get_emoji(word)
 
         if img:
+            # picture doesn't have ascent/descent，make default height is ascent
             w=img.width()
             h=img.height()
             content=img
@@ -162,7 +168,7 @@ class Layout:
 
             #use font measure to get width of text
             w=font.measure(word)
-            h=font.metrics("linespace")*1.25
+            # h=font.metrics("linespace")*1.25
 
             # content save，because draw need to know font object to draw text
             content=(word,font)
@@ -174,50 +180,74 @@ class Layout:
 
         # auto change line
         # calcuate line_buffer total object width sum
-        current_line_w=line_width=sum(item[0] for item in self.line_buffer)
+        current_line_w=sum(item[0] for item in self.line_buffer)
         if current_line_w +total_item_width >= self.width - HSTEP*2:# *2 是預留左右邊距
             self.flush_line()
 
 
-            # add buffer(not decide coord yet)
+        # add buffer(not decide coord yet)
         self.line_buffer.append((total_item_width,content))
 
-        # update current line max height
-        if h > self.current_line_max_height:
-            self.current_line_max_height=h
 
     def flush_line(self):
 
         if not self.line_buffer:
             return
 
-        # calculate current line total width
-        line_width=sum(item[0] for item in self.line_buffer)
-
-        if USE_RTL:
-            #reset cursor_x to right
-            cursor_x=self.width-line_width
-
-            if cursor_x < HSTEP:
-                cursor_x=HSTEP
-        
-        else:
-            cursor_x=HSTEP
+        # find heightest ascent and descent
+        max_ascent=0
+        max_descent=0
 
         # buffer object into the display_list
         for item_w,item_content in self.line_buffer:
             if isinstance(item_content,tuple):
                 word,font=item_content
-                self.display_list.append((cursor_x,self.cursor_y,word,font))
+                ascent=font.metrics("ascent")
+                descent=font.metrics("descent")
             else:
-                self.display_list.append((cursor_x,self.cursor_y,item_content))
+                # pic (emoji)
+                ascent=item_content.height()
+                descent=0
+
+            if ascent > max_ascent: max_ascent=ascent
+            if descent > max_descent: max_descent=descent
+
+
+        # calculate baseline position
+        baseline=self.cursor_y+max_ascent*1.25
+
+        # base on baseline to put every object
+        if USE_RTL:
+            #reset cursor_x to right
+            line_width=sum(item[0] for item in self.line_buffer)
+            cursor_x=self.width-line_width
+
+            if cursor_x < HSTEP:
+                cursor_x=HSTEP
+        else:
+            cursor_x=HSTEP
+
+        for item_w,item_content in self.line_buffer:
+            if isinstance(item_content,tuple):
+                word,font=item_content
+
+                #every single word's y =baseline - this word ascent
+                y=baseline-font.metrics("ascent")
+                self.display_list.append((cursor_x,y,word,font))
+                
+            else:
+                # pic bottom is on the baseline
+                img_offset=12
+                y=baseline-item_content.height()
+                self.display_list.append((cursor_x,y+img_offset,item_content))
 
             cursor_x+=item_w
 
-        # update y coord and reset 
-        self.cursor_y+=self.current_line_max_height
+        # update next starting y coord  
+        self.cursor_y=baseline+max_descent*1.25
+        
+        # clear buffer
         self.line_buffer.clear()
-        self.current_line_max_height=self.default_font.metrics("linespace") * 1.25
 
 def lex(body):
     out=[]
@@ -730,7 +760,7 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         url_arg=sys.argv[1]
     else:
-        url_arg = "data:text/html,Hello World! This is a test for RTL layout. 😀\nNext line should align right."        
+        url_arg = "data:text/html,This is default text showing 😀   "        
 
     Browser().load(URL(url_arg))
     tkinter.mainloop()
