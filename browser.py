@@ -102,10 +102,7 @@ class Layout:
         self.weight="normal"
         self.style="roman"
         self.size=12
-
-        # get font basic height(linespace)
-        self.default_font=get_font(self.size,self.weight,self.style)
-        # self.current_line_max_height=self.default_font.metrics("linespace")*1.25
+        self.alignment="left"
 
         # traversal tokesn and deal with
         for tok in tokens:
@@ -115,7 +112,13 @@ class Layout:
 
     def token(self,tok):
         if isinstance(tok,Tag):
-            if tok.tag=="b":
+            if tok.tag=='h1 class="title"':
+                self.flush_line()
+                self.alignment="center"
+            elif tok.tag=="/h1":
+                self.flush_line()
+                self.alignment="left"
+            elif tok.tag=="b":
                 self.weight="bold"
             elif tok.tag=="/b":
                 self.weight="normal"
@@ -164,7 +167,6 @@ class Layout:
         if img:
             # picture doesn't have ascent/descent，make default height is ascent
             w=img.width()
-            h=img.height()
             content=img
             space_w=0
 
@@ -222,14 +224,18 @@ class Layout:
         # calculate baseline position
         baseline=self.cursor_y+max_ascent*1.25
 
-        # base on baseline to put every object
-        if USE_RTL:
-            #reset cursor_x to right
-            line_width=sum(item[0] for item in self.line_buffer)
-            cursor_x=self.width-line_width
+        # calculate current line total width
+        line_width=sum(item[0] for item in self.line_buffer)
 
-            if cursor_x < HSTEP:
-                cursor_x=HSTEP
+        # decide starting cursor_x
+        if self.alignment=="center":
+            # total usefull widht is self.width-HSTEP*2 (minus left and right margin)
+            remaining_space=(self.width-HSTEP*2)-line_width
+            cursor_x=HSTEP+(remaining_space//2)
+
+        # base on baseline to put every object
+        elif USE_RTL:
+            cursor_x=self.width-line_width-HSTEP
         else:
             cursor_x=HSTEP
 
