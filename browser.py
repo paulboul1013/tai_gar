@@ -34,10 +34,14 @@ SCROLLBAR_WIDTH=12
 
 USE_RTL=False
 
-def get_font(size,weight,style):
-    key=(size,weight,style)
+def get_font(size,weight,style,family=None):
+    if not family:
+        family="Times"
+
+    key=(size,weight,style,family)
+
     if key not in FONTS:
-        font=tkinter.font.Font(size=size,weight=weight,slant=style)
+        font=tkinter.font.Font(family=family,size=size,weight=weight,slant=style)
         # create a Label and associate this font can raise up metrics performance
         label=tkinter.Label(font=font)
         FONTS[key]=(font,label)
@@ -105,6 +109,7 @@ class Layout:
         self.alignment="left"
         self.is_sup=False # is it superscript
         self.is_abbr=False
+        self.is_pre=False
 
         # traversal tokesn and deal with
         for tok in tokens:
@@ -126,6 +131,12 @@ class Layout:
             elif tok.tag=="/sup":
                 self.is_sup=False
                 self.size=int(self.size*2)
+            elif tok.tag=="pre":
+                self.is_pre=True
+                self.flush_line()
+            elif tok.tag=="/pre":
+                self.is_pre=False
+                self.flush_line()
             elif tok.tag=="abbr":
                 self.is_abbr=True
             elif tok.tag=="/abbr":
@@ -156,17 +167,34 @@ class Layout:
 
         # deal with text
         elif isinstance(tok,Text):
-            # from html rules，let text split into words with space
-            words=tok.text.split()
+            if self.is_pre:
+                # in the pre mode，not use split()，keep all space
+                lines=tok.text.split('\n')
+                for i,line in enumerate(lines):
+                    if i>0:
+                        self.flush_line()
+                    # deal with current line (include empty space)
+                    if line:
+                        self.pre_word(line)
 
-            # if this line is empty (example double \n)，words will be empty list
-            if not words:
-                # have empty line，auto add height
-                self.flush_line()
-                return
-            
-            for word in words:
-                self.word(word)
+            else:
+                # from html rules，let text split into words with space
+                words=tok.text.split()
+
+                # if this line is empty (example double \n)，words will be empty list
+                if not words:
+                    return
+
+                for word in words:
+                    self.word(word)
+                
+    def pre_word(self,text):
+        font=get_font(self.size,self.weight,self.style,family="Courier New")
+        w=font.measure(text)
+        
+        # directly add
+        content=(text,font,self.is_sup)
+        self.line_buffer.append((w,content))
 
     def word(self,word):
 
