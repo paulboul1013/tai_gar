@@ -104,6 +104,7 @@ class Layout:
         self.size=12
         self.alignment="left"
         self.is_sup=False # is it superscript
+        self.is_abbr=False
 
         # traversal tokesn and deal with
         for tok in tokens:
@@ -125,6 +126,10 @@ class Layout:
             elif tok.tag=="/sup":
                 self.is_sup=False
                 self.size=int(self.size*2)
+            elif tok.tag=="abbr":
+                self.is_abbr=True
+            elif tok.tag=="/abbr":
+                self.is_abbr=False
             elif tok.tag=="b":
                 self.weight="bold"
             elif tok.tag=="/b":
@@ -164,6 +169,31 @@ class Layout:
                 self.word(word)
 
     def word(self,word):
+
+        if self.is_abbr:
+            for i,char in enumerate(word):
+                if char.islower():
+                    # lowercase : change to uppercase ，resize 0.8 ，bold
+                    c=char.upper()
+                    f=get_font(int(self.size*0.8),"bold",self.style)
+                else:
+                    # other characters: normal
+                    c=char
+                    f=get_font(self.size,self.weight,self.style)
+
+                w=f.measure(c)
+                # only on the last word's character add space width
+                space_w=f.measure(" ") if i==len(word)-1 else 0
+                
+                # change line check
+                current_line_w=sum(item[0] for item in self.line_buffer)
+                if current_line_w +w >= (self.width - HSTEP*2):
+                    self.flush_line()
+
+                self.line_buffer.append((w+space_w,(c,f,self.is_sup)))
+            
+            return
+
         # check is emoji or text
         # because now use word for basic unit，if word is emoji (and len is 1)，loading picture
         img=None
