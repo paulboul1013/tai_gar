@@ -103,6 +103,7 @@ class Layout:
         self.style="roman"
         self.size=12
         self.alignment="left"
+        self.is_sup=False # is it superscript
 
         # traversal tokesn and deal with
         for tok in tokens:
@@ -118,6 +119,12 @@ class Layout:
             elif tok.tag=="/h1":
                 self.flush_line()
                 self.alignment="left"
+            elif tok.tag=="sup":
+                self.is_sup=True
+                self.size=int(self.size/2)
+            elif tok.tag=="/sup":
+                self.is_sup=False
+                self.size=int(self.size*2)
             elif tok.tag=="b":
                 self.weight="bold"
             elif tok.tag=="/b":
@@ -178,8 +185,8 @@ class Layout:
             w=font.measure(word)
             # h=font.metrics("linespace")*1.25
 
-            # content save，because draw need to know font object to draw text
-            content=(word,font)
+            # content save because draw need to know font object to draw text
+            content=(word,font,self.is_sup)
             space_w=font.measure(" ")
 
         # count object total width
@@ -209,7 +216,7 @@ class Layout:
         # buffer object into the display_list
         for item_w,item_content in self.line_buffer:
             if isinstance(item_content,tuple):
-                word,font=item_content
+                word,font,is_sup=item_content
                 ascent=font.metrics("ascent")
                 descent=font.metrics("descent")
             else:
@@ -241,10 +248,14 @@ class Layout:
 
         for item_w,item_content in self.line_buffer:
             if isinstance(item_content,tuple):
-                word,font=item_content
+                word,font,is_sup=item_content
+
+                if is_sup:
+                    y=baseline-max_ascent
+                else:
+                    y=baseline-font.metrics("ascent")
 
                 #every single word's y =baseline - this word ascent
-                y=baseline-font.metrics("ascent")
                 self.display_list.append((cursor_x,y,word,font))
                 
             else:
