@@ -177,31 +177,85 @@ class Layout:
             content=img
             space_w=0
 
-        else:
-            # use font cache
-            font = get_font(self.size,self.weight, self.style)
+            current_line_w=sum(item[0] for item in self.line_buffer)
+            if current_line_w +w >= self.width - HSTEP*2:
+                self.flush_line()
+            self.line_buffer.append((w+space_w,content))
+            return
 
-            #use font measure to get width of text
-            w=font.measure(word)
-            # h=font.metrics("linespace")*1.25
 
-            # content save because draw need to know font object to draw text
-            content=(word,font,self.is_sup)
-            space_w=font.measure(" ")
+        # use font cache
+        font = get_font(self.size,self.weight, self.style)
 
-        # count object total width
-        #because split() remove space，so add space width back
-        total_item_width =w+space_w
+        #normal showing，don't want to show \xad，first remove it to calucalute real status width
+        clean_word=word.replace("\xad","")
 
-        # auto change line
-        # calcuate line_buffer total object width sum
+        #use font measure to get width of text
+        w=font.measure(clean_word)
+
+        space_w=font.measure(" ")
+
+        # calculate current line available space
         current_line_w=sum(item[0] for item in self.line_buffer)
-        if current_line_w +total_item_width >= self.width - HSTEP*2:# *2 是預留左右邊距
-            self.flush_line()
+        available_space=(self.width - HSTEP*2) - current_line_w
 
+        # status a: word can place current line and add '-' directly
+        if w+space_w <=available_space:
+            content=(clean_word,font,self.is_sup)
+            self.line_buffer.append((w+space_w,content))
+            return
 
+        # status b: word can't place and add '-' 。 try split word
+        if "\xad" in word:
+            
+            parts=word.split("\xad")
+            best_prefix=None
+            best_width=0
+            remainder=None
+
+            # looking for can place avaiable space longest prefix word
+            # try parts[0], parts[i]，add '-'
+            for i in range(len(parts)-1):
+                # assemble text (remove \xad)
+                prefix_text="".join(parts[:i+1])
+                # add '-'
+                candidate_text=prefix_text+"-"
+                candidate_width=font.measure(candidate_text)
+
+                if candidate_width+space_w <=available_space:
+                    # if can place，this is a candidate plan
+                    best_prefix=candidate_text
+                    best_width=candidate_width
+                    
+                    # left parts (need add \xad back ，because maybe next line need to split)
+                    remainder="\xad".join(parts[i+1:])
+
+                else:
+                    # if can't place，longer must can't also ，stop finding
+                    break
+
+            # if find best_prefix，use it
+            if best_prefix:
+                # add front parts (include '-' ) add current line
+                content=(best_prefix,font,self.is_sup)
+                self.line_buffer.append((best_width+space_w,content))
+
+                # force change line
+                self.flush_line()
+
+                # deal with remainder
+                if remainder:
+                    self.word(remainder)
+                
+                return
+
+        # status c : word can't place and no soft break or (split first parts still too long)
+        # execute standard change to next line
+        self.flush_line()
+        # content save because draw need to know font object to draw text
+        content=(clean_word,font,self.is_sup)
         # add buffer(not decide coord yet)
-        self.line_buffer.append((total_item_width,content))
+        self.line_buffer.append((w+space_w,content))
 
 
     def flush_line(self):
@@ -783,7 +837,13 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         url_arg=sys.argv[1]
     else:
-        url_arg = "data:text/html,This is default text showing 😀   "        
+        # url_arg = "data:text/html,This is default text showing 😀   "  
+         
+        # 使用 \xad 插入軟連字符
+        long_word = "super\xadcali\xadfragi\xadlistic\xadexpi\xadali\xaddocious"
+        # 重複多次以確保觸發換行
+        text = f"This is a test of soft hyphens. {long_word} " * 5
+        url_arg = f"data:text/html,{text}"     
 
     Browser().load(URL(url_arg))
     tkinter.mainloop()
