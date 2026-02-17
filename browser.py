@@ -869,7 +869,26 @@ class HTMLParser:
     def parse(self):
         text=""
         in_tag=False
-        for c in self.body:
+        i=0
+        while i<len(self.body):
+            # deal with comment
+            # if now not in the tag，and detect "<!--"
+            if not in_tag  and self.body.startswith("<!--",i):
+                # if have appended text before comment, remove texts
+                if text: self.add_text(text)
+                text=""
+                
+                # from i+4 to find "-->"，make sure that not misleading from <!--
+                end_idx=self.body.find("-->",i+4)
+                if end_idx==-1: # not found，just skip to the end
+                    i=len(self.body)
+                else:# find it，jump to --> behind position 
+                    i=end_idx+3
+                
+                continue
+
+        
+            c=self.body[i]
             if c =="<":
                 in_tag=True
                 if text: self.add_text(text)
@@ -880,6 +899,8 @@ class HTMLParser:
                 text=""
             else:
                 text+=c
+
+            i+=1
 
         if not in_tag and text:
             self.add_text(text)
