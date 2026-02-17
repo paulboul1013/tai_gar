@@ -941,6 +941,26 @@ class HTMLParser:
         if tag.startswith("!"): return 
         self.implicit_tags(tag)
 
+        # auto-closing tags
+        
+        if tag=="p":
+            # if stack have p，pop it，until close that p
+            if any(node.tag=="p" for node in self.unfinished):
+                self.add_tag("/p")
+
+        # deal with li
+        if tag=="li":
+            # check nearest list tag
+            for node in reversed(self.unfinished):
+                if node.tag=="li":
+                    # found last li，and middle have no new ul/ol，auto close it
+                    self.add_tag("/li")
+                    break
+
+                if node.tag in ["ul","ol"]:
+                    # found list container tag，can't close li
+                    break
+
         if tag.startswith("/"): #end tag label , like </hmtl>
             if len(self.unfinished)==1: return
             node=self.unfinished.pop()
