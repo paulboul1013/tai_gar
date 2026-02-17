@@ -167,8 +167,12 @@ class Layout:
 
     def recurse(self,tree):
         if isinstance(tree,Text):
-            for word in tree.text.split():
-                self.word(word)
+            if self.is_pre:
+                self.pre_word(tree.text)
+            else:
+                # normal mode
+                for word in tree.text.split():
+                    self.word(word)
         
         else:
             # if is script tag,just skip not render that child nodes(it's js code)
@@ -184,11 +188,28 @@ class Layout:
                 
     def pre_word(self,text):
         font=get_font(self.size,self.weight,self.style,family="Courier New")
-        w=font.measure(text)
         
-        # directly add
-        content=(text,font,self.is_sup)
-        self.line_buffer.append((w,content))
+        normalized_text=text.replace("\\n","\n")
+
+        # make sure can catch end of line \n
+        lines = normalized_text.splitlines(keepends=True)
+
+        if not lines and normalized_text=='\n':
+            lines=['\n']
+
+        for line in lines:
+            # remove \n and \r calculate width
+            clean_line=line.replace('\n','').replace('\r','')
+            w=font.measure(clean_line)
+
+            # add content to buffer
+            content=(clean_line,font,self.is_sup)
+            self.line_buffer.append((w,content))
+
+            # ecounter \n or end of line，force change next line
+            # if not last line，execute flush_line()
+            if '\n' in line:
+                self.flush_line()
 
     def word(self,word):
 
@@ -313,6 +334,11 @@ class Layout:
     def flush_line(self):
 
         if not self.line_buffer:
+            # pre mode
+            if self.is_pre:#force cursor_y down
+                font = get_font(self.size, self.weight, self.style, family="Courier New")
+                self.cursor_y += font.metrics("linespace") * 1.25
+
             return
 
         # find heightest ascent and descent
@@ -454,7 +480,14 @@ class Browser:
 
     def load(self, url):
         body = url.request()
-        self.nodes=HTMLParser(body).parse()
+
+        if url.view_source:
+            # execute syntax highlight: make raw html turn into highlighted html
+            highlighted_body=ViewSourceParser(body).handle_view_source()
+            # after highlight html feed standard Parser make DOM tree
+            self.nodes=HTMLParser(highlighted_body).parse()
+        else:
+            self.nodes=HTMLParser(body).parse()
 
         self.display_list = Layout(self.nodes,self.width).display_list
         self.draw()
@@ -879,19 +912,10 @@ class HTMLParser:
         quote=None # record current which quote (None, '"', "'")
         i=0
         while i<len(self.body):
-            c=self.body[i]
-
-            if not in_tag:
-                if c =="<":
-                    in_tag=True
-                    if text: self.add_text(text)
-                    text=""
-                else:
-                    text+=c
-
-            # deal with comment
+            # first check comment
+            
             # if now not in the tag，and detect "<!--"
-            elif not in_tag  and self.body.startswith("<!--",i):
+            if not in_tag  and self.body.startswith("<!--",i):
                 # if have appended text before comment, remove texts
                 if text: self.add_text(text)
                 text=""
@@ -904,6 +928,17 @@ class HTMLParser:
                     i=end_idx+3
                 
                 continue
+
+
+            c=self.body[i]
+
+            if not in_tag:
+                if c =="<":
+                    in_tag=True
+                    if text: self.add_text(text)
+                    text=""
+                else:
+                    text+=c
 
             else: # in_tag
                 if quote: # in quotet protect status
@@ -977,11 +1012,14 @@ class HTMLParser:
                 
 
     def add_text(self,text):
-        if text.isspace(): return # ignore space node
+        # if text.isspace(): return # ignore space node
         self.implicit_tags(None)
         if not self.unfinished: return
         parent=self.unfinished[-1]
-        node=Text(text,parent)
+
+        decode_text=text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+        node=Text(decode_text,parent)
         parent.children.append(node)
 
     def add_tag(self,tag):
@@ -1085,6 +1123,39 @@ def print_tree(node,indent=0):
     for child in node.children:
         print_tree(child,indent+2)
 
+class ViewSourceParser(HTMLParser):
+    def __init__(self,body):
+        super().__init__(body)
+        self.output_html=""
+
+    def handle_view_source(self):
+        # call father class parse，rewrite add_text and add_tag
+        self.parse()
+        # final result wrap <pre> and </pre>
+        return "<pre>" + self.output_html + "</pre>"
+
+    def add_text(self,text):
+        # origin code text content，transferred meaning and bold text
+        escaped_text=text.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+        # escaped_text=text.replace("<","&lt;").replace(">","&gt;")
+        self.output_html+="<b>"+escaped_text+"</b>"
+
+    def add_tag(self,tag):
+        # origin code text content，transferred meaning and place
+        escaped_tag=tag.replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+        # escaped_tag=tag.replace("<","&lt;").replace(">","&gt;")
+        self.output_html+="&lt;" + escaped_tag + "&gt;"
+
+    def implicit_tags(self,tag):
+        # in the view-source mode，not need auto fill html/body labels
+        # otherwise output source code get more unexist labels
+        pass
+
+    def finish(self):
+        # rewrite finishd ，because no need DOM trees，just need ending signal
+        return None
+
+
 def show(body):
     
     in_tag = False
@@ -1135,8 +1206,16 @@ if __name__ == "__main__":
 
     target_url = URL(url_arg)
     body = target_url.request()
-    nodes = HTMLParser(body).parse()
 
+    if target_url.view_source:
+        # if view-source mode，run syntax highlight parser
+        highlighted_html = ViewSourceParser(body).handle_view_source()
+        nodes = HTMLParser(highlighted_html).parse()
+    else:
+        # normal mode
+        nodes = HTMLParser(body).parse()
+    
+    
     print("--- DOM Tree ---")
     print_tree(nodes)
     print("----------------")
