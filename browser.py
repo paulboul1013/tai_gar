@@ -92,7 +92,7 @@ def get_emoji(char):
     return None
 
 class Layout:
-    def __init__(self,tokens,width):
+    def __init__(self,tree_root,width):
         self.display_list=[]
         #restore current line all objects
         # format [(width,object),(width,object),(..)]
@@ -111,82 +111,72 @@ class Layout:
         self.is_abbr=False
         self.is_pre=False
 
-        # traversal tokesn and deal with
-        for tok in tokens:
-            self.token(tok)
+        # recursive tree nodes
+        self.recurse(tree_root)
 
         self.flush_line()
 
-    def token(self,tok):
-        if isinstance(tok,Tag):
-            if tok.tag=='h1 class="title"':
-                self.flush_line()
-                self.alignment="center"
-            elif tok.tag=="/h1":
-                self.flush_line()
-                self.alignment="left"
-            elif tok.tag=="sup":
-                self.is_sup=True
-                self.size=int(self.size/2)
-            elif tok.tag=="/sup":
-                self.is_sup=False
-                self.size=int(self.size*2)
-            elif tok.tag=="pre":
-                self.is_pre=True
-                self.flush_line()
-            elif tok.tag=="/pre":
-                self.is_pre=False
-                self.flush_line()
-            elif tok.tag=="abbr":
-                self.is_abbr=True
-            elif tok.tag=="/abbr":
-                self.is_abbr=False
-            elif tok.tag=="b":
-                self.weight="bold"
-            elif tok.tag=="/b":
-                self.weight="normal"
-            elif tok.tag=="i":
-                self.style="italic"
-            elif tok.tag=="/i":
-                self.style="roman"
-            elif tok.tag=="br":
-                self.flush_line()
-            elif tok.tag=="p":
-                self.flush_line()
-            elif tok.tag=="/p":
-                self.flush_line()
-                self.cursor_y+=VSTEP
-            elif tok.tag=="small":
-                self.size-=2
-            elif tok.tag=="/small":
-                self.size+=2
-            elif tok.tag == "big":
-                self.size += 4
-            elif tok.tag == "/big":
-                self.size -= 4
+    def open_tag(self, tag):
+        if tag == 'h1 class="title"':
+            self.flush_line()
+            self.alignment = "center"
+        elif tag == "sup":
+            self.is_sup = True
+            self.size = int(self.size / 2)
+        elif tag == "pre":
+            self.is_pre = True
+            self.flush_line()
+        elif tag == "abbr":
+            self.is_abbr = True
+        elif tag == "b":
+            self.weight = "bold"
+        elif tag == "i":
+            self.style = "italic"
+        elif tag == "br":
+            self.flush_line()
+        elif tag == "p":
+            self.flush_line()
+        elif tag == "small":
+            self.size -= 2
+        elif tag == "big":
+            self.size += 4
 
-        # deal with text
-        elif isinstance(tok,Text):
-            if self.is_pre:
-                # in the pre mode，not use split()，keep all space
-                lines=tok.text.split('\n')
-                for i,line in enumerate(lines):
-                    if i>0:
-                        self.flush_line()
-                    # deal with current line (include empty space)
-                    if line:
-                        self.pre_word(line)
+    def close_tag(self, tag):
+        if tag == 'h1 class="title"':
+            self.flush_line()
+            self.alignment = "left"
+        elif tag == "sup":
+            self.is_sup = False
+            self.size = int(self.size * 2)
+        elif tag == "pre":
+            self.is_pre = False
+            self.flush_line()
+        elif tag == "abbr":
+            self.is_abbr = False
+        elif tag == "b":
+            self.weight = "normal"
+        elif tag == "i":
+            self.style = "roman"
+        elif tag == "p":
+            self.flush_line()
+            self.cursor_y += VSTEP
+        elif tag == "small":
+            self.size += 2
+        elif tag == "big":
+            self.size -= 4
 
-            else:
-                # from html rules，let text split into words with space
-                words=tok.text.split()
-
-                # if this line is empty (example double \n)，words will be empty list
-                if not words:
-                    return
-
-                for word in words:
-                    self.word(word)
+    def recurse(self,tree):
+        if isinstance(tree,Text):
+            for word in tree.text.split():
+                self.word(word)
+        
+        else:
+            self.open_tag(tree.tag)
+            for child in tree.children:
+                self.recurse(child)
+            
+            self.close_tag(tree.tag)
+        
                 
     def pre_word(self,text):
         font=get_font(self.size,self.weight,self.style,family="Courier New")
@@ -414,11 +404,17 @@ class Text:
         self.text=text
         self.children=[]
         self.parent=parent
+    def __repr__(self):
+        return repr(self.text)
+
 class Element:
-    def __init__(self,tag,parent):
+    def __init__(self,tag,attributes,parent):
         self.tag=tag
+        self.attributes=attributes
         self.children=[]
         self.parent=parent
+    def __repr__(self):
+        return "<"+self.tag+">"
 
 class Browser:
     def __init__(self):
@@ -453,9 +449,9 @@ class Browser:
 
     def load(self, url):
         body = url.request()
-        self.tokens=lex(body)
+        self.nodes=HTMLParser(body).parse()
 
-        self.display_list = Layout(self.tokens,self.width).display_list
+        self.display_list = Layout(self.nodes,self.width).display_list
         self.draw()
 
     def draw(self):
@@ -862,6 +858,10 @@ class HTMLParser:
     def __init__(self,body):
         self.body=body
         self.unfinished=[] # stack
+        self.SELF_CLOSING_TAGS = [
+            "area", "base", "br", "col", "embed", "hr", "img", "input",
+            "link", "meta", "param", "source", "track", "wbr",
+        ]
 
     def parse(self):
         text=""
@@ -885,19 +885,28 @@ class HTMLParser:
 
     def add_text(self,text):
         if text.isspace(): return # ignore space node
+        if not self.unfinished: return
         parent=self.unfinished[-1]
         node=Text(text,parent)
         parent.children.append(node)
 
     def add_tag(self,tag):
-        if tag.startwith("/"): #end tag label , like </hmtl>
+        tag,attributes=self.get_attribute(tag)
+        # ignore Doctype and comment
+        if tag.startswith("!"): return 
+
+        if tag.startswith("/"): #end tag label , like </hmtl>
             if len(self.unfinished)==1: return
             node=self.unfinished.pop()
             parent=self.unfinished[-1]
             parent.children.append(node)
+        elif tag in self.SELF_CLOSING_TAGS:
+            parent=self.unfinished[-1]
+            node=Element(tag,attributes,parent)
+            parent.children.append(node)
         else: # start tag label, like <html>
             parent=self.unfinished[-1] if self.unfinished else None
-            node=Element(tag,parent)
+            node=Element(tag,attributes,parent)
             self.unfinished.append(node)
 
     def finish(self):
@@ -907,7 +916,27 @@ class HTMLParser:
             parent=self.unfinished[-1]
             parent.children.append(node)
 
-        return self.unfinished.pop()           
+        return self.unfinished.pop()         
+
+    def get_attribute(self,text):
+        parts=text.split()
+        tag=parts[0].casefold() # tag name no distinguish upper or lower case
+        attributes={}
+        for attrpair in parts[1:]:
+            if "=" in attrpair:
+                key,value=attrpair.split("=",1)
+                attributes[key.casefold()]=value
+                if len(value) > 2 and value[0] in ["'","\""]:
+                    value=value[1:-1]
+            else:
+                attributes[attrpair.casefold()]=""
+        
+        return tag,attributes  
+
+def print_tree(node,indent=0):
+    print(" "*indent,node)
+    for child in node.children:
+        print_tree(child,indent+2)
 
 def show(body):
     
@@ -947,6 +976,7 @@ if __name__ == "__main__":
     
     if len(sys.argv) > 1:
         url_arg=sys.argv[1]
+        
     else:
         # url_arg = "data:text/html,This is default text showing 😀   "  
          
@@ -956,5 +986,14 @@ if __name__ == "__main__":
         text = f"This is a test of soft hyphens. {long_word} " * 5
         url_arg = f"data:text/html,{text}"     
 
-    Browser().load(URL(url_arg))
+    target_url = URL(url_arg)
+    body = target_url.request()
+    nodes = HTMLParser(body).parse()
+
+    print("--- DOM Tree ---")
+    print_tree(nodes)
+    print("----------------")
+
+    browser = Browser()
+    browser.load(target_url)
     tkinter.mainloop()
