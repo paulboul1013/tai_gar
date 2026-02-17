@@ -171,6 +171,10 @@ class Layout:
                 self.word(word)
         
         else:
+            # if is script tag,just skip not render that child nodes(it's js code)
+            if tree.tag == "script":
+                return
+
             self.open_tag(tree.tag)
             for child in tree.children:
                 self.recurse(child)
@@ -895,8 +899,34 @@ class HTMLParser:
                 text=""
             elif c==">":
                 in_tag=False
+
+                # get tag name check is script ?
+                tag_name=text.split()[0].casefold() if text else ""
                 self.add_tag(text)
                 text=""
+
+                if tag_name=="script":
+                    # from i position start to find next </script> 
+                    content_start=i+1
+                    lower_body=self.body.lower()
+                    end_script_idx=lower_body.find("</script>",content_start)
+
+                    if end_script_idx==-1:
+                        # if not finding </script>，lefting word make text
+                        script_content=self.body[content_start:]
+                        if script_content:
+                            self.add_text(script_content)
+                        i=len(self.body)
+
+                    else:
+                        # get middle js code make pure text
+                        script_content=self.body[content_start:end_script_idx]
+                        if script_content:
+                            self.add_text(script_content)
+
+                        # move i position to </script> before word
+                        # next loop i+=1 ，metting </script>'s "<"
+                        i=end_script_idx-1
             else:
                 text+=c
 
