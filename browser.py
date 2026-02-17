@@ -419,6 +419,7 @@ class Element:
         self.parent=parent
     def __repr__(self):
         return "<"+self.tag+">"
+        # return "<"+self.tag+" "+str(self.attributes)+">"
 
 class Browser:
     def __init__(self):
@@ -870,14 +871,27 @@ class HTMLParser:
         "base", "basefont", "bgsound", "noscript",
         "link", "meta", "title", "style", "script",
         ]
+
+
     def parse(self):
         text=""
         in_tag=False
+        quote=None # record current which quote (None, '"', "'")
         i=0
         while i<len(self.body):
+            c=self.body[i]
+
+            if not in_tag:
+                if c =="<":
+                    in_tag=True
+                    if text: self.add_text(text)
+                    text=""
+                else:
+                    text+=c
+
             # deal with comment
             # if now not in the tag，and detect "<!--"
-            if not in_tag  and self.body.startswith("<!--",i):
+            elif not in_tag  and self.body.startswith("<!--",i):
                 # if have appended text before comment, remove texts
                 if text: self.add_text(text)
                 text=""
@@ -891,44 +905,49 @@ class HTMLParser:
                 
                 continue
 
-        
-            c=self.body[i]
-            if c =="<":
-                in_tag=True
-                if text: self.add_text(text)
-                text=""
-            elif c==">":
-                in_tag=False
+            else: # in_tag
+                if quote: # in quotet protect status
+                    if c==quote:
+                        quote=None
 
-                # get tag name check is script ?
-                tag_name=text.split()[0].casefold() if text else ""
-                self.add_tag(text)
-                text=""
+                    text+=c
+                else:
+                    if c in ["'",'"']:
+                        quote=c #into quote protect status 
+                        text+=c
 
-                if tag_name=="script":
-                    # from i position start to find next </script> 
-                    content_start=i+1
-                    lower_body=self.body.lower()
-                    end_script_idx=lower_body.find("</script>",content_start)
+                    elif c==">": # when non quote status > represent tag end
+                        in_tag=False
+                        # get tag name check is it script 
+                        tag_name=text.split()[0].casefold() if text else ""
+                        self.add_tag(text)
+                        text=""
 
-                    if end_script_idx==-1:
-                        # if not finding </script>，lefting word make text
-                        script_content=self.body[content_start:]
-                        if script_content:
-                            self.add_text(script_content)
-                        i=len(self.body)
+                        if tag_name=="script":
+                            # from i position start to find next </script> 
+                            content_start=i+1
+                            lower_body=self.body.lower()
+                            end_script_idx=lower_body.find("</script>",content_start)
 
+                            if end_script_idx==-1:
+                                # if not finding </script>，lefting word make text
+                                script_content=self.body[content_start:]
+                                if script_content:
+                                    self.add_text(script_content)
+                                i=len(self.body)
+
+                            else:
+                                # get middle js code make pure text
+                                script_content=self.body[content_start:end_script_idx]
+                                if script_content:
+                                    self.add_text(script_content)
+
+                                # move i position to </script> before word
+                                # next loop i+=1 ，metting </script>'s "<"
+                                i=end_script_idx-1
                     else:
-                        # get middle js code make pure text
-                        script_content=self.body[content_start:end_script_idx]
-                        if script_content:
-                            self.add_text(script_content)
+                        text+=c
 
-                        # move i position to </script> before word
-                        # next loop i+=1 ，metting </script>'s "<"
-                        i=end_script_idx-1
-            else:
-                text+=c
 
             i+=1
 
@@ -1017,15 +1036,45 @@ class HTMLParser:
         return self.unfinished.pop()         
 
     def get_attribute(self,text):
-        parts=text.split()
-        tag=parts[0].casefold() # tag name no distinguish upper or lower case
+        if not text: return "",{}
+
+        # get tag name (first space before)
+        i=0
+        while i<len(text) and not text[i].isspace():
+            i+=1
+        tag=text[:i].casefold()
+
+        # get attributes key pair
         attributes={}
-        for attrpair in parts[1:]:
+        while i< len(text):
+            # skip space
+            while i<len(text) and text[i].isspace():
+                i+=1
+            if i>=len(text):break
+
+            # starting scan one key-value pair(key=value)
+            start=i
+            quote=None
+            while i<len(text):
+                if text[i] in ["'",'"']:
+                    if quote==text[i]: quote=None
+                    elif not quote: quote=text[i]
+
+                # only in non quote encounter space,represent attribute tag ending
+                if not quote and text[i].isspace():
+                    break
+
+                i+=1
+
+            attrpair=text[start:i]
             if "=" in attrpair:
                 key,value=attrpair.split("=",1)
-                attributes[key.casefold()]=value
-                if len(value) > 2 and value[0] in ["'","\""]:
+                # remove two side quote
+                if len(value)>=2 and value[0] in ["'",'"']  and value[0] ==value[-1]:
                     value=value[1:-1]
+
+                attributes[key.casefold()]=value
+
             else:
                 attributes[attrpair.casefold()]=""
         
