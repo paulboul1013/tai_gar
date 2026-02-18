@@ -896,6 +896,8 @@ class HTMLParser:
     def __init__(self,body):
         self.body=body
         self.unfinished=[] # stack
+        self.formatting_stack=[]
+        self.FORMATTING_TAGS=["b","i","u","small","big"]
         self.SELF_CLOSING_TAGS = [
             "area", "base", "br", "col", "embed", "hr", "img", "input",
             "link", "meta", "param", "source", "track", "wbr",
@@ -1028,8 +1030,8 @@ class HTMLParser:
         if tag.startswith("!"): return 
         self.implicit_tags(tag)
 
+
         # auto-closing tags
-        
         if tag=="p":
             # if stack have p，pop it，until close that p
             if any(node.tag=="p" for node in self.unfinished):
@@ -1049,10 +1051,53 @@ class HTMLParser:
                     break
 
         if tag.startswith("/"): #end tag label , like </hmtl>
+            
+            tag_name=tag[1:]
+            
+            # simple Adoption Agency Algorithm
+            if tag_name in self.FORMATTING_TAGS:
+                # check this tag is in the formatting stack
+                if tag_name not in [node.tag  for node in self.formatting_stack]:
+                    return # not opened yet tag，ignore 
+
+                # find what tags need to tempeory close and restart
+                # pop it out from formatting_stack，until encounter target label
+                reopen_list=[]
+                while self.formatting_stack:
+                    node=self.formatting_stack.pop()
+                    if node.tag==tag_name:
+                        break
+
+                    reopen_list.append(node)
+
+                # in the unfinished stack do it same thing
+                # need to force pop it out until find target tag close it
+                while self.unfinished:
+                    node=self.unfinished.pop()
+                    # let node mount to parent node
+                    if self.unfinished:
+                        parent=self.unfinished[-1]
+                        parent.children.append(node)
+
+                    if node.tag==tag_name:
+                        break
+
+                # reopen these forcing tags (reopen_list)
+                # these tags will make target tags silbiing nodes
+                for f_node in reversed(reopen_list):
+                    # build one same attribute new node
+                    new_node=Element(f_node.tag,f_node.attributes,self.unfinished[-1])
+                    self.unfinished.append(new_node)
+                    self.formatting_stack.append(new_node)
+
+                return
+
+            # origin non-formatting tags(p,li,div..)
             if len(self.unfinished)==1: return
             node=self.unfinished.pop()
             parent=self.unfinished[-1]
             parent.children.append(node)
+
         elif tag in self.SELF_CLOSING_TAGS:
             parent=self.unfinished[-1]
             node=Element(tag,attributes,parent)
@@ -1061,6 +1106,9 @@ class HTMLParser:
             parent=self.unfinished[-1] if self.unfinished else None
             node=Element(tag,attributes,parent)
             self.unfinished.append(node)
+
+            if tag in self.FORMATTING_TAGS:
+                self.formatting_stack.append(node)
 
     def finish(self):
         if not self.unfinished:
