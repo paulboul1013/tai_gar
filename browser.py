@@ -92,29 +92,35 @@ def get_emoji(char):
     return None
 
 class Layout:
-    def __init__(self,tree_root,width):
-        self.display_list=[]
-        #restore current line all objects
-        # format [(width,object),(width,object),(..)]
-        self.line_buffer=[]
-        self.width =width
+    def __init__(self,node,parent,previous):
+        self.node=node
+        self.parent=parent
+        self.previous=previous
+        self.children=[]
 
-        self.cursor_x=HSTEP
-        self.cursor_y=VSTEP
+    # def __init__(self,tree_root,width):
+    #     self.display_list=[]
+    #     #restore current line all objects
+    #     # format [(width,object),(width,object),(..)]
+    #     self.line_buffer=[]
+    #     self.width =width
 
-        # word type status management
-        self.weight="normal"
-        self.style="roman"
-        self.size=12
-        self.alignment="left"
-        self.is_sup=False # is it superscript
-        self.is_abbr=False
-        self.is_pre=False
+    #     self.cursor_x=HSTEP
+    #     self.cursor_y=VSTEP
 
-        # recursive tree nodes
-        self.recurse(tree_root)
+    #     # word type status management
+    #     self.weight="normal"
+    #     self.style="roman"
+    #     self.size=12
+    #     self.alignment="left"
+    #     self.is_sup=False # is it superscript
+    #     self.is_abbr=False
+    #     self.is_pre=False
 
-        self.flush_line()
+    #     # recursive tree nodes
+    #     self.recurse(tree_root)
+
+    #     self.flush_line()
 
     def open_tag(self, tag):
         if tag == 'h1 class="title"':
