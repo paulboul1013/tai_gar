@@ -98,12 +98,12 @@ class DocumentLayout:
         self.children=[]
 
     def layout(self): # build child layout objects
-        child=Layout(self.node,self,None)
+        child=BlockLayout(self.node,self,None)
         self.children.append(child)
         child.layout()
         self.display_list=child.display_list
 
-class Layout:
+class BlockLayout: # layout for block level elements
     def __init__(self,node,parent,previous):
         self.node=node
         self.parent=parent
@@ -507,7 +507,7 @@ class Browser:
         else:
             self.nodes=HTMLParser(body).parse()
 
-        self.document=Layout(self.nodes)
+        self.document=BlockLayout(self.nodes)
         self.document.layout()
         self.display_list = self.document.display_list
         self.draw()
@@ -614,7 +614,7 @@ class Browser:
         
         #recalculate layout
         if self.tokens:
-            self.display_list=Layout(self.tokens,self.width).display_list
+            self.display_list=BlockLayout(self.tokens,self.width).display_list
             self.draw()
 
 
