@@ -489,7 +489,9 @@ class Browser:
         else:
             self.nodes=HTMLParser(body).parse()
 
-        self.display_list = Layout(self.nodes,self.width).display_list
+        self.document=Layout(self.nodes)
+        self.document.layout()
+        self.display_list = self.document.display_list
         self.draw()
 
     def draw(self):
