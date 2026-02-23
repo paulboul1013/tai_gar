@@ -110,6 +110,13 @@ class BlockLayout: # layout for block level elements
         self.previous=previous
         self.children=[]
 
+    def layout_intermediate(self):
+        previous=None
+        for child in self.node.children:
+            next=BlockLayout(child,self,previous)
+            self.children.append(next)
+            previous=next
+
     # def __init__(self,tree_root,width):
     #     self.display_list=[]
     #     #restore current line all objects
