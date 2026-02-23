@@ -34,6 +34,15 @@ SCROLLBAR_WIDTH=12
 
 USE_RTL=False
 
+BLOCK_ELEMENTS = [
+    "html", "body", "article", "section", "nav", "aside",
+    "h1", "h2", "h3", "h4", "h5", "h6", "hgroup", "header",
+    "footer", "address", "p", "hr", "pre", "blockquote",
+    "ol", "ul", "menu", "li", "dl", "dt", "dd", "figure",
+    "figcaption", "main", "div", "table", "form", "fieldset",
+    "legend", "details", "summary"
+]
+
 def get_font(size,weight,style,family=None):
     if not family:
         family="Times"
@@ -116,6 +125,21 @@ class BlockLayout: # layout for block level elements
             next=BlockLayout(child,self,previous)
             self.children.append(next)
             previous=next
+
+    def layout_mode(self):
+        if isinstance(self.node,Text):
+            return "inline"
+
+        elif any([isinstance(child,Element) and \
+                   child.tag in BLOCK_ELEMENTS
+                   for child in self.node.children]):
+            return "block"
+
+        elif self.node.children:
+            return "inline"
+
+        else:
+            return "block"
 
     # def __init__(self,tree_root,width):
     #     self.display_list=[]
