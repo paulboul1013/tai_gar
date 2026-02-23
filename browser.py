@@ -91,6 +91,18 @@ def get_emoji(char):
 
     return None
 
+class DocumentLayout:
+    def __init__(self,node):#build root of layout tree
+        self.node=node
+        self.parent=None
+        self.children=[]
+
+    def layout(self): # build child layout objects
+        child=Layout(self.node,self,None)
+        self.children.append(child)
+        child.layout()
+        self.display_list=child.display_list
+
 class Layout:
     def __init__(self,node,parent,previous):
         self.node=node
