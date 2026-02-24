@@ -141,6 +141,30 @@ class BlockLayout: # layout for block level elements
         else:
             return "block"
 
+    def layout(self):
+        mode=self.layout_mode()
+        if mode=="block":
+            previous=None
+            for child in self.node.children:
+                next=BlockLayout(child,self,previous)
+                self.children.append(next)
+                previous=next
+            
+        else:
+            self.cursor_x=0
+            self.cursor_y=0
+            self.weight="normal"
+            self.style="roman"
+            self.size=12
+
+            self.line=[]
+            self.recurse(self.node)
+            self.flush()
+
+        for child in self.children:
+            child.layout()
+            
+
     # def __init__(self,tree_root,width):
     #     self.display_list=[]
     #     #restore current line all objects
