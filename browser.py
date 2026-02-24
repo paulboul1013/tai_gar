@@ -173,6 +173,14 @@ class BlockLayout: # layout for block level elements
 
         for child in self.children:
             child.layout()
+
+    def flush(self):
+        self.cursor_x=0
+        
+        for rel_x,word,font in self.line:
+            x=self.x+rel_x
+            y=self.y+baseline-font.metrics("ascent")
+            self.display_list.append((x,y,word,font))
             
 
     # def __init__(self,tree_root,width):
