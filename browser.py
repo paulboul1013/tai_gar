@@ -106,6 +106,11 @@ class DocumentLayout:
         self.parent=None
         self.children=[]
 
+        self.x=None
+        self.y=None
+        self.width=None
+        self.height=None
+
     def layout(self): # build child layout objects
         child=BlockLayout(self.node,self,None)
         self.children.append(child)
@@ -118,6 +123,11 @@ class BlockLayout: # layout for block level elements
         self.parent=parent
         self.previous=previous
         self.children=[]
+
+        self.x=None
+        self.y=None
+        self.width=None
+        self.height=None
 
     def layout_intermediate(self):
         previous=None
@@ -562,7 +572,7 @@ class Browser:
         else:
             self.nodes=HTMLParser(body).parse()
 
-        self.document=BlockLayout(self.nodes)
+        self.document=BlockLayout(self.nodes,None,None)
         self.document.layout()
         self.display_list = self.document.display_list
         self.draw()
