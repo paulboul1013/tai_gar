@@ -100,6 +100,12 @@ def get_emoji(char):
 
     return None
 
+def paint_tree(layout_object,display_list):
+    display_list.extend(layout_object.paint())
+
+    for child in layout_object.children:
+        paint_tree(child,display_list)
+
 class DocumentLayout:
     def __init__(self,node):#build root of layout tree
         self.node=node
@@ -112,8 +118,6 @@ class DocumentLayout:
         self.width=None
         self.height=None
 
-        self.display_list=[]
-
     def layout(self): # build child layout objects
         self.x=HSTEP
         self.y=VSTEP
@@ -125,7 +129,9 @@ class DocumentLayout:
         child.layout()
 
         self.height=child.height
-        self.display_list=child.display_list
+
+    def paint(self):
+        return []
 
 class BlockLayout: # layout for block level elements
     def __init__(self,node,parent,previous):
@@ -140,6 +146,9 @@ class BlockLayout: # layout for block level elements
         self.height=None
 
         self.display_list=[]
+
+    def paint(self):
+        return self.display_list
 
     def layout_intermediate(self):
         previous=None
@@ -181,10 +190,8 @@ class BlockLayout: # layout for block level elements
                 self.children.append(next)
                 previous=next
 
-            self.display_list=[]
             for child in self.children:
                 child.layout()
-                self.display_list.extend(child.display_list)
 
             self.height=sum(child.height for child in self.children)
             
@@ -557,6 +564,7 @@ class Browser:
         self.height=HEIGHT
 
         self.tokens=[]
+        self.display_list = []
 
         self.canvas = tkinter.Canvas(
             self.window,
@@ -594,7 +602,9 @@ class Browser:
 
         self.document=DocumentLayout(self.nodes)
         self.document.layout()
-        self.display_list = self.document.display_list
+
+        self.display_list=[]
+        paint_tree(self.document,self.display_list)
         self.draw()
 
     def draw(self):
@@ -705,7 +715,9 @@ class Browser:
 
             self.document=DocumentLayout(self.nodes)
             self.document.layout()
-            self.display_list=self.document.display_list
+
+            self.display_list=[]
+            paint_tree(self.document,self.display_list)
             self.draw()
 
 
@@ -1381,4 +1393,6 @@ if __name__ == "__main__":
 
     browser = Browser()
     browser.load(target_url)
+    print("display items:", len(browser.display_list))
+    print("document height:", browser.document.height)
     tkinter.mainloop()
