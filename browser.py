@@ -104,6 +104,7 @@ class DocumentLayout:
     def __init__(self,node):#build root of layout tree
         self.node=node
         self.parent=None
+        self.previous=None
         self.children=[]
 
         self.x=None
@@ -111,10 +112,19 @@ class DocumentLayout:
         self.width=None
         self.height=None
 
+        self.display_list=[]
+
     def layout(self): # build child layout objects
+        self.x=HSTEP
+        self.y=VSTEP
+        self.width=WIDTH-HSTEP*2
+        
+        
         child=BlockLayout(self.node,self,None)
-        self.children.append(child)
+        self.children=[child]
         child.layout()
+
+        self.height=child.height
         self.display_list=child.display_list
 
 class BlockLayout: # layout for block level elements
@@ -128,6 +138,8 @@ class BlockLayout: # layout for block level elements
         self.y=None
         self.width=None
         self.height=None
+
+        self.display_list=[]
 
     def layout_intermediate(self):
         previous=None
@@ -152,13 +164,29 @@ class BlockLayout: # layout for block level elements
             return "block"
 
     def layout(self):
+        self.x=self.parent.x
+        self.width=self.parent.width
+
+        if self.previous:
+            self.y=self.previous.y+self.previous.height
+        else:
+            self.y=self.parent.y
+
         mode=self.layout_mode()
+
         if mode=="block":
             previous=None
             for child in self.node.children:
                 next=BlockLayout(child,self,previous)
                 self.children.append(next)
                 previous=next
+
+            self.display_list=[]
+            for child in self.children:
+                child.layout()
+                self.display_list.extend(child.display_list)
+
+            self.height=sum(child.height for child in self.children)
             
         else:
             self.cursor_x=0
@@ -166,46 +194,30 @@ class BlockLayout: # layout for block level elements
             self.weight="normal"
             self.style="roman"
             self.size=12
+            self.alignment="left"
+            self.is_sup=False
+            self.is_abbr=False
+            self.is_pre=False
 
-            self.line=[]
+            self.line_buffer=[]
+            self.display_list=[]
+
+
             self.recurse(self.node)
-            self.flush()
+            self.flush_line()
 
-        for child in self.children:
-            child.layout()
+            self.height=self.cursor_y
+
 
     def flush(self):
-        self.cursor_x=0
+        self.flush_line()
+        # self.cursor_x=0
         
-        for rel_x,word,font in self.line:
-            x=self.x+rel_x
-            y=self.y+baseline-font.metrics("ascent")
-            self.display_list.append((x,y,word,font))
+        # for rel_x,word,font in self.line:
+        #     x=self.x+rel_x
+        #     y=self.y+baseline-font.metrics("ascent")
+        #     self.display_list.append((x,y,word,font))
             
-
-    # def __init__(self,tree_root,width):
-    #     self.display_list=[]
-    #     #restore current line all objects
-    #     # format [(width,object),(width,object),(..)]
-    #     self.line_buffer=[]
-    #     self.width =width
-
-    #     self.cursor_x=HSTEP
-    #     self.cursor_y=VSTEP
-
-    #     # word type status management
-    #     self.weight="normal"
-    #     self.style="roman"
-    #     self.size=12
-    #     self.alignment="left"
-    #     self.is_sup=False # is it superscript
-    #     self.is_abbr=False
-    #     self.is_pre=False
-
-    #     # recursive tree nodes
-    #     self.recurse(tree_root)
-
-    #     self.flush_line()
 
     def open_tag(self, tag):
         if tag == 'h1 class="title"':
@@ -321,7 +333,7 @@ class BlockLayout: # layout for block level elements
                 
                 # change line check
                 current_line_w=sum(item[0] for item in self.line_buffer)
-                if current_line_w +w >= (self.width - HSTEP*2):
+                if current_line_w+w >= self.width:
                     self.flush_line()
 
                 self.line_buffer.append((w+space_w,(c,f,self.is_sup)))
@@ -342,7 +354,7 @@ class BlockLayout: # layout for block level elements
             space_w=0
 
             current_line_w=sum(item[0] for item in self.line_buffer)
-            if current_line_w +w >= self.width - HSTEP*2:
+            if current_line_w +w >= self.width:
                 self.flush_line()
             self.line_buffer.append((w+space_w,content))
             return
@@ -361,7 +373,7 @@ class BlockLayout: # layout for block level elements
 
         # calculate current line available space
         current_line_w=sum(item[0] for item in self.line_buffer)
-        available_space=(self.width - HSTEP*2) - current_line_w
+        available_space=self.width - current_line_w
 
         # status a: word can place current line and add '-' directly
         if w+space_w <=available_space:
@@ -460,14 +472,14 @@ class BlockLayout: # layout for block level elements
         # decide starting cursor_x
         if self.alignment=="center":
             # total usefull widht is self.width-HSTEP*2 (minus left and right margin)
-            remaining_space=(self.width-HSTEP*2)-line_width
-            cursor_x=HSTEP+(remaining_space//2)
+            remaining_space=self.width-line_width
+            cursor_x=max(0,remaining_space//2)
 
         # base on baseline to put every object
         elif USE_RTL:
-            cursor_x=self.width-line_width-HSTEP
+            cursor_x=max(0,self.width-line_width)
         else:
-            cursor_x=HSTEP
+            cursor_x=0
 
         for item_w,item_content in self.line_buffer:
             if isinstance(item_content,tuple):
@@ -479,13 +491,13 @@ class BlockLayout: # layout for block level elements
                     y=baseline-font.metrics("ascent")
 
                 #every single word's y =baseline - this word ascent
-                self.display_list.append((cursor_x,y,word,font))
+                self.display_list.append((self.x+cursor_x,self.y+y,word,font))
                 
             else:
                 # pic bottom is on the baseline
                 img_offset=12
                 y=baseline-item_content.height()
-                self.display_list.append((cursor_x,y+img_offset,item_content))
+                self.display_list.append((self.x+cursor_x,self.y+y+img_offset,item_content))
 
             cursor_x+=item_w
 
@@ -580,7 +592,7 @@ class Browser:
         else:
             self.nodes=HTMLParser(body).parse()
 
-        self.document=BlockLayout(self.nodes,None,None)
+        self.document=DocumentLayout(self.nodes)
         self.document.layout()
         self.display_list = self.document.display_list
         self.draw()
@@ -686,8 +698,14 @@ class Browser:
         self.height=e.height
         
         #recalculate layout
-        if self.tokens:
-            self.display_list=BlockLayout(self.tokens,self.width).display_list
+        if hasattr(self,"nodes") and self.nodes:
+            global WIDTH,HEIGHT
+            WIDTH=self.width
+            HEIGHT=self.height
+
+            self.document=DocumentLayout(self.nodes)
+            self.document.layout()
+            self.display_list=self.document.display_list
             self.draw()
 
 
