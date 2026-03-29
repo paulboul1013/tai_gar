@@ -183,7 +183,26 @@ class BlockLayout: # layout for block level elements
         self.display_list=[]
 
     def paint(self):
-        return self.display_list
+        cmds=[]
+
+        # first draw background，the text will cover up background
+        if isinstance(self.node,Element) and self.node.tag=="pre":
+            x2=self.x+self.width
+            y2=self.y+self.height
+            cmds.append(DrawRect(self.x,self.y,x2,y2,"gray"))
+
+        #inline mode turn text/picture into Draw command
+        if self.layout_mode() == "inline":
+            for item in self.display_list:
+                if len(item)==4:
+                    x,y,word,font=item
+                    cmds.append(DrawText(x,y,word,font))
+
+                else:
+                    # keep origin emoji/image tuple
+                    cmds.append(item)
+
+        return cmds
 
     def layout_intermediate(self):
         previous=None
