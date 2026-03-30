@@ -185,11 +185,18 @@ class BlockLayout: # layout for block level elements
     def paint(self):
         cmds=[]
 
-        # first draw background，the text will cover up background
-        if isinstance(self.node,Element) and self.node.tag=="pre":
-            x2=self.x+self.width
-            y2=self.y+self.height
-            cmds.append(DrawRect(self.x,self.y,x2,y2,"gray"))
+
+        if isinstance(self.node,Element):
+            # first draw background，the text will cover up background
+            if self.node.tag=="pre":
+                x2=self.x+self.width
+                y2=self.y+self.height
+                cmds.append(DrawRect(self.x,self.y,x2,y2,"gray"))
+
+            elif self.node.tag=="nav" and self.node.attributes.get("class") =="links":
+                x2=self.x+self.width
+                y2=self.y+self.height
+                cmds.append(DrawRect(self.x,self.y,x2,y2,"lightgray"))
 
         #inline mode turn text/picture into Draw command
         if self.layout_mode() == "inline":
@@ -281,10 +288,11 @@ class BlockLayout: # layout for block level elements
             
 
     def open_tag(self, tag):
-        if tag == 'h1 class="title"':
-            self.flush_line()
-            self.alignment = "center"
-        elif tag == "sup":
+        # already handled in HTMLParser
+        # if tag == 'h1 class="title"':
+        #     self.flush_line()
+        #     self.alignment = "center"
+        if tag == "sup":
             self.is_sup = True
             self.size = int(self.size / 2)
         elif tag == "pre":
