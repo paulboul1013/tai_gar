@@ -198,6 +198,18 @@ class BlockLayout: # layout for block level elements
                 y2=self.y+self.height
                 cmds.append(DrawRect(self.x,self.y,x2,y2,"lightgray"))
 
+            elif self.node.tag=="nav" and self.node.attributes.get("id")=="toc":
+                header_h=VSTEP+4
+                x2=self.x+self.width
+                y2=self.y+header_h
+
+                #gray background behind the heading
+                cmds.append(DrawRect(self.x,self.y,x2,y2,"gray"))
+
+                #heading text
+                font=get_font(12,"bold","roman")
+                cmds.append(DrawText(self.x+4,self.y+2,"Table of Contents",font))
+
             # bullet of list items
             elif  self.node.tag=="li":
                 bullet_size=5
@@ -265,6 +277,16 @@ class BlockLayout: # layout for block level elements
         mode=self.layout_mode()
 
         if mode=="block":
+            toc_header_h=0
+            old_y=self.y
+
+            # reserve one extra line above <nav id="toc">
+            if isinstance(self.node,Element) and \
+                self.node.tag=="nav" and \
+                self.node.attributes.get("id")=="toc":
+                    toc_header_h=VSTEP+4
+                    self.y=self.y+toc_header_h
+
             previous=None
             for child in self.node.children:
                 # keep <head> in the HTML tree,but let put it in the layout tree
@@ -278,7 +300,8 @@ class BlockLayout: # layout for block level elements
             for child in self.children:
                 child.layout()
 
-            self.height=sum(child.height for child in self.children)
+            self.height=sum(child.height for child in self.children)+toc_header_h
+            self.y=old_y
             
         else:
             self.cursor_x=0
