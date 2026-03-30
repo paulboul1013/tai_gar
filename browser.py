@@ -720,27 +720,8 @@ class Browser:
 
     def scrolldown(self, e):
         
-        # calculate web total height
-        if self.display_list:
-            document_height=self.display_list[-1][1]+VSTEP
-        else:
-            document_height=0
-
-        # calculate max scroll distance(web total height - window height)
-        max_scroll=document_height-self.height
-
-
-        # execute scroll and limit edge
-        self.scroll+=SCROLL_STEP
-
-        # if scroll is greater than max scroll, limit it
-        if self.scroll>max_scroll:
-            self.scroll=max_scroll
-
-        # if web less than window (max_scroll < 0)
-        if self.scroll<0:
-            self.scroll=0
-
+        max_y=max(self.document.height+2*VSTEP-self.height,0)
+        self.scroll=min(self.scroll+SCROLL_STEP,max_y)
         self.draw()
 
     def scrollup(self,e):
