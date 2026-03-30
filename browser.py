@@ -159,7 +159,7 @@ class DocumentLayout:
         self.width=WIDTH-HSTEP*2
         
         
-        child=BlockLayout(self.node,self,None)
+        child=BlockLayout([self.node],self,None)
         self.children=[child]
         child.layout()
 
@@ -169,8 +169,9 @@ class DocumentLayout:
         return []
 
 class BlockLayout: # layout for block level elements
-    def __init__(self,node,parent,previous):
-        self.node=node
+    def __init__(self,nodes,parent,previous):
+        self.nodes=nodes
+        self.node=nodes[0]
         self.parent=parent
         self.previous=previous
         self.children=[]
@@ -238,27 +239,48 @@ class BlockLayout: # layout for block level elements
 
         return cmds
 
-    def layout_intermediate(self):
-        previous=None
-        for child in self.node.children:
-            next=BlockLayout(child,self,previous)
-            self.children.append(next)
-            previous=next
+    def is_block_node(self,node):
+        return isinstance(node,Element) and node.tag in BLOCK_ELEMENTS
+
+    def child_groups(self):
+        groups=[]
+        buffer=[]
+
+        # this layer children from this layout box all of the nodes
+        all_children=[]
+        for node in self.nodes:
+            if isinstance(node,Element):
+                for child in node.children:
+                    # head in the DOM，but not into the layout tree
+                    if isinstance(child,Element) and child.tag=="head":
+                        continue
+
+                    all_children.append(child)
+
+        for child in all_children:
+            if self.is_block_node(child):
+                if buffer:
+                    groups.append(buffer)
+                    buffer=[]
+                groups.append([child])
+
+            else:
+                buffer.append(child)
+
+        if buffer:
+            groups.append(buffer)
+
+        return groups
+
 
     def layout_mode(self):
-        if isinstance(self.node,Text):
-            return "inline"
-
-        elif any([isinstance(child,Element) and \
-                   child.tag in BLOCK_ELEMENTS
-                   for child in self.node.children]):
+        if any(self.is_block_node(child)
+                for node in self.nodes if isinstance(node,Element)
+                for child in node.children):
             return "block"
-
-        elif self.node.children:
-            return "inline"
 
         else:
-            return "block"
+            return "inline"
 
     def layout(self):
         self.x=self.parent.x
@@ -288,12 +310,8 @@ class BlockLayout: # layout for block level elements
                     self.y=self.y+toc_header_h
 
             previous=None
-            for child in self.node.children:
-                # keep <head> in the HTML tree,but let put it in the layout tree
-                if isinstance(child,Element) and child.tag=="head":
-                    continue
-
-                next=BlockLayout(child,self,previous)
+            for group in self.child_groups():
+                next=BlockLayout(group,self,previous)
                 self.children.append(next)
                 previous=next
 
@@ -318,7 +336,9 @@ class BlockLayout: # layout for block level elements
             self.display_list=[]
 
 
-            self.recurse(self.node)
+            for node in self.nodes:
+                self.recurse(node)
+
             self.flush_line()
 
             self.height=self.cursor_y
