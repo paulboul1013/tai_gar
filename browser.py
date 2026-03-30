@@ -247,6 +247,10 @@ class BlockLayout: # layout for block level elements
         if mode=="block":
             previous=None
             for child in self.node.children:
+                # keep <head> in the HTML tree,but let put it in the layout tree
+                if isinstance(child,Element) and child.tag=="head":
+                    continue
+
                 next=BlockLayout(child,self,previous)
                 self.children.append(next)
                 previous=next
