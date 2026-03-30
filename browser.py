@@ -198,6 +198,21 @@ class BlockLayout: # layout for block level elements
                 y2=self.y+self.height
                 cmds.append(DrawRect(self.x,self.y,x2,y2,"lightgray"))
 
+            # bullet of list items
+            elif  self.node.tag=="li":
+                bullet_size=5
+                bullet_x=self.x-15
+                bullet_y=self.y+8
+                cmds.append(
+                    DrawRect(
+                        bullet_x,
+                        bullet_y,
+                        bullet_x+bullet_size,
+                        bullet_y+bullet_size,
+                        "black"
+                    )
+                )
+
         #inline mode turn text/picture into Draw command
         if self.layout_mode() == "inline":
             for item in self.display_list:
@@ -236,6 +251,11 @@ class BlockLayout: # layout for block level elements
     def layout(self):
         self.x=self.parent.x
         self.width=self.parent.width
+
+        # ident list items ，the text sits to the right of the bullet
+        if isinstance(self.node,Element) and self.node.tag=="li":
+            self.x+=20
+            self.width-=20
 
         if self.previous:
             self.y=self.previous.y+self.previous.height
