@@ -665,50 +665,56 @@ class Browser:
         self.canvas.delete("all")
         for item in self.display_list:
 
-            item_y=item[1]
-            if item_y>self.scroll +self.height :continue
-            if item_y+VSTEP < self.scroll: continue
+            # DrawText/DrawRect architecture
+            if hasattr(item,"execute"):
+                if item.top > self.scroll + self.height:
+                    continue
 
-            if len(item)==4:
-                #this is all text information
-                x,y,word,font=item
-                self.canvas.create_text(x,y-self.scroll,text=word,font=font,anchor="nw")
+                if item.bottom < self.scroll:
+                    continue
 
-            elif len(item)==3:
-                #this is image information
+                item.execute(self.scroll,self.canvas)
+
+
+            elif isinstance(item,tuple) and len(item)==3:
+
                 x,y,img=item
 
-                self.canvas.create_image(x,y-self.scroll-2,image=img,anchor="nw")
+                if y> self.scroll +self.height :continue
+                if y+img.height() < self.scroll: continue
 
-
-            #scrollbar section
-            
-            #calculate web total height
-            if self.display_list:
-                # last word y coord  + height
-                document_height=self.display_list[-1][1]+VSTEP
-            else:
-                document_height=0
-
-            # only web longer than window height need scrollbar
-            if document_height>self.height:
-                # calculate ratio
-                ratio_visible=self.height/document_height
-                ratio_scroll=self.scroll/document_height
-
-                # calculate scrollbar size and position
-                bar_h=self.height*ratio_visible
-                bar_y=self.height*ratio_scroll
-
-                #draw blue rectangle
-                #pos:(right edge - width bound, top edge,right edge,down edge)
-                self.canvas.create_rectangle(
-                    self.width-SCROLLBAR_WIDTH,
-                    bar_y,
-                    self.width,
-                    bar_y+bar_h,
-                    fill="blue",outline=""
+                self.canvas.create_image(
+                    x,
+                    y-self.scroll-2,
+                    image=img,
+                    anchor="nw"
                 )
+
+  
+        #scrollbar section: put the loop outside, only draw once
+            
+        #calculate web total height
+        document_height=self.document.height+2*VSTEP
+
+        # only web longer than window height need scrollbar
+        if document_height>self.height:
+            # calculate ratio
+            ratio_visible=self.height/document_height
+            ratio_scroll=self.scroll/document_height
+
+            # calculate scrollbar size and position
+            bar_h=self.height*ratio_visible
+            bar_y=self.height*ratio_scroll
+
+            #draw blue rectangle
+            #pos:(right edge - width bound, top edge,right edge,down edge)
+            self.canvas.create_rectangle(
+                self.width-SCROLLBAR_WIDTH,
+                bar_y,
+                self.width,
+                bar_y+bar_h,
+                fill="blue",outline=""
+            )
 
             
 
