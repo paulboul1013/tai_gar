@@ -240,32 +240,69 @@ class BlockLayout: # layout for block level elements
         return cmds
 
     def is_block_node(self,node):
-        return isinstance(node,Element) and node.tag in BLOCK_ELEMENTS
+        if not isinstance(node,Element):
+            return False
+
+        # h6 is special: it can run into the next paragraph
+        if node.tag=="h6":
+            return False
+        
+        return node.tag in BLOCK_ELEMENTS
 
     def child_groups(self):
-        groups=[]
-        buffer=[]
+        groups = []
+        buffer = []
 
-        # this layer children from this layout box all of the nodes
-        all_children=[]
+        all_children = []
         for node in self.nodes:
-            if isinstance(node,Element):
+            if isinstance(node, Element):
                 for child in node.children:
-                    # head in the DOM，but not into the layout tree
-                    if isinstance(child,Element) and child.tag=="head":
+                    if isinstance(child, Element) and child.tag == "head":
                         continue
-
                     all_children.append(child)
 
-        for child in all_children:
+        i = 0
+        while i < len(all_children):
+            child = all_children[i]
+
+            # special case: <h6> followed by <p> should run in
+            if isinstance(child, Element) and child.tag == "h6":
+                if i + 1 < len(all_children):
+                    next_child = all_children[i + 1]
+
+                    if isinstance(next_child, Element) and next_child.tag == "p":
+                        if buffer:
+                            groups.append(buffer)
+                            buffer = []
+
+                        # merge h6 + p into one inline/layout group
+                        merged = [child] + next_child.children
+                        groups.append(merged)
+                        i += 2
+                        continue
+
+                    # also allow h6 + normal text node
+                    if not self.is_block_node(next_child):
+                        buffer.append(child)
+                        i += 1
+                        continue
+
+                if buffer:
+                    groups.append(buffer)
+                    buffer = []
+                groups.append([child])
+                i += 1
+                continue
+
             if self.is_block_node(child):
                 if buffer:
                     groups.append(buffer)
-                    buffer=[]
+                    buffer = []
                 groups.append([child])
-
             else:
                 buffer.append(child)
+
+            i += 1
 
         if buffer:
             groups.append(buffer)
@@ -379,6 +416,8 @@ class BlockLayout: # layout for block level elements
             self.size -= 2
         elif tag == "big":
             self.size += 4
+        elif tag=="h6":
+            self.weight="bold"
 
     def close_tag(self, tag):
         if tag == 'h1 class="title"':
@@ -403,6 +442,9 @@ class BlockLayout: # layout for block level elements
             self.size += 2
         elif tag == "big":
             self.size -= 4
+        elif tag=="h6":
+            self.weight="normal"
+
 
     def recurse(self,tree):
         if isinstance(tree,Text):
