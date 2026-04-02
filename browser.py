@@ -1447,6 +1447,71 @@ class HTMLParser:
         
         return tag,attributes  
 
+class CSSParser:
+    def __init__(self,s):
+        self.s=s
+        self.i=0
+
+    def whitespace(self):
+        while self.i < len(self.s) and self.s[self.i].isspace():
+            self.i+=1
+    
+    def literal(self,literal):
+        if not (self.i < len(self.s) and self.s[self.i]==literal):
+            raise Exception("Parsing error")
+
+        self.i+=1
+
+    def word(self):
+        start=self.i
+        while self.i < len(self.s):
+            c=self.s[self.i]
+            if c.isalnum() or c in "#-.%":
+                self.i+=1
+            else:
+                break
+
+        if self.i <= start:
+            raise Exception("Parsing error")
+        return self.s[start:self.i]
+
+    def pair(self):
+        prop=self.word()
+        self.whitespace()
+        self.literal(":")
+        self.whitespace()
+        val=self.word()
+        return prop.casefold(), val
+
+    def ignore_until(self,chars):
+        while self.i < len(self.s):
+            if self.s[self.i] in chars:
+                return self.s[self.i]
+            self.i+=1
+
+        return None
+
+    def body(self):
+        paris={}
+        while self.i < len(self.s):
+            try:
+                prop, val=self.pair()
+                pairs[prop]=val
+                self.whitespace()
+                if self.i < len(self.s) and self.s[self.i]==";":
+                    self.literal(";")
+                    self.whitespace()
+
+            except Exception:
+                why=self.ignore_until([";"])
+                if why==";":
+                    self.literal(";")
+                    self.whitespace()
+                else:
+                    break
+
+        return pairs
+
 def print_tree(node,indent=0):
     print(" "*indent,node)
     for child in node.children:
