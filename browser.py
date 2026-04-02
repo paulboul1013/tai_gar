@@ -186,6 +186,12 @@ class BlockLayout: # layout for block level elements
     def paint(self):
         cmds=[]
 
+        bgcolor=self.node.style.get("background-color","transparent")
+
+        if bgcolor!="transparent":
+            x2,y2=self.x+self.width,self.y+self.height
+            rect=DrawRect(self.x,self.y,x2,y2,bgcolor)
+            cmds.append(rect)
 
         if isinstance(self.node,Element):
             # first draw background，the text will cover up background
@@ -1511,6 +1517,17 @@ class CSSParser:
                     break
 
         return pairs
+
+def style(node):
+    node.style={}
+    
+    if isinstance(node,Element) and "style" in node.attributes:
+        pairs=CSSParser(node.attributes["style"]).body()
+        for propertys,value in pairs.items():
+            node.style[propertys]=value
+
+    for child in node.children:
+        style(child)
 
 def print_tree(node,indent=0):
     print(" "*indent,node)
