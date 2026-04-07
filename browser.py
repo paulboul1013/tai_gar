@@ -1518,7 +1518,7 @@ class CSSParser:
         return None
 
     def body(self):
-        paris={}
+        pairs={}
         while self.i < len(self.s) and self.s[self.i]!="}":
             try:
                 prop, val=self.pair()
