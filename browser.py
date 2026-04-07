@@ -734,6 +734,13 @@ class Element:
         return "<"+self.tag+">"
         # return "<"+self.tag+" "+str(self.attributes)+">"
 
+class TagSelector:
+    def __init__(self,tag):
+        self.tag=tag
+
+    def matches(self,node):
+        return isinstance(node,Element) and node.tag==self.tag
+
 class Browser:
     def __init__(self):
         self.window = tkinter.Tk()
