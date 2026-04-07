@@ -1538,6 +1538,17 @@ class CSSParser:
 
         return pairs
 
+    def selector(self):
+        out=TagSelector(self.word().casefold())
+        self.whitespace()
+        while self.i < len(self.s) and self.s[self.i] !="{":
+            tag=self.word()
+            descendant=TagSelector(tag.casefold())
+            out=DescendantSelector(out,descendant)
+            self.whitespace()
+
+        return out
+
 def style(node):
     node.style={}
     
