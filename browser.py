@@ -1549,6 +1549,18 @@ class CSSParser:
 
         return out
 
+    def parse(self):
+        rules=[]
+        while self.i < len(self.s):
+            self.whitespace()
+            selector=self.selector()
+            self.literal("{")
+            self.whitespace()
+            body=self.body()
+            self.literal("}")
+            rules.append((selector,body))
+        return rules
+
 def style(node):
     node.style={}
     
