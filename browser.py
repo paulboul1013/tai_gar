@@ -1222,17 +1222,18 @@ class URL:
         raise Exception("Redirect loop detected!")
 
     def resolve(self,url):
-        if "://" in url:
+        if "://" in url: # normal URL
             return URL(url)
 
-        if url.startswith("//"):
+        if url.startswith("//"): # scheme-relative URL
             return URL(self.scheme+":"+url)
 
-        if url.startswith("/"):
-            return URL(self.scheme+"://"+self.host+":"+strlen(self.port)+url)
+        if url.startswith("/"): # host-relative URL
+            return URL(self.scheme+"://"+self.host+":"+str(self.port)+url)
 
-        dir,_ = self.path.rsplit("/",1)
-        while url.startswith("../"):
+        # path-relative URL
+        dir,_ = self.path.rsplit("/",1) 
+        while url.startswith("../"): # deal with relative URL parent directory `..`
             _,url= url.split("/",1)
             if "/" in dir:
                 dir, _ = dir.rsplit("/",1)
