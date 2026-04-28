@@ -1206,6 +1206,25 @@ class URL:
 
         raise Exception("Redirect loop detected!")
 
+    def resolve(self,url):
+        if "://" in url:
+            return URL(url)
+
+        if url.startswith("//"):
+            return URL(self.scheme+":"+url)
+
+        if url.startswith("/"):
+            return URL(self.scheme+"://"+self.host+":"+strlen(self.port)+url)
+
+        dir,_ = self.path.rsplit("/",1)
+        while url.startswith("../"):
+            _,url= url.split("/",1)
+            if "/" in dir:
+                dir, _ = dir.rsplit("/",1)
+
+        return URL(self.scheme+ "://" +self.host+":"+strlen(self.port)+dir+"/"+url)
+        
+
 class HTMLParser:
     def __init__(self,body):
         self.body=body
