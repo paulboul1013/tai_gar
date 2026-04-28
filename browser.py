@@ -1569,17 +1569,28 @@ class CSSParser:
                     break
         return rules
 
-def style(node):
+def style(node,rules):
     node.style={}
-    
-    if isinstance(node,Element) and "style" in node.attributes:
-        pairs=CSSParser(node.attributes["style"]).body()
-        for propertys,value in pairs.items():
-            node.style[propertys]=value
 
+    if isinstance(node,Element):
+        # first deal with stylesheet rules
+        for selector, body in rules:
+            if not selector.matches(node):
+                continue
+
+            for prop, value in body.items():
+                node.style[prop]=value
+
+        # embedded inline style, let inline sytle cover stylesheet
+        if "style" in node.attributes:
+            pairs=CSSParser(node.attributes["style"]).body()
+            for prop, value in pairs.items():
+                node.style[prop]=value
+
+    # recursively DOM tree
     for child in node.children:
-        style(child)
-
+        style(child,rules)
+        
 def print_tree(node,indent=0):
     print(" "*indent,node)
     for child in node.children:
