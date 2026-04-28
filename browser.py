@@ -201,13 +201,8 @@ class BlockLayout: # layout for block level elements
             cmds.append(rect)
 
         if isinstance(self.node,Element):
-            # first draw background，the text will cover up background
-            if self.node.tag=="pre":
-                x2=self.x+self.width
-                y2=self.y+self.height
-                cmds.append(DrawRect(self.x,self.y,x2,y2,"gray"))
 
-            elif self.node.tag=="nav" and self.node.attributes.get("class") =="links":
+            if self.node.tag=="nav" and self.node.attributes.get("class") =="links":
                 x2=self.x+self.width
                 y2=self.y+self.height
                 cmds.append(DrawRect(self.x,self.y,x2,y2,"lightgray"))
