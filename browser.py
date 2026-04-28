@@ -1237,7 +1237,7 @@ class URL:
             if "/" in dir:
                 dir, _ = dir.rsplit("/",1)
 
-        return URL(self.scheme+ "://" +self.host+":"+strlen(self.port)+dir+"/"+url)
+        return URL(self.scheme+ "://" +self.host+":"+str(self.port)+dir+"/"+url)
         
 
 class HTMLParser:
@@ -1720,24 +1720,16 @@ if __name__ == "__main__":
         text = f"This is a test of soft hyphens. {long_word} " * 5
         url_arg = f"data:text/html,{text}"     
 
-    target_url = URL(url_arg)
-    body = target_url.request()
 
-    if target_url.view_source:
-        # if view-source mode，run syntax highlight parser
-        highlighted_html = ViewSourceParser(body).handle_view_source()
-        nodes = HTMLParser(highlighted_html).parse()
-    else:
-        # normal mode
-        nodes = HTMLParser(body).parse()
-    
-    
-    print("--- DOM Tree ---")
-    print_tree(nodes)
-    print("----------------")
+    target_url = URL(url_arg)
 
     browser = Browser()
     browser.load(target_url)
+
+    print("--- DOM Tree ---")
+    print_tree(browser.nodes)
+    print("----------------")
     print("display items:", len(browser.display_list))
     print("document height:", browser.document.height)
+
     tkinter.mainloop()
