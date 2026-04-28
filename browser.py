@@ -804,6 +804,26 @@ class Browser:
         else:
             self.nodes=HTMLParser(body).parse()
 
+        rules=DEFAULT_STYLE_SHEET.copy()
+
+        links = [node.attributes["href"]
+                for node in tree_to_list(self.nodes,[])
+                if isinstance(node,Element)
+                and node.tag=="link"
+                and node.attributes.get("rel")=="stylesheet"
+                and "href" in node.attributes]
+
+        for link in links:
+            style_url=url.resolve(link)
+            try:
+                body=style_url.request()
+            except Exception:
+                continue
+                
+            rules.extend(CSSParser(body).parse())
+
+        style(self.nodes,rules)
+
         self.document=DocumentLayout(self.nodes)
         self.document.layout()
 
