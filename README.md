@@ -120,7 +120,38 @@ python3 browser.py 'view-source:data:text/html,<html>
 
 python3 browser.py "view-source:data:text/html,<html>\n  <body>\n    <h1>Title</h1>\n  </body>\n</html>"
 
+### 測試:layout
+python3 browser.py view-source:https://browser.engineering/layout.html
+python3 browser.py "data:text/html,<pre>hello world</pre><p>after</p>"
+python3 browser.py "data:text/html,<pre>one</pre><pre>two</pre>"
+python3 browser.py "data:text/html,<p>aaa</p><p>bbb</p>"
+python3 browser.py "data:text/html,<pre>one</pre><p>gap</p><pre>two</pre>"
 
+### 測試nav
+python3 browser.py https://browser.engineering/layout.html
+python3 browser.py "data:text/html,<nav class='links'>Back Chapter Next</nav><p>body</p>"
+
+### 測試hidden head
+python3 browser.py "data:text/html,<head><title>Hidden</title></head><body><p>Visible</p></body>"
+
+### 測試bullets
+python3 browser.py "data:text/html,<ul><li>one<ul><li>two</li></ul></li><li>three</li></ul>"
+python3 browser.py "data:text/html,<ul><li>one</li><li>two</li></ul>"
+
+### 測試table of contents
+python3 browser.py "data:text/html,<nav id='toc'><ul><li>one</li><li>two</li></ul></nav>"
+
+### 測試 Anonymous block boxes
+python3 browser.py 'data:text/html,<div><i>Hello, </i><b>world!</b><p>So it began...</p></div>'
+python3 browser.py 'data:text/html,<div><i>A</i><b>B</b><p>C</p><i>D</i><b>E</b></div>'
+
+### 測試 Run-ins
+python3 browser.py 'data:text/html,<div><h6>Run-ins.</h6> A run-in heading is part of the paragraph.</div>'
+
+python3 browser.py 'data:text/html,<h6>Run-ins.</h6><p>A run-in heading is part of the paragraph.</p>'
+
+### 測試css style
+python3 browser.py "data:text/html,<pre style='background-color:lightblue'>Inline should override browser.css</pre>"
 
 ## go further
 1. 做出跨裝置瀏覽器
