@@ -106,6 +106,13 @@ def paint_tree(layout_object,display_list):
     for child in layout_object.children:
         paint_tree(child,display_list)
 
+def tree_to_list(tree,out):
+    out.append(tree)
+    for child in tree.children:
+        tree_to_list(child,out)
+
+    return out
+
 class DrawText:
     def __init__(self,x1,y1,text,font):
         self.left=x1
@@ -1590,7 +1597,7 @@ def style(node,rules):
     # recursively DOM tree
     for child in node.children:
         style(child,rules)
-        
+
 def print_tree(node,indent=0):
     print(" "*indent,node)
     for child in node.children:
