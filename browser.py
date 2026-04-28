@@ -1576,6 +1576,8 @@ class CSSParser:
                     break
         return rules
 
+DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()
+
 def style(node,rules):
     node.style={}
 
