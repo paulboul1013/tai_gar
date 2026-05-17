@@ -114,11 +114,12 @@ def tree_to_list(tree,out):
     return out
 
 class DrawText:
-    def __init__(self,x1,y1,text,font):
+    def __init__(self,x1,y1,text,font,color):
         self.left=x1
         self.top=y1
         self.text=text
         self.font=font
+        self.color=color
         self.bottom=y1+font.metrics("linespace")
 
     def execute(self,scroll,canvas):
@@ -128,6 +129,7 @@ class DrawText:
             text=self.text,
             font=self.font,
             anchor="nw",
+            fill=self.color,
         )
 
 class DrawRect:
@@ -217,7 +219,7 @@ class BlockLayout: # layout for block level elements
 
                 #heading text
                 font=get_font(12,"bold","roman")
-                cmds.append(DrawText(self.x+4,self.y+2,"Table of Contents",font))
+                cmds.append(DrawText(self.x+4,self.y+2,"Table of Contents",font,"black"))
 
             # bullet of list items
             elif  self.node.tag=="li":
@@ -237,9 +239,9 @@ class BlockLayout: # layout for block level elements
         #inline mode turn text/picture into Draw command
         if self.layout_mode() == "inline":
             for item in self.display_list:
-                if len(item)==4:
-                    x,y,word,font=item
-                    cmds.append(DrawText(x,y,word,font))
+                if isinstance(item,tuple) and len(item)==5:
+                    x,y,word,font,color=item
+                    cmds.append(DrawText(x,y,word,font,color))
 
                 else:
                     # keep origin emoji/image tuple
@@ -398,6 +400,24 @@ class BlockLayout: # layout for block level elements
         #     y=self.y+baseline-font.metrics("ascent")
         #     self.display_list.append((x,y,word,font))
             
+    # convert CSS style into Tkinter font
+    # font-size: 16px       -> 12pt
+    # font-style: normal    -> roman
+    # font-style: italic    -> italic
+    # font-weight: bold     -> bold
+    def font_helper(self,node,family=None):
+        weight = node.style["font-weight"]
+
+        style=node.style["font-style"]
+        if style=="normal":
+            style="roman"
+
+        size=int(float(node.style["font-size"][:-2])*0.75)
+
+        if self.is_sup:
+            size=max(1,int(size/2))
+
+        return get_font(size,weight,style,family=family)
 
     def open_tag(self, tag):
         # already handled in HTMLParser
@@ -412,18 +432,10 @@ class BlockLayout: # layout for block level elements
             self.flush_line()
         elif tag == "abbr":
             self.is_abbr = True
-        elif tag == "b":
-            self.weight = "bold"
-        elif tag == "i":
-            self.style = "italic"
         elif tag == "br":
             self.flush_line()
         elif tag == "p":
             self.flush_line()
-        elif tag == "small":
-            self.size -= 2
-        elif tag == "big":
-            self.size += 4
         elif tag=="h6":
             self.weight="bold"
 
@@ -439,17 +451,9 @@ class BlockLayout: # layout for block level elements
             self.flush_line()
         elif tag == "abbr":
             self.is_abbr = False
-        elif tag == "b":
-            self.weight = "normal"
-        elif tag == "i":
-            self.style = "roman"
         elif tag == "p":
             self.flush_line()
             self.cursor_y += VSTEP
-        elif tag == "small":
-            self.size += 2
-        elif tag == "big":
-            self.size -= 4
         elif tag=="h6":
             self.weight="normal"
 
@@ -457,27 +461,33 @@ class BlockLayout: # layout for block level elements
     def recurse(self,tree):
         if isinstance(tree,Text):
             if self.is_pre:
-                self.pre_word(tree.text)
+                self.pre_word(tree, tree.text)
             else:
                 # normal mode
                 for word in tree.text.split():
-                    self.word(word)
+                    self.word(tree, word)
         
         else:
             # if is script tag,just skip not render that child nodes(it's js code)
             if tree.tag == "script":
                 return
 
+            if tree.tag == "br":
+                self.flush_line()
+                return
+
             self.open_tag(tree.tag)
+
             for child in tree.children:
                 self.recurse(child)
             
             self.close_tag(tree.tag)
         
                 
-    def pre_word(self,text):
-        font=get_font(self.size,self.weight,self.style,family="Courier New")
-        
+    def pre_word(self,node,text):
+        font=self.font_helper(node,family="Courier New")
+        color=node.style["color"]
+
         normalized_text=text.replace("\\n","\n")
 
         # make sure can catch end of line \n
@@ -492,7 +502,7 @@ class BlockLayout: # layout for block level elements
             w=font.measure(clean_line)
 
             # add content to buffer
-            content=(clean_line,font,self.is_sup)
+            content=(clean_line,font,self.is_sup,color)
             self.line_buffer.append((w,content))
 
             # ecounter \n or end of line，force change next line
@@ -500,18 +510,25 @@ class BlockLayout: # layout for block level elements
             if '\n' in line:
                 self.flush_line()
 
-    def word(self,word):
+    def word(self,node,word):
+        color=node.style["color"]
+        font=self.font_helper(node)
 
         if self.is_abbr:
+            base_size=int(float(node.style["font-size"][:-2])*0.75)
+            node_style=node.style["font-style"]
+            if node_style=="normal":
+                node_style="roman"
+
             for i,char in enumerate(word):
                 if char.islower():
                     # lowercase : change to uppercase ，resize 0.8 ，bold
                     c=char.upper()
-                    f=get_font(int(self.size*0.8),"bold",self.style)
+                    f=get_font(int(base_size*0.8),"bold",node_style)
                 else:
                     # other characters: normal
                     c=char
-                    f=get_font(self.size,self.weight,self.style)
+                    f=self.font_helper(node)
 
                 w=f.measure(c)
                 # only on the last word's character add space width
@@ -522,7 +539,7 @@ class BlockLayout: # layout for block level elements
                 if current_line_w+w >= self.width:
                     self.flush_line()
 
-                self.line_buffer.append((w+space_w,(c,f,self.is_sup)))
+                self.line_buffer.append((w+space_w,(c,f,self.is_sup,color)))
             
             return
 
@@ -546,9 +563,6 @@ class BlockLayout: # layout for block level elements
             return
 
 
-        # use font cache
-        font = get_font(self.size,self.weight, self.style)
-
         #normal showing，don't want to show \xad，first remove it to calucalute real status width
         clean_word=word.replace("\xad","")
 
@@ -563,7 +577,7 @@ class BlockLayout: # layout for block level elements
 
         # status a: word can place current line and add '-' directly
         if w+space_w <=available_space:
-            content=(clean_word,font,self.is_sup)
+            content=(clean_word,font,self.is_sup,color)
             self.line_buffer.append((w+space_w,content))
             return
 
@@ -599,7 +613,7 @@ class BlockLayout: # layout for block level elements
             # if find best_prefix，use it
             if best_prefix:
                 # add front parts (include '-' ) add current line
-                content=(best_prefix,font,self.is_sup)
+                content=(best_prefix,font,self.is_sup,color)
                 self.line_buffer.append((best_width+space_w,content))
 
                 # force change line
@@ -607,7 +621,7 @@ class BlockLayout: # layout for block level elements
 
                 # deal with remainder
                 if remainder:
-                    self.word(remainder)
+                    self.word(node,remainder)
                 
                 return
 
@@ -615,7 +629,7 @@ class BlockLayout: # layout for block level elements
         # execute standard change to next line
         self.flush_line()
         # content save because draw need to know font object to draw text
-        content=(clean_word,font,self.is_sup)
+        content=(clean_word,font,self.is_sup,color)
         # add buffer(not decide coord yet)
         self.line_buffer.append((w+space_w,content))
 
@@ -637,7 +651,7 @@ class BlockLayout: # layout for block level elements
         # buffer object into the display_list
         for item_w,item_content in self.line_buffer:
             if isinstance(item_content,tuple):
-                word,font,is_sup=item_content
+                word,font,is_sup,color=item_content
                 ascent=font.metrics("ascent")
                 descent=font.metrics("descent")
             else:
@@ -669,7 +683,7 @@ class BlockLayout: # layout for block level elements
 
         for item_w,item_content in self.line_buffer:
             if isinstance(item_content,tuple):
-                word,font,is_sup=item_content
+                word,font,is_sup,color=item_content
 
                 if is_sup:
                     y=baseline-max_ascent
@@ -677,7 +691,7 @@ class BlockLayout: # layout for block level elements
                     y=baseline-font.metrics("ascent")
 
                 #every single word's y =baseline - this word ascent
-                self.display_list.append((self.x+cursor_x,self.y+y,word,font))
+                self.display_list.append((self.x+cursor_x,self.y+y,word,font,color))
                 
             else:
                 # pic bottom is on the baseline
@@ -774,7 +788,8 @@ class Browser:
         self.canvas = tkinter.Canvas(
             self.window,
             width=WIDTH,
-            height=HEIGHT
+            height=HEIGHT,
+            bg="white",
         )
         # let canvas fill the window
         self.canvas.pack(fill=tkinter.BOTH,expand=True)
