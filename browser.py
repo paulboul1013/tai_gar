@@ -1617,11 +1617,28 @@ class CSSParser:
                     break
         return rules
 
+
+INHERITED_PROPERTIES = {
+    "font-size": "16px",
+    "font-style": "normal",
+    "font-weight" : "normal",
+    "color" : "black",
+}
+
 DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()
 
 def style(node,rules):
     node.style={}
+    
+    # first deal with inherited properties
+    # if no node specify property, inherit from parent
+    for property, default_value in INHERITED_PROPERTIES.items():
+        if node.parent:
+            node.style[property]=node.parent.style[property]
+        else:
+            node.style[property]=default_value
 
+    # If is element, picked by CSS selector
     if isinstance(node,Element):
         # first deal with stylesheet rules
         for selector, body in rules:
@@ -1637,7 +1654,20 @@ def style(node,rules):
             for prop, value in pairs.items():
                 node.style[prop]=value
 
-    # recursively DOM tree
+    # convert the percentage of font-size to px
+    # example: 150% -> parent_font_size * 1.5
+    if node.style["font-size"].endswith("%"):
+        if node.parent:
+            parent_font_size=node.parent.style["font-size"]
+        else:
+            parent_font_size=INHERITED_PROPERTIES["font-size"]
+
+        node_pct=float(node.style["font-size"][:-1]) / 100
+        parent_px = float(parent_font_size[:-2])
+        node.style["font-size"] = str(node_pct * parent_px) + "px"
+
+    # finally recursively DOM tree
+    # because child need inhertied parent already computed style
     for child in node.children:
         style(child,rules)
 
