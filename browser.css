@@ -17,3 +17,7 @@ small {
 big {
     font-size: 110%;
 }
+
+code {
+    font-family: Courier;
+}

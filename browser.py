@@ -417,6 +417,9 @@ class BlockLayout: # layout for block level elements
         if self.is_sup:
             size=max(1,int(size/2))
 
+        if family is None:
+            family=node.style["font-family"]
+
         return get_font(size,weight,style,family=family)
 
     def open_tag(self, tag):
@@ -1638,6 +1641,7 @@ INHERITED_PROPERTIES = {
     "font-style": "normal",
     "font-weight" : "normal",
     "color" : "black",
+    "font-family": "Times",
 }
 
 DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()

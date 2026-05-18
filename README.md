@@ -153,6 +153,10 @@ python3 browser.py 'data:text/html,<h6>Run-ins.</h6><p>A run-in heading is part 
 ### 測試css style
 python3 browser.py "data:text/html,<pre style='background-color:lightblue'>Inline should override browser.css</pre>"
 
+### 測試font-family
+python3 browser.py "data:text/html,<p>normal text <code>int main() { return 0; }</code> normal again</p>"
+python3 browser.py "data:text/html,<p>normal: iiiii WWWWW <code>code: iiiii WWWWW</code> normal again</p>"
+
 ## go further
 1. 做出跨裝置瀏覽器
 
