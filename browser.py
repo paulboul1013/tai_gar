@@ -331,12 +331,19 @@ class BlockLayout: # layout for block level elements
 
     def layout(self):
         self.x=self.parent.x
-        self.width=self.parent.width
+        available_width=self.parent.width
 
         # ident list items ，the text sits to the right of the bullet
         if isinstance(self.node,Element) and self.node.tag=="li":
             self.x+=20
-            self.width-=20
+            available_width-=20
+
+
+        css_width=self.css_width()
+        if css_width:
+            self.width=css_width
+        else:
+            self.width=available_width
 
         if self.previous:
             self.y=self.previous.y+self.previous.height
@@ -367,6 +374,10 @@ class BlockLayout: # layout for block level elements
 
             self.height=sum(child.height for child in self.children)+toc_header_h
             self.y=old_y
+
+            css_height=self.css_height()
+            if css_height:
+                self.height=css_height
             
         else:
             self.cursor_x=0
@@ -390,6 +401,9 @@ class BlockLayout: # layout for block level elements
 
             self.height=self.cursor_y
 
+            css_height=self.css_height()
+            if css_height:
+                self.height=css_height
 
     def flush(self):
         self.flush_line()
@@ -399,7 +413,31 @@ class BlockLayout: # layout for block level elements
         #     x=self.x+rel_x
         #     y=self.y+baseline-font.metrics("ascent")
         #     self.display_list.append((x,y,word,font))
-            
+
+    def parse_px(self, value):
+        if value=="auto":
+            return None
+        
+        if isinstance(value, str) and value.endswith("px"):
+            try:
+                return int(value[:-2])
+            except ValueError:
+                return None
+        
+        return None
+        
+    def css_width(self):
+        if not isinstance(self.node, Element):
+            return None
+        
+        return self.parse_px(self.node.style.get("width","auto"))
+
+    def css_height(self):
+        if not isinstance(self.node, Element):
+            return None
+
+        return self.parse_px(self.node.style.get("height","auto"))
+
     # convert CSS style into Tkinter font
     # font-size: 16px       -> 12pt
     # font-style: normal    -> roman
@@ -1644,6 +1682,11 @@ INHERITED_PROPERTIES = {
     "font-family": "Times",
 }
 
+NON_INHERITED_PROPERTIES = {
+    "width" : "auto",
+    "height" : "auto",
+}
+
 DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()
 
 def style(node,rules):
@@ -1656,6 +1699,10 @@ def style(node,rules):
             node.style[property]=node.parent.style[property]
         else:
             node.style[property]=default_value
+
+    # deal css format width and height default auto
+    for property, default_value in NON_INHERITED_PROPERTIES.items():
+        node.style[property]=default_value
 
     # If is element, picked by CSS selector
     if isinstance(node,Element):

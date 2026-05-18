@@ -157,6 +157,11 @@ python3 browser.py "data:text/html,<pre style='background-color:lightblue'>Inlin
 python3 browser.py "data:text/html,<p>normal text <code>int main() { return 0; }</code> normal again</p>"
 python3 browser.py "data:text/html,<p>normal: iiiii WWWWW <code>code: iiiii WWWWW</code> normal again</p>"
 
+### 測試css width,height
+python3 browser.py "data:text/html,<div style='width:200px;background-color:lightblue;'>one two three four five six seven eight nine ten eleven twelve thirteen fourteen</div><div style='background-color:pink;'>after block</div>"
+
+python3 browser.py "data:text/html,<div style='width:200px;height:60px;background-color:lightblue;'>one two three four five six seven eight nine ten eleven twelve thirteen fourteen</div><div style='background-color:pink;'>after block</div>"
+
 ## go further
 1. 做出跨裝置瀏覽器
 
