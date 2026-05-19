@@ -21,3 +21,24 @@ big {
 code {
     font-family: Courier;
 }
+
+p {
+    color: black;
+}
+
+.main {
+    color: red;
+}
+
+.keyword {
+    color: blue;
+}
+
+.warning {
+    font-weight: bold;
+}
+
+.box {
+    background-color: lightblue;
+    width: 300px;
+}

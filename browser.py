@@ -788,8 +788,8 @@ class Element:
         self.children=[]
         self.parent=parent
     def __repr__(self):
-        return "<"+self.tag+">"
-        # return "<"+self.tag+" "+str(self.attributes)+">"
+        # return "<"+self.tag+">"
+        return "<"+self.tag+" "+str(self.attributes)+">"
 
 class TagSelector:
     def __init__(self,tag):
@@ -798,6 +798,24 @@ class TagSelector:
 
     def matches(self,node):
         return isinstance(node,Element) and node.tag==self.tag
+
+class ClassSelector:
+    def __init__(self, class_name):
+        self.class_name=class_name
+
+        # class selector must be have more priority than tag selector
+        # tag selector priority is 1
+        # class selector priority is 10
+        self.priority=10
+
+    def matches(self, node):
+        if not isinstance(node, Element) :
+            return False
+
+        class_attr = node.attributes.get("class", "")
+        classes = class_attr.split()
+
+        return self.class_name in classes
 
 class DescendantSelector:
     def __init__(self,ancestor,descendant):
@@ -1642,12 +1660,20 @@ class CSSParser:
 
         return pairs
 
+    def simple_selector(self):
+        selector = self.word().casefold()
+        
+        if selector.startswith("."):
+            return ClassSelector(selector[1:])
+        else:
+            return TagSelector(selector)
+
     def selector(self):
-        out=TagSelector(self.word().casefold())
+        out=self.simple_selector()
         self.whitespace()
+
         while self.i < len(self.s) and self.s[self.i] !="{":
-            tag=self.word()
-            descendant=TagSelector(tag.casefold())
+            descendant = self.simple_selector()
             out=DescendantSelector(out,descendant)
             self.whitespace()
 

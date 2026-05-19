@@ -162,6 +162,12 @@ python3 browser.py "data:text/html,<div style='width:200px;background-color:ligh
 
 python3 browser.py "data:text/html,<div style='width:200px;height:60px;background-color:lightblue;'>one two three four five six seven eight nine ten eleven twelve thirteen fourteen</div><div style='background-color:pink;'>after block</div>"
 
+### 測試css class selector
+python3 browser.py "data:text/html,<p class='main'>this should be red</p>"
+python3 browser.py "data:text/html,<p class='main'>p is black, .main is red, final should be red</p>"
+python3 browser.py "data:text/html,<p class='main warning'>red and bold text</p>"
+python3 browser.py "data:text/html,<div class='box'>normal <span class='keyword'>keyword blue</span> normal</div>"
+
 ## go further
 1. 做出跨裝置瀏覽器
 
