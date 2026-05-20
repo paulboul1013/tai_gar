@@ -168,6 +168,12 @@ python3 browser.py "data:text/html,<p class='main'>p is black, .main is red, fin
 python3 browser.py "data:text/html,<p class='main warning'>red and bold text</p>"
 python3 browser.py "data:text/html,<div class='box'>normal <span class='keyword'>keyword blue</span> normal</div>"
 
+### 測試css display
+python3 browser.py "data:text/html,<div>first div</div><div>second div</div>"
+python3 browser.py "data:text/html,<span>first span</span><span>second span</span>"
+python3 browser.py "data:text/html,<span style='display:block;background-color:lightblue;'>first span</span><span style='display:block;background-color:pink;'>second span</span>"
+python3 browser.py "data:text/html,<div style='display:inline;'>first div</div><div style='display:inline;'>second div</div>"
+
 ## go further
 1. 做出跨裝置瀏覽器
 

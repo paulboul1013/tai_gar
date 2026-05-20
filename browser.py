@@ -34,14 +34,14 @@ SCROLLBAR_WIDTH=12
 
 USE_RTL=False
 
-BLOCK_ELEMENTS = [
-    "html", "body", "article", "section", "nav", "aside",
-    "h1", "h2", "h3", "h4", "h5", "h6", "hgroup", "header",
-    "footer", "address", "p", "hr", "pre", "blockquote",
-    "ol", "ul", "menu", "li", "dl", "dt", "dd", "figure",
-    "figcaption", "main", "div", "table", "form", "fieldset",
-    "legend", "details", "summary"
-]
+# BLOCK_ELEMENTS = [
+#     "html", "body", "article", "section", "nav", "aside",
+#     "h1", "h2", "h3", "h4", "h5", "h6", "hgroup", "header",
+#     "footer", "address", "p", "hr", "pre", "blockquote",
+#     "ol", "ul", "menu", "li", "dl", "dt", "dd", "figure",
+#     "figcaption", "main", "div", "table", "form", "fieldset",
+#     "legend", "details", "summary"
+# ]
 
 def get_font(size,weight,style,family=None):
     if not family:
@@ -253,11 +253,7 @@ class BlockLayout: # layout for block level elements
         if not isinstance(node,Element):
             return False
 
-        # h6 is special: it can run into the next paragraph
-        if node.tag=="h6":
-            return False
-        
-        return node.tag in BLOCK_ELEMENTS
+        return node.style.get("display","inline") == "block"
 
     def child_groups(self):
         groups = []
@@ -1711,6 +1707,7 @@ INHERITED_PROPERTIES = {
 NON_INHERITED_PROPERTIES = {
     "width" : "auto",
     "height" : "auto",
+    "display" : "inline",
 }
 
 DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()

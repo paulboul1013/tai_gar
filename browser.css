@@ -1,3 +1,37 @@
+html {
+    display: block;
+}
+
+body {
+    display: block;
+}
+
+p {
+    display: block;
+}
+
+div {
+    display: block;
+}
+
+pre {
+    display: block;
+}
+
+ul {
+    display: block;
+}
+
+ol {
+    display: block;
+}
+
+li {
+    display: block;
+}
+
+/* 其他 block tag 也照上面補 */
+
 a {
     color: blue;
 }
