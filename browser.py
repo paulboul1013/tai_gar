@@ -43,9 +43,28 @@ USE_RTL=False
 #     "legend", "details", "summary"
 # ]
 
+def normalize_tk_weight(weight):
+    if weight in ["normal","bold"]:
+        return weight
+    
+    try:
+        weight_num=int(weight)
+    except ValueError:
+        return "normal"
+
+    return "bold" if weight_num >= 600 else "normal"
+
+def normalize_tk_slant(style):
+    if style in ["italic","oblique"]:
+        return "italic"
+    return "roman"
+
 def get_font(size,weight,style,family=None):
     if not family:
         family="Times"
+
+    weight=normalize_tk_weight(weight)
+    style=normalize_tk_slant(style)
 
     key=(size,weight,style,family)
 
