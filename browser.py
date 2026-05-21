@@ -1619,13 +1619,61 @@ class CSSParser:
             raise Exception("Parsing error")
         return self.s[start:self.i]
 
+    def value(self):
+        values=[]
+
+        while self.i < len(self.s) and self.s[self.i] not in ";}":
+            self.whitespace()
+
+            if self.i >= len(self.s) or self.s[self.i] in ";}":
+                break
+
+            values.append(self.word())
+            self.whitespace()
+
+        return values
+
     def pair(self):
         prop=self.word()
         self.whitespace()
         self.literal(":")
         self.whitespace()
-        val=self.word()
-        return prop.casefold(), val
+        vals=self.value()
+        return prop.casefold(), vals
+
+    def font_shorthand(self,values):
+        out={}
+        family=[]
+        saw_size=False
+
+        
+        for value in values:
+            lowered= value.casefold()
+
+            if lowered=="italic":
+                out["font-style"]="italic"
+
+            elif lowered=="bold":
+                out["font-weight"] = "bold"
+
+            elif lowered=="normal":
+                out["font-style"] = "normal"
+                out["font-weight"] = "normal"
+                # out.setdefault("font-style","normal")
+                # out.setdefault("font-weight","normal")
+
+            elif lowered.endswith("px") or lowered.endswith("%"):
+                out["font-size"] = lowered
+                saw_size = True
+
+            else:
+                if saw_size:
+                    family.append(lowered)
+
+        if family:
+            out["font-family"]=" ".join(family)
+
+        return out
 
     def ignore_until(self,chars):
         while self.i < len(self.s):
@@ -1639,8 +1687,16 @@ class CSSParser:
         pairs={}
         while self.i < len(self.s) and self.s[self.i]!="}":
             try:
-                prop, val=self.pair()
-                pairs[prop]=val
+                prop, vals=self.pair()
+
+                if prop=="font":
+                    pairs.update(self.font_shorthand(vals))
+                else:
+                    if len(vals)==1:
+                        pairs[prop]=vals[0]
+                    else:
+                        pairs[prop]=" ".join(vals)
+                
                 self.whitespace()
                 if self.i < len(self.s) and self.s[self.i]==";":
                     self.literal(";")

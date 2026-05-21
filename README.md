@@ -174,6 +174,10 @@ python3 browser.py "data:text/html,<span>first span</span><span>second span</spa
 python3 browser.py "data:text/html,<span style='display:block;background-color:lightblue;'>first span</span><span style='display:block;background-color:pink;'>second span</span>"
 python3 browser.py "data:text/html,<div style='display:inline;'>first div</div><div style='display:inline;'>second div</div>"
 
+### 測試font-family
+python3 browser.py "data:text/html,<p style='font:italic bold 150% Courier;'>font shorthand works</p>"
+python3 browser.py "data:text/html,<p><b><i><span class='normal-test'>normal class inside bold italic</span></i></b></p>"
+
 ## go further
 1. 做出跨裝置瀏覽器
 

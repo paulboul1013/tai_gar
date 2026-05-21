@@ -76,3 +76,11 @@ p {
     background-color: lightblue;
     width: 300px;
 }
+
+.code-test {
+    font: italic bold 150% Courier;
+}
+
+.normal-test {
+    font: normal 150% Courier;
+}
