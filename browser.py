@@ -132,6 +132,15 @@ def tree_to_list(tree,out):
 
     return out
 
+def style_tag_text(node):
+    out=[]
+    
+    for child in node.children:
+        if isinstance(child,Text):
+            out.append(child.text)
+
+    return "".join(out)
+
 class DrawText:
     def __init__(self,x1,y1,text,font,color):
         self.left=x1
@@ -525,7 +534,7 @@ class BlockLayout: # layout for block level elements
         
         else:
             # if is script tag,just skip not render that child nodes(it's js code)
-            if tree.tag == "script":
+            if tree.tag in ["script","style"]:
                 return
 
             if tree.tag == "br":
@@ -911,6 +920,17 @@ class Browser:
                 continue
                 
             rules.extend(CSSParser(body).parse())
+
+        # deal with <style>..</style> inline stylesheet
+        style_nodes = [node
+                      for node in tree_to_list(self.nodes,[])
+                      if isinstance(node,Element)
+                      and node.tag=="style"]
+
+        for style_node in style_nodes:
+            css_text=style_tag_text(style_node)
+            rules.extend(CSSParser(css_text).parse())
+
 
         style(self.nodes,sorted(rules,key=cascade_priority))
 

@@ -178,6 +178,14 @@ python3 browser.py "data:text/html,<div style='display:inline;'>first div</div><
 python3 browser.py "data:text/html,<p style='font:italic bold 150% Courier;'>font shorthand works</p>"
 python3 browser.py "data:text/html,<p><b><i><span class='normal-test'>normal class inside bold italic</span></i></b></p>"
 
+### 測試inline style sheet
+python3 browser.py "data:text/html,<style>p { color: red; }</style><p>this should be red</p>"
+python3 browser.py "data:text/html,<style>.main { color: blue; font-weight: bold; }</style><p class='main'>blue bold text</p>"
+python3 browser.py "data:text/html,<style>.box { background-color: lightblue; width: 300px; }</style><div class='box'>inline stylesheet box</div>"
+python3 browser.py "data:text/html,<body><style>p { color: red; }</style><p>only this should show</p></body>"
+
+
+
 ## go further
 1. 做出跨裝置瀏覽器
 
