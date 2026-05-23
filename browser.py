@@ -842,18 +842,28 @@ class ClassSelector:
         return self.class_name in classes
 
 class DescendantSelector:
-    def __init__(self,ancestor,descendant):
-        self.ancestor=ancestor
-        self.descendant=descendant
-        self.priority=ancestor.priority+descendant.priority
+    def __init__(self,selectors):
+        self.selectors=selectors
+        self.priority=sum(selector.priority for selector in selectors)
 
     def matches(self,node):
-        if not self.descendant.matches(node): return False
-        while node.parent:
-            if self.ancestor.matches(node.parent): return True
-            node=node.parent
+        # rightmost selector must match current node
+        selector_index=len(self.selectors)-1
 
-        return False
+        if not self.selectors[selector_index].matches(node):
+            return False
+
+        # then leftward find ancestor selectors
+        selector_index-=1
+        current=node.parent
+
+        while selector_index >= 0 and current:
+            if self.selectors[selector_index].matches(current):
+                selector_index-=1
+                
+            current=current.parent
+        
+        return selector_index < 0
 
 def cascade_priority(rule):
     selector, body=rule
@@ -1760,15 +1770,17 @@ class CSSParser:
             return TagSelector(selector)
 
     def selector(self):
-        out=self.simple_selector()
+        selectors=[self.simple_selector()]
         self.whitespace()
 
         while self.i < len(self.s) and self.s[self.i] !="{":
-            descendant = self.simple_selector()
-            out=DescendantSelector(out,descendant)
+            selectors.append(self.simple_selector())
             self.whitespace()
 
-        return out
+        if len(selectors)==1:
+            return selectors[0]
+        else:
+            return DescendantSelector(selectors)
 
     def parse(self):
         rules=[]

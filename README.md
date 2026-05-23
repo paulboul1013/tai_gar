@@ -184,6 +184,12 @@ python3 browser.py "data:text/html,<style>.main { color: blue; font-weight: bold
 python3 browser.py "data:text/html,<style>.box { background-color: lightblue; width: 300px; }</style><div class='box'>inline stylesheet box</div>"
 python3 browser.py "data:text/html,<body><style>p { color: red; }</style><p>only this should show</p></body>"
 
+### 測試Fast descendant selectors
+python3 browser.py "data:text/html,<style>div span { color: red; }</style><div><p><span>red text</span></p></div>"
+python3 browser.py "data:text/html,<style>div div div div div { color: red; }</style><div><div><div><div><div>deep red</div></div></div></div></div>"
+python3 browser.py "data:text/html,<style>div span { color: blue; }</style><div><section><article><p><span>deep blue</span></p></article></section></div>"
+python3 browser.py "data:text/html,<style>.outer div .target { color: purple; font-weight: bold; }</style><section class='outer'><article><div><p><span class='target'>purple bold</span></p></div></article></section>"
+python3 browser.py "data:text/html,<style>div span { color: red; }</style><section><p><span>should stay black</span></p></section>"
 
 
 ## go further
