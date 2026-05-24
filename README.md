@@ -191,6 +191,13 @@ python3 browser.py "data:text/html,<style>div span { color: blue; }</style><div>
 python3 browser.py "data:text/html,<style>.outer div .target { color: purple; font-weight: bold; }</style><section class='outer'><article><div><p><span class='target'>purple bold</span></p></div></article></section>"
 python3 browser.py "data:text/html,<style>div span { color: red; }</style><section><p><span>should stay black</span></p></section>"
 
+###　測試Selector sequences
+python3 browser.py "data:text/html,<style>span.announce { color: red; }</style><span class='announce'>red announce</span>"
+python3 browser.py "data:text/html,<style>span.announce { color: red; }</style><div class='announce'>should stay black</div>"
+python3 browser.py "data:text/html,<style>span.announce { color: red; }</style><div class='announce'>should stay black</div>"
+python3 browser.py "data:text/html,<style>span.announce { color: red; }</style><span>should stay black</span>"
+python3 browser.py "data:text/html,<style>div.card.highlight { color: blue; font-weight: bold; }</style><div class='card highlight'>blue bold</div>"
+
 
 ## go further
 1. 做出跨裝置瀏覽器

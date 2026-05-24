@@ -841,6 +841,17 @@ class ClassSelector:
 
         return self.class_name in classes
 
+class SelectorSequence:
+    def __init__(self,selectors):
+        self.selectors = selectors
+        self.priority = sum(selector.priority for selector in selectors)
+
+    def matches(self,node):
+        for selector in self.selectors:
+            if not selector.matches(node):
+                return False
+        return True
+
 class DescendantSelector:
     def __init__(self,selectors):
         self.selectors=selectors
@@ -1668,6 +1679,25 @@ class CSSParser:
             raise Exception("Parsing error")
         return self.s[start:self.i]
 
+    # read tag name and class name
+    # span.announce
+    # read only span tag and then encounter "." stop
+    def identifier(self):
+        start = self.i
+        
+        while self.i < len(self.s):
+            c = self.s[self.i]
+
+            if c.isalnum() or c in "-_":
+                self.i+=1
+            else:
+                break
+
+        if self.i <= start:
+            raise Exception("Parsing error")
+        
+        return self.s[start:self.i]
+
     def value(self):
         values=[]
 
@@ -1762,12 +1792,34 @@ class CSSParser:
         return pairs
 
     def simple_selector(self):
-        selector = self.word().casefold()
+        selectors = []
+
+        # optional tag selector
+        # ex:
+        # span.announce
+        # div.card.highlight
+        if self.i < len(self.s) and self.s[self.i]!= ".":
+            tag = self.identifier().casefold()
+            selectors.append(TagSelector(tag))
+
+        # zero or more class selectors
+        # ex:
+        # .announce
+        # .card.highlight
+        while self.i < len(self.s) and self.s[self.i]==".":
+            self.literal(".")
+            class_name=self.identifier()
+            selectors.append(ClassSelector(class_name))
+
         
-        if selector.startswith("."):
-            return ClassSelector(selector[1:])
-        else:
-            return TagSelector(selector)
+        if len(selectors)==0:
+            raise Exception("Parsing error")
+            
+        if len(selectors)==1:
+            return selectors[0]
+
+
+        return SelectorSequence(selectors)
 
     def selector(self):
         selectors=[self.simple_selector()]
