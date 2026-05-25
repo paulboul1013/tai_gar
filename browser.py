@@ -1700,6 +1700,7 @@ class CSSParser:
 
     def value(self):
         values=[]
+        important = False
 
         while self.i < len(self.s) and self.s[self.i] not in ";}":
             self.whitespace()
@@ -1707,18 +1708,31 @@ class CSSParser:
             if self.i >= len(self.s) or self.s[self.i] in ";}":
                 break
 
-            values.append(self.word())
-            self.whitespace()
+            if self.s[self.i] == "!":
+                self.literal("!")
+                self.whitespace()
 
-        return values
+                word =self.identifier().casefold()
+                if word!="important":
+                    raise Exception("Parsing error")
+
+                important = True
+                self.whitespace()
+            else:
+                values.append(self.word())
+                self.whitespace()
+
+        return values,important
 
     def pair(self):
         prop=self.word()
         self.whitespace()
         self.literal(":")
         self.whitespace()
-        vals=self.value()
-        return prop.casefold(), vals
+
+        vals, important =self.value()
+
+        return prop.casefold(), vals, important 
 
     def font_shorthand(self,values):
         out={}
@@ -1766,17 +1780,24 @@ class CSSParser:
         pairs={}
         while self.i < len(self.s) and self.s[self.i]!="}":
             try:
-                prop, vals=self.pair()
+                prop, vals, important=self.pair()
 
                 if prop=="font":
-                    pairs.update(self.font_shorthand(vals))
+                    expanded = self.font_shorthand(vals)
+
+                    for subprop, subvalue in expanded.items():
+                        pairs[subprop]=(subvalue,important)
+
                 else:
                     if len(vals)==1:
-                        pairs[prop]=vals[0]
+                        value=vals[0]
                     else:
-                        pairs[prop]=" ".join(vals)
+                        value=" ".join(vals)
                 
+                    pairs[prop]=(value,important)
+
                 self.whitespace()
+
                 if self.i < len(self.s) and self.s[self.i]==";":
                     self.literal(";")
                     self.whitespace()
@@ -1871,8 +1892,20 @@ NON_INHERITED_PROPERTIES = {
 
 DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()
 
+IMPORTANT_OFFSET = 10000
+INLINE_STYLE_PRIORITY = 1000
+
+def apply_style(node,prop,value,priority):
+    old_priority=node.style_priority.get(prop,-1)
+
+    # when same priority, last rule cover previous rule
+    if priority >= old_priority:
+        node.style[prop]=value
+        node.style_priority[prop]=priority
+
 def style(node,rules):
     node.style={}
+    node.style_priority={}
     
     # first deal with inherited properties
     # if no node specify property, inherit from parent
@@ -1882,9 +1915,13 @@ def style(node,rules):
         else:
             node.style[property]=default_value
 
+        # inheritance value can't inherit important
+        node.style_priority[property]=0
+
     # deal css format width and height default auto
     for property, default_value in NON_INHERITED_PROPERTIES.items():
         node.style[property]=default_value
+        node.style_priority[property]=0
 
     # If is element, picked by CSS selector
     if isinstance(node,Element):
@@ -1893,14 +1930,27 @@ def style(node,rules):
             if not selector.matches(node):
                 continue
 
-            for prop, value in body.items():
-                node.style[prop]=value
+            for prop, pair in body.items():
+                value, important = pair
+                
+                priority = selector.priority
+                if important:
+                    priority += IMPORTANT_OFFSET
+
+                apply_style(node,prop,value,priority)
 
         # embedded inline style, let inline sytle cover stylesheet
         if "style" in node.attributes:
             pairs=CSSParser(node.attributes["style"]).body()
-            for prop, value in pairs.items():
-                node.style[prop]=value
+
+            for prop, pair in pairs.items():
+                value, important = pair
+                
+                priority = INLINE_STYLE_PRIORITY
+                if important:
+                    priority += IMPORTANT_OFFSET
+
+                apply_style(node,prop,value,priority)
 
     # convert the percentage of font-size to px
     # example: 150% -> parent_font_size * 1.5

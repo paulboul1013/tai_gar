@@ -198,6 +198,13 @@ python3 browser.py "data:text/html,<style>span.announce { color: red; }</style><
 python3 browser.py "data:text/html,<style>span.announce { color: red; }</style><span>should stay black</span>"
 python3 browser.py "data:text/html,<style>div.card.highlight { color: blue; font-weight: bold; }</style><div class='card highlight'>blue bold</div>"
 
+### 測試important
+python3 browser.py 'data:text/html,<style>p { color: red !important; } .main { color: blue; }</style><p class="main">should be red</p>'
+python3 browser.py 'data:text/html,<style>p { color: red !important; font-weight: normal; } .main { color: blue; font-weight: bold; }</style><p class="main">red and bold</p>'
+python3 browser.py 'data:text/html,<style>p { color: red !important; } p { color: blue !important; }</style><p>should be blue</p>'
+python3 browser.py 'data:text/html,<style>p { color: blue !important; }</style><p style="color:red;">should be blue</p>'
+python3 browser.py 'data:text/html,<style>p { color: blue !important; }</style><p style="color:red !important;">should be red</p>'
+
 
 ## go further
 1. 做出跨裝置瀏覽器
