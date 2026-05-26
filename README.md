@@ -206,6 +206,14 @@ python3 browser.py 'data:text/html,<style>p { color: blue !important; }</style><
 python3 browser.py 'data:text/html,<style>p { color: blue !important; }</style><p style="color:red !important;">should be red</p>'
 
 
+### 測試:has(tag)
+python3 browser.py 'data:text/html,<style>div:has(span) { background-color: lightblue; }</style><div><p><span>inside span</span></p></div>'
+python3 browser.py 'data:text/html,<style>div:has(.warning) { color: red; }</style><div><p class="warning">red text</p></div>'
+python3 browser.py 'data:text/html,<style>div:has(span) { color: red; }</style><div><p>should stay black</p></div>'
+python3 browser.py 'data:text/html,<style>div.card:has(span.announce) { color: purple; font-weight: bold; }</style><div class="card"><p><span class="announce">purple bold</span></p></div>'
+python3 browser.py 'data:text/html,<style>div.card:has(span.announce) { color: purple; font-weight: bold; }</style><div><p><span class="announce">should stay black</span></p></div>'
+
+
 ## go further
 1. 做出跨裝置瀏覽器
 

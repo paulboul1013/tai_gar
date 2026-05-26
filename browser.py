@@ -852,6 +852,30 @@ class SelectorSequence:
                 return False
         return True
 
+class HasSelector:
+    def __init__(self,selector):
+        self.selector=selector
+        
+        # :has(...) become pseudo-class, give 10 priority
+        # add internal selector priority
+        self.priority=10+selector.priority
+
+    def matches(self,node):
+        if not isinstance(node,Element):
+            return False
+
+        return self.has_matching_descendant(node)
+
+    def has_matching_descendant(self,node):
+        for child in node.children:
+            if self.selector.matches(child):
+                return True
+            
+            if self.has_matching_descendant(child):
+                return True
+
+        return False
+
 class DescendantSelector:
     def __init__(self,selectors):
         self.selectors=selectors
@@ -1812,6 +1836,33 @@ class CSSParser:
 
         return pairs
 
+    def parenthesized_selector(self):
+        self.literal("(")
+        
+        start=self.i
+        depth=1
+
+        while self.i < len(self.s) and depth > 0:
+            if self.s[self.i]=="(":
+                depth+=1
+            
+            elif self.s[self.i]==")":
+                depth-=1
+
+                if depth==0:
+                    break
+
+            self.i+=1
+
+        if depth!=0:
+            raise Exception("Parsing error")
+
+        inner=self.s[start:self.i]
+        self.literal(")")
+        
+        parser=CSSParser(inner)
+        return parser.selector()
+
     def simple_selector(self):
         selectors = []
 
@@ -1819,20 +1870,33 @@ class CSSParser:
         # ex:
         # span.announce
         # div.card.highlight
-        if self.i < len(self.s) and self.s[self.i]!= ".":
+        # div.card:has(span)
+
+        # if current scan "." or ":"，it's no tag selector
+        if self.i < len(self.s) and self.s[self.i] not in ".:":
             tag = self.identifier().casefold()
             selectors.append(TagSelector(tag))
 
-        # zero or more class selectors
-        # ex:
-        # .announce
-        # .card.highlight
-        while self.i < len(self.s) and self.s[self.i]==".":
-            self.literal(".")
-            class_name=self.identifier()
-            selectors.append(ClassSelector(class_name))
+        #  class selectors or has selectors
+        while self.i < len(self.s):
+            if self.s[self.i]==".":
+                self.literal(".")
+                class_name=self.identifier()
+                selectors.append(ClassSelector(class_name))
+            
+            elif self.s[self.i]==":":
+                self.literal(":")
+                pseduo = self.identifier().casefold()
 
-        
+                if pseduo=="has":
+                    inner_selector = self.parenthesized_selector()
+                    selectors.append(HasSelector(inner_selector))
+                else:
+                    raise Exception("Parsing error")
+
+            else:
+                break
+
         if len(selectors)==0:
             raise Exception("Parsing error")
             
@@ -1929,6 +1993,9 @@ def style(node,rules):
         for selector, body in rules:
             if not selector.matches(node):
                 continue
+
+            # debug rules
+            # print("MATCH",node,selector,body)
 
             for prop, pair in body.items():
                 value, important = pair
