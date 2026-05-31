@@ -590,7 +590,11 @@ class BlockLayout: # layout for block level elements
             if '\n' in line:
                 self.flush_line()
 
-    def new_line():
+    def new_line(self):
+        self.cursor_x=0
+        last_line=self.children[-1] if self.children else None
+        new_line=LineLayout(self.node,self,last_line)
+        self.children.append(new_line)
 
     def word(self,node,word):
         color=node.style["color"]
