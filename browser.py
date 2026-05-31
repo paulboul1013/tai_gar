@@ -205,6 +205,21 @@ class DocumentLayout:
     def paint(self):
         return []
 
+class LineLayout:
+    def __init__(self,node,parent,previous):
+        self.node=node
+        self.parent=parent
+        self.previous=previous
+        self.children=[]
+
+class TextLayout:
+    def __init__(self,node,word,parent,previous):
+        self.node=node
+        self.word=word
+        self.children=[]
+        self.parent=parent
+        self.previous=previous
+
 class BlockLayout: # layout for block level elements
     def __init__(self,nodes,parent,previous):
         self.nodes=nodes
