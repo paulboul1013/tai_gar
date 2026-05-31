@@ -391,10 +391,13 @@ class BlockLayout: # layout for block level elements
 
         mode=self.layout_mode()
 
-        if mode=="block":
-            toc_header_h=0
-            old_y=self.y
+        toc_header_h = 0
+        old_y = self.y
 
+        # before layout clear chlidren,void resize
+        self.children=[]
+
+        if mode=="block":
             # reserve one extra line above <nav id="toc">
             if isinstance(self.node,Element) and \
                 self.node.tag=="nav" and \
@@ -408,41 +411,35 @@ class BlockLayout: # layout for block level elements
                 self.children.append(next)
                 previous=next
 
-            for child in self.children:
-                child.layout()
-
-            self.height=sum(child.height for child in self.children)+toc_header_h
-            self.y=old_y
-
-            css_height=self.css_height()
-            if css_height:
-                self.height=css_height
-            
         else:
             self.cursor_x=0
-            self.cursor_y=0
-            self.weight="normal"
-            self.style="roman"
-            self.size=12
-            self.alignment="left"
             self.is_sup=False
             self.is_abbr=False
             self.is_pre=False
 
-            self.line_buffer=[]
-            self.display_list=[]
-
+            self.new_line()
 
             for node in self.nodes:
                 self.recurse(node)
 
-            self.flush_line()
+            # if last line is empty,remove it
+            if self.children and not self.children[-1].children:
+                self.children.pop()
 
-            self.height=self.cursor_y
+        # block/inline layout children together
+        for child in self.children:
+            child.layout()
 
-            css_height=self.css_height()
-            if css_height:
-                self.height=css_height
+        # block:chlidren is BlockLayout
+        # inline:children is TextLayout
+        self.height=sum(child.height for child in self.children)+ toc_header_h
+
+        # if have toc_header_h,reset y
+        self.y=old_y
+
+        css_height=self.css_height()
+        if css_height:
+            self.height=css_height
 
     def flush(self):
         self.flush_line()
