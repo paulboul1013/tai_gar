@@ -590,9 +590,21 @@ class BlockLayout: # layout for block level elements
             if '\n' in line:
                 self.flush_line()
 
+    def new_line():
+
     def word(self,node,word):
         color=node.style["color"]
         font=self.font_helper(node)
+
+        # new word code
+        line=self.children[-1]
+        previous_word=line.children[-1] if line.children else None
+        text=TextLayout(node,word,line,previous_word)
+        line.children.append(text)
+
+        w=font.measure(word)
+        if self.cursor_x + w >self.width:
+            self.new_line() 
 
         if self.is_abbr:
             base_size=int(float(node.style["font-size"][:-2])*0.75)
