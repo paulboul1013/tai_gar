@@ -579,16 +579,15 @@ class BlockLayout: # layout for block level elements
         #     self.alignment = "center"
         if tag == "sup":
             self.is_sup = True
-            self.size = int(self.size / 2)
         elif tag == "pre":
             self.is_pre = True
-            self.flush_line()
+            if self.children and self.children[-1].children:
+                self.new_line()
         elif tag == "abbr":
             self.is_abbr = True
-        elif tag == "br":
-            self.flush_line()
         elif tag == "p":
-            self.flush_line()
+            if self.children and self.children[-1].children:
+                self.new_line()
 
 
     def close_tag(self, tag):
