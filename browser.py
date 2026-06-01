@@ -626,7 +626,7 @@ class BlockLayout: # layout for block level elements
                 return
 
             if tree.tag == "br":
-                self.flush_line()
+                self.new_line()
                 return
 
             self.open_tag(tree.tag)
