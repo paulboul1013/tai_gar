@@ -356,15 +356,15 @@ class BlockLayout: # layout for block level elements
                 )
 
         #inline mode turn text/picture into Draw command
-        if self.layout_mode() == "inline":
-            for item in self.display_list:
-                if isinstance(item,tuple) and len(item)==5:
-                    x,y,word,font,color=item
-                    cmds.append(DrawText(x,y,word,font,color))
+        #if self.layout_mode() == "inline":
+         #   for item in self.display_list:
+          #      if isinstance(item,tuple) and len(item)==5:
+           #         x,y,word,font,color=item
+            #        cmds.append(DrawText(x,y,word,font,color))
 
-                else:
+             #   else:
                     # keep origin emoji/image tuple
-                    cmds.append(item)
+          #          cmds.append(item)
 
         return cmds
 
