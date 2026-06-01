@@ -630,30 +630,15 @@ class BlockLayout: # layout for block level elements
         
                 
     def pre_word(self,node,text):
-        font=self.font_helper(node,family="Courier New")
-        color=node.style["color"]
+        lines=text.split("\n")
 
-        normalized_text=text.replace("\\n","\n")
+        for i, line in enumerate(lines):
+            for word in line.split():
+                self.word(node,word)
 
-        # make sure can catch end of line \n
-        lines = normalized_text.splitlines(keepends=True)
+            if i!=len(lines)-1:
+                self.new_line()
 
-        if not lines and normalized_text=='\n':
-            lines=['\n']
-
-        for line in lines:
-            # remove \n and \r calculate width
-            clean_line=line.replace('\n','').replace('\r','')
-            w=font.measure(clean_line)
-
-            # add content to buffer
-            content=(clean_line,font,self.is_sup,color)
-            self.line_buffer.append((w,content))
-
-            # ecounter \n or end of line，force change next line
-            # if not last line，execute flush_line()
-            if '\n' in line:
-                self.flush_line()
 
     def new_line(self):
         self.cursor_x=0
