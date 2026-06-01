@@ -309,7 +309,7 @@ class BlockLayout: # layout for block level elements
         self.width=None
         self.height=None
 
-        self.display_list=[]
+        #self.display_list=[]
 
     def paint(self):
         cmds=[]
