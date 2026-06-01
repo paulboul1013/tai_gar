@@ -589,8 +589,7 @@ class BlockLayout: # layout for block level elements
             self.flush_line()
         elif tag == "p":
             self.flush_line()
-        elif tag=="h6":
-            self.weight="bold"
+
 
     def close_tag(self, tag):
         if tag == 'h1 class="title"':
