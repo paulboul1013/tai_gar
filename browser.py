@@ -670,137 +670,23 @@ class BlockLayout: # layout for block level elements
         self.children.append(new_line)
 
     def word(self,node,word):
-        color=node.style["color"]
         font=self.font_helper(node)
-
-        # new word code
-        line=self.children[-1]
-        previous_word=line.children[-1] if line.children else None
-        text=TextLayout(node,word,line,previous_word)
-        line.children.append(text)
-
-        w=font.measure(word)
-        if self.cursor_x + w >self.width:
-            self.new_line() 
-
-        if self.is_abbr:
-            base_size=int(float(node.style["font-size"][:-2])*0.75)
-            node_style=node.style["font-style"]
-            if node_style=="normal":
-                node_style="roman"
-
-            for i,char in enumerate(word):
-                if char.islower():
-                    # lowercase : change to uppercase ，resize 0.8 ，bold
-                    c=char.upper()
-                    f=get_font(int(base_size*0.8),"bold",node_style)
-                else:
-                    # other characters: normal
-                    c=char
-                    f=self.font_helper(node)
-
-                w=f.measure(c)
-                # only on the last word's character add space width
-                space_w=f.measure(" ") if i==len(word)-1 else 0
-                
-                # change line check
-                current_line_w=sum(item[0] for item in self.line_buffer)
-                if current_line_w+w >= self.width:
-                    self.flush_line()
-
-                self.line_buffer.append((w+space_w,(c,f,self.is_sup,color)))
-            
-            return
-
-        # check is emoji or text
-        # because now use word for basic unit，if word is emoji (and len is 1)，loading picture
-        img=None
-
-        if len(word)==1:
-            img=get_emoji(word)
-
-        if img:
-            # picture doesn't have ascent/descent，make default height is ascent
-            w=img.width()
-            content=img
-            space_w=0
-
-            current_line_w=sum(item[0] for item in self.line_buffer)
-            if current_line_w +w >= self.width:
-                self.flush_line()
-            self.line_buffer.append((w+space_w,content))
-            return
-
-
-        #normal showing，don't want to show \xad，first remove it to calucalute real status width
         clean_word=word.replace("\xad","")
 
-        #use font measure to get width of text
         w=font.measure(clean_word)
-
         space_w=font.measure(" ")
+        
+        if self.cursor_x+w > self.width:
+            self.new_line()
 
-        # calculate current line available space
-        current_line_w=sum(item[0] for item in self.line_buffer)
-        available_space=self.width - current_line_w
+        line=self.children[-1]
+        previous_word=line.children[-1] if line.children else None
 
-        # status a: word can place current line and add '-' directly
-        if w+space_w <=available_space:
-            content=(clean_word,font,self.is_sup,color)
-            self.line_buffer.append((w+space_w,content))
-            return
 
-        # status b: word can't place and add '-' 。 try split word
-        if "\xad" in word:
-            
-            parts=word.split("\xad")
-            best_prefix=None
-            best_width=0
-            remainder=None
+        text=TextLayout(node,clean_word,line,previous_word)
+        line.children.append(text)
 
-            # looking for can place avaiable space longest prefix word
-            # try parts[0], parts[i]，add '-'
-            for i in range(len(parts)-1):
-                # assemble text (remove \xad)
-                prefix_text="".join(parts[:i+1])
-                # add '-'
-                candidate_text=prefix_text+"-"
-                candidate_width=font.measure(candidate_text)
-
-                if candidate_width+space_w <=available_space:
-                    # if can place，this is a candidate plan
-                    best_prefix=candidate_text
-                    best_width=candidate_width
-                    
-                    # left parts (need add \xad back ，because maybe next line need to split)
-                    remainder="\xad".join(parts[i+1:])
-
-                else:
-                    # if can't place，longer must can't also ，stop finding
-                    break
-
-            # if find best_prefix，use it
-            if best_prefix:
-                # add front parts (include '-' ) add current line
-                content=(best_prefix,font,self.is_sup,color)
-                self.line_buffer.append((best_width+space_w,content))
-
-                # force change line
-                self.flush_line()
-
-                # deal with remainder
-                if remainder:
-                    self.word(node,remainder)
-                
-                return
-
-        # status c : word can't place and no soft break or (split first parts still too long)
-        # execute standard change to next line
-        self.flush_line()
-        # content save because draw need to know font object to draw text
-        content=(clean_word,font,self.is_sup,color)
-        # add buffer(not decide coord yet)
-        self.line_buffer.append((w+space_w,content))
+        self.cursor_x+=w+space_w
 
 
     def flush_line(self):
