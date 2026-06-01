@@ -591,23 +591,17 @@ class BlockLayout: # layout for block level elements
 
 
     def close_tag(self, tag):
-        if tag == 'h1 class="title"':
-            self.flush_line()
-            self.alignment = "left"
-        elif tag == "sup":
+        if tag == "sup":
             self.is_sup = False
-            self.size = int(self.size * 2)
         elif tag == "pre":
             self.is_pre = False
-            self.flush_line()
+            if self.children and self.children[-1].children:
+                self.new_line()
         elif tag == "abbr":
             self.is_abbr = False
         elif tag == "p":
-            self.flush_line()
-            self.cursor_y += VSTEP
-        elif tag=="h6":
-            self.weight="normal"
-
+            if self.children and self.children[-1].children:
+                self.new_line()
 
     def recurse(self,tree):
         if isinstance(tree,Text):
