@@ -261,6 +261,15 @@ class TextLayout:
         self.parent=parent
         self.previous=previous
 
+        self.x=None
+        self.y=None
+        self.width=None
+        self.height=None
+
+        self.font=None
+
+    
+
 class BlockLayout: # layout for block level elements
     def __init__(self,nodes,parent,previous):
         self.nodes=nodes
