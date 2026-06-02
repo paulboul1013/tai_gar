@@ -755,7 +755,7 @@ class BlockLayout: # layout for block level elements
         previous_word=line.children[-1] if line.children else None
 
 
-        text=TextLayout(node,clean_word,line,previous_word)
+        text=TextLayout(node,clean_word,line,previous_word,self.is_sup)
         line.children.append(text)
 
         self.cursor_x+=w+space_w
