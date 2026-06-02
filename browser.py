@@ -238,15 +238,16 @@ class LineLayout:
             for word in self.children
         ])
 
-        baseline = self.y+1.25*max_ascent
-
-        for word in self.children:
-            word.y=baseline-word.font.metrics("descent")
-
         max_descent = max([
             word.font.metrics("descent")
             for word in self.children
         ])
+
+        baseline = self.y+1.25*max_ascent
+
+        for child in self.children:
+            child.y=baseline-child.ascent
+
 
         self.height=1.25 *(max_ascent+max_descent)
 
