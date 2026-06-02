@@ -275,12 +275,13 @@ class LineLayout:
         return []
 
 class TextLayout:
-    def __init__(self,node,word,parent,previous):
+    def __init__(self,node,word,parent,previous,is_sup=False):
         self.node=node
         self.word=word
         self.children=[]
         self.parent=parent
         self.previous=previous
+        self.is_sup=is_sup
 
         self.x=None
         self.y=None
