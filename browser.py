@@ -1993,6 +1993,7 @@ INHERITED_PROPERTIES = {
     "font-weight" : "normal",
     "color" : "black",
     "font-family": "Times",
+    "text-align":"left",
 }
 
 NON_INHERITED_PROPERTIES = {
