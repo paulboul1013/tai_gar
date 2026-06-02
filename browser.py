@@ -553,7 +553,7 @@ class BlockLayout: # layout for block level elements
             child.layout()
 
         # block:chlidren are BlockLayout
-        # inline:children are TextLayout
+        # inline:children are LineLayout
         self.height=sum(child.height for child in self.children)+ toc_header_h
 
         # if have toc_header_h,reset y
