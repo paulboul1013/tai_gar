@@ -715,7 +715,7 @@ class BlockLayout: # layout for block level elements
             line=self.children[-1]
             previous=line.children[-1] if line.children else None
 
-            emoji=EmojiLayout(node,img,line,previous)
+            emoji=EmojiLayout(node,img,line,previous,space_w)
             line.children.append(emoji)
 
             self.cursor_x+=w+space_w
