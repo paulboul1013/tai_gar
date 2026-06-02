@@ -230,6 +230,19 @@ class LineLayout:
             self.height=0
             return
 
+        line_width=0
+        for child in self.children:
+            line_width+=child.width+child.space_after            
+
+        if USE_RTL:
+            cursor_x=self.x+self.width-line_width
+        else:
+            cursor_x=self.x
+
+        for child in self.children:
+            child.x=cursor_x
+            cursor_x+= child.width+child.space_after
+
         max_ascent = max([
             child.ascent
             for child in self.children
