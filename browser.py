@@ -706,7 +706,7 @@ class BlockLayout: # layout for block level elements
         if img:
             w=img.width()
             
-            if self.cursor_x+w>self.width:
+            if self.cursor_x+w>self.width and self.children[-1].children:
                 self.new_line()
 
             line=self.children[-1]
@@ -718,7 +718,7 @@ class BlockLayout: # layout for block level elements
             self.cursor_x+=w+space_w
             return
         
-        if self.cursor_x+w > self.width:
+        if self.cursor_x+w > self.width and self.children[-1].children:
             self.new_line()
 
         line=self.children[-1]
