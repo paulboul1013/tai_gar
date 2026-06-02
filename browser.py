@@ -301,6 +301,10 @@ class TextLayout:
             style="roman"
 
         size = int(float(self.node.style["font-size"][:-2])*0.75)
+        
+        if self.is_sup:
+            size=max(1,int(size/2))
+
         family = self.node.style["font-family"]
 
         self.font=get_font(size,weight,style,family=family)
