@@ -230,18 +230,28 @@ class LineLayout:
             self.height=0
             return
 
-        line_width=0
-        for child in self.children:
-            line_width+=child.width+child.space_after            
+        line_width=sum(child.width+child.space_after for child in self.children)
 
-        if USE_RTL:
+        if self.children:
+            line_width-=self.children[-1].space_after
+
+        align=self.parent.node.style.get("text-align","left")
+
+        if align=="center":
+            cursor_x=self.x+(self.width-line_width)/2
+        elif align=="right" or USE_RTL: # same as RTL
             cursor_x=self.x+self.width-line_width
         else:
             cursor_x=self.x
 
         for child in self.children:
             child.x=cursor_x
-            cursor_x+= child.width+child.space_after
+            cursor_x+= child.width+child.space_after            
+
+#        if USE_RTL:
+#            cursor_x=self.x+self.width-line_width
+#        else:
+#            cursor_x=self.x
 
         max_ascent = max([
             child.ascent
