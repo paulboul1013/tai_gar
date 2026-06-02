@@ -96,7 +96,7 @@ def get_emoji(char):
                 #loading pic
                 img=tkinter.PhotoImage(file=file_path)
 
-                target_size=35
+                target_size=16
                 w=img.width()
 
                 # opemoji pic is very big
