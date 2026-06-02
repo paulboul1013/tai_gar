@@ -1042,7 +1042,7 @@ class Browser:
 
                 self.canvas.create_image(
                     x,
-                    y-self.scroll-2,
+                    y-self.scroll,
                     image=img,
                     anchor="nw"
                 )
