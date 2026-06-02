@@ -701,6 +701,25 @@ class BlockLayout: # layout for block level elements
 
         w=font.measure(clean_word)
         space_w=font.measure(" ")
+
+        img=None
+        if len(word)==1:
+            img=get_emoji(word)
+        
+        if img:
+            w=img.width()
+            
+            if self.cursor_x+w>self.width:
+                self.new_line()
+
+            line=self.children[-1]
+            previous=line.children[-1] if line.children else None
+
+            emoji=EmojiLayout(node,img,line,previous)
+            line.children.append(emoji)
+
+            self.cursor_x+=w+space_w
+            return
         
         if self.cursor_x+w > self.width:
             self.new_line()
