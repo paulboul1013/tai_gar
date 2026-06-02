@@ -305,6 +305,44 @@ class TextLayout:
         color=self.node.style["color"]
         return [DrawText(self.x,self.y,self.word,self.font,color)]
 
+
+class EmojiLayout:
+    def __init__(self,node,img,parent, previous, space_after):
+        self.node=node
+        self.img=img
+        self.parent=parent
+        self.previous=previous
+        self.children=[]
+
+        self.x=None
+        self.y=None
+        self.width=None
+        self.height=None
+
+        self.ascent=None
+        self.descent=None
+        self.space_after=space_after
+
+    def layout(self):
+        self.width=self.img.width()
+        self.height=self.img.height()
+
+        # let emoji bottom close to baseline
+        self.ascent=self.height
+        self.descent=0
+
+        if self.previous:
+            self.x=(
+                self.previous.x
+                +self.previous.width
+                +self.previous.space_after
+            )
+        else:
+            self.x=self.parent.x
+
+
+    def paint(self):
+        return [(self.x,self.y,self.img)]
     
 
 class BlockLayout: # layout for block level elements
