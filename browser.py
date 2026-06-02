@@ -226,21 +226,21 @@ class LineLayout:
         else:
             self.y=self.parent.y
         
-        for word in self.children:
-            word.layout()
+        for child in self.children:
+            child.layout()
 
         if not self.children:
             self.height=0
             return
 
         max_ascent = max([
-            word.font.metrics("ascent")
-            for word in self.children
+            child.ascent
+            for child in self.children
         ])
 
         max_descent = max([
-            word.font.metrics("descent")
-            for word in self.children
+            child.descent
+            for child in self.children
         ])
 
         baseline = self.y+1.25*max_ascent
@@ -268,7 +268,10 @@ class TextLayout:
         self.height=None
 
         self.font=None
-
+        self.ascent=None
+        self.descent=None
+        self.space_after=None
+        
     def layout(self):
         weight=self.node.style["font-weight"]
         
@@ -282,14 +285,21 @@ class TextLayout:
         self.font=get_font(size,weight,style,family=family)
 
         self.width=self.font.measure(self.word)
+        self.height=self.font.metrics("linespace")
+
+        self.ascent=self.font.metrics("ascent")
+        self.descent=self.font.metrics("descent")
+        self.space_after=self.font.measure(" ")
 
         if self.previous:
-            space=self.previous.font.measure(" ")
-            self.x=self.previous.x+space+self.previous.width
+            self.x=(
+                self.previous.x
+                +self.previous.width
+                +self.previous.space_after
+            )
         else:
             self.x=self.parent.x
 
-        self.height=self.font.metrics("linespace")
 
     def paint(self):
         color=self.node.style["color"]
