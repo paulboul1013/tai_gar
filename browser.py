@@ -301,14 +301,15 @@ class TextLayout:
         self.descent=self.font.metrics("descent")
         self.space_after=self.font.measure(" ")
 
-        if self.previous:
-            self.x=(
-                self.previous.x
-                +self.previous.width
-                +self.previous.space_after
-            )
-        else:
-            self.x=self.parent.x
+        self.x=None
+#        if self.previous:
+#            self.x=(
+#                self.previous.x
+#                +self.previous.width
+#                +self.previous.space_after
+#            )
+#       else:
+#            self.x=self.parent.x
 
 
     def paint(self):
@@ -341,14 +342,15 @@ class EmojiLayout:
         self.ascent=self.height
         self.descent=0
 
-        if self.previous:
-            self.x=(
-                self.previous.x
-                +self.previous.width
-                +self.previous.space_after
-            )
-        else:
-            self.x=self.parent.x
+        self.x=None
+#        if self.previous:
+#            self.x=(
+#                self.previous.x
+#                +self.previous.width
+#                +self.previous.space_after
+#            )
+#        else:
+#            self.x=self.parent.x
 
 
     def paint(self):
