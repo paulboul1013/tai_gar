@@ -103,10 +103,7 @@ def get_emoji(char):
                 # need to shrink it 16x16
                 # subsample(x) represent to shrink x times
                 # 72x72 shrink 4 times-> 18x18 close to VSTEP(18)
-                scale_factor=w//target_size
-
-                if scale_factor<1:
-                    scale_factor=1
+                scale_factor=max(1,round(w/target_size))
 
                 img=img.subsample(scale_factor,scale_factor)
 
