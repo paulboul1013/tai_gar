@@ -607,7 +607,8 @@ class BlockLayout: # layout for block level elements
             self.height=css_height
 
     def flush(self):
-        self.flush_line()
+        pass
+        # self.flush_line()
         # self.cursor_x=0
         
         # for rel_x,word,font in self.line:
@@ -661,36 +662,36 @@ class BlockLayout: # layout for block level elements
 
         return get_font(size,weight,style,family=family)
 
-    # def open_tag(self, tag):
-    #     # already handled in HTMLParser
-    #     # if tag == 'h1 class="title"':
-    #     #     self.flush_line()
-    #     #     self.alignment = "center"
-    #     # if tag == "sup":
-    #     #     self.is_sup = True
-    #     if tag == "pre":
-    #         self.is_pre = True
-    #         if self.children and self.children[-1].children:
-    #             self.new_line()
-    #     elif tag == "abbr":
-    #         self.is_abbr = True
-    #     elif tag == "p":
-    #         if self.children and self.children[-1].children:
-    #             self.new_line()
+    def open_tag(self, tag):
+        # already handled in HTMLParser
+        # if tag == 'h1 class="title"':
+        #     self.flush_line()
+        #     self.alignment = "center"
+        if tag == "sup":
+            self.is_sup = True
+        if tag == "pre":
+            self.is_pre = True
+            if self.children and self.children[-1].children:
+                self.new_line()
+        elif tag == "abbr":
+            self.is_abbr = True
+        elif tag == "p":
+            if self.children and self.children[-1].children:
+                self.new_line()
 
 
-    # def close_tag(self, tag):
-    #     # if tag == "sup":
-    #     #     self.is_sup = False
-    #     if tag == "pre":
-    #         self.is_pre = False
-    #         if self.children and self.children[-1].children:
-    #             self.new_line()
-    #     elif tag == "abbr":
-    #         self.is_abbr = False
-    #     elif tag == "p":
-    #         if self.children and self.children[-1].children:
-    #             self.new_line()
+    def close_tag(self, tag):
+        if tag == "sup":
+            self.is_sup = False
+        if tag == "pre":
+            self.is_pre = False
+            if self.children and self.children[-1].children:
+                self.new_line()
+        elif tag == "abbr":
+            self.is_abbr = False
+        elif tag == "p":
+            if self.children and self.children[-1].children:
+                self.new_line()
 
     def recurse(self,tree):
         if isinstance(tree,Text):
@@ -775,77 +776,77 @@ class BlockLayout: # layout for block level elements
 
 
     def flush_line(self):
+        pass
+        # if not self.line_buffer:
+        #     # pre mode
+        #     if self.is_pre:#force cursor_y down
+        #         font = get_font(self.size, self.weight, self.style, family="Courier New")
+        #         self.cursor_y += font.metrics("linespace") * 1.25
 
-        if not self.line_buffer:
-            # pre mode
-            if self.is_pre:#force cursor_y down
-                font = get_font(self.size, self.weight, self.style, family="Courier New")
-                self.cursor_y += font.metrics("linespace") * 1.25
+        #     return
 
-            return
+        # # find heightest ascent and descent
+        # max_ascent=0
+        # max_descent=0
 
-        # find heightest ascent and descent
-        max_ascent=0
-        max_descent=0
+        # # buffer object into the display_list
+        # for item_w,item_content in self.line_buffer:
+        #     if isinstance(item_content,tuple):
+        #         word,font,is_sup,color=item_content
+        #         ascent=font.metrics("ascent")
+        #         descent=font.metrics("descent")
+        #     else:
+        #         # pic (emoji)
+        #         ascent=item_content.height()
+        #         descent=0
 
-        # buffer object into the display_list
-        for item_w,item_content in self.line_buffer:
-            if isinstance(item_content,tuple):
-                word,font,is_sup,color=item_content
-                ascent=font.metrics("ascent")
-                descent=font.metrics("descent")
-            else:
-                # pic (emoji)
-                ascent=item_content.height()
-                descent=0
-
-            if ascent > max_ascent: max_ascent=ascent
-            if descent > max_descent: max_descent=descent
+        #     if ascent > max_ascent: max_ascent=ascent
+        #     if descent > max_descent: max_descent=descent
 
 
-        # calculate baseline position
-        baseline=self.cursor_y+max_ascent*1.25
+        # # calculate baseline position
+        # baseline=self.cursor_y+max_ascent*1.25
 
-        # calculate current line total width
-        line_width=sum(item[0] for item in self.line_buffer)
+        # # calculate current line total width
+        # line_width=sum(item[0] for item in self.line_buffer)
 
-        # decide starting cursor_x
-        if self.alignment=="center":
-            # total usefull widht is self.width-HSTEP*2 (minus left and right margin)
-            remaining_space=self.width-line_width
-            cursor_x=max(0,remaining_space//2)
+        # # decide starting cursor_x
+        # if self.alignment=="center":
+        #     # total usefull widht is self.width-HSTEP*2 (minus left and right margin)
+        #     remaining_space=self.width-line_width
+        #     cursor_x=max(0,remaining_space//2)
 
-        # base on baseline to put every object
-        elif USE_RTL:
-            cursor_x=max(0,self.width-line_width)
-        else:
-            cursor_x=0
+        # # base on baseline to put every object
+        # elif USE_RTL:
+        #     cursor_x=max(0,self.width-line_width)
+        # else:
+        #     cursor_x=0
 
-        for item_w,item_content in self.line_buffer:
-            if isinstance(item_content,tuple):
-                word,font,is_sup,color=item_content
+        # for item_w,item_content in self.line_buffer:
+        #     if isinstance(item_content,tuple):
+        #         word,font,is_sup,color=item_content
 
-                if is_sup:
-                    y=baseline-max_ascent
-                else:
-                    y=baseline-font.metrics("ascent")
+        #         if is_sup:
+        #             y=baseline-max_ascent
+        #         else:
+        #             y=baseline-font.metrics("ascent")
 
-                #every single word's y =baseline - this word ascent
-                self.display_list.append((self.x+cursor_x,self.y+y,word,font,color))
+        #         #every single word's y =baseline - this word ascent
+        #         self.display_list.append((self.x+cursor_x,self.y+y,word,font,color))
                 
-            else:
-                # pic bottom is on the baseline
-                img_offset=12
-                y=baseline-item_content.height()
-                self.display_list.append((self.x+cursor_x,self.y+y+img_offset,item_content))
+        #     else:
+        #         # pic bottom is on the baseline
+        #         img_offset=12
+        #         y=baseline-item_content.height()
+        #         self.display_list.append((self.x+cursor_x,self.y+y+img_offset,item_content))
 
-            cursor_x+=item_w
+        #     cursor_x+=item_w
 
-        # update next starting y coord  
-        self.cursor_y=baseline+max_descent*1.25
+        # # update next starting y coord  
+        # self.cursor_y=baseline+max_descent*1.25
         
-        # clear buffer
-        self.line_buffer.clear()
+        # # clear buffer
+        # self.line_buffer.clear()
 
 def lex(body):
     out=[]
