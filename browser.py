@@ -661,36 +661,36 @@ class BlockLayout: # layout for block level elements
 
         return get_font(size,weight,style,family=family)
 
-    def open_tag(self, tag):
-        # already handled in HTMLParser
-        # if tag == 'h1 class="title"':
-        #     self.flush_line()
-        #     self.alignment = "center"
-        if tag == "sup":
-            self.is_sup = True
-        elif tag == "pre":
-            self.is_pre = True
-            if self.children and self.children[-1].children:
-                self.new_line()
-        elif tag == "abbr":
-            self.is_abbr = True
-        elif tag == "p":
-            if self.children and self.children[-1].children:
-                self.new_line()
+    # def open_tag(self, tag):
+    #     # already handled in HTMLParser
+    #     # if tag == 'h1 class="title"':
+    #     #     self.flush_line()
+    #     #     self.alignment = "center"
+    #     # if tag == "sup":
+    #     #     self.is_sup = True
+    #     if tag == "pre":
+    #         self.is_pre = True
+    #         if self.children and self.children[-1].children:
+    #             self.new_line()
+    #     elif tag == "abbr":
+    #         self.is_abbr = True
+    #     elif tag == "p":
+    #         if self.children and self.children[-1].children:
+    #             self.new_line()
 
 
-    def close_tag(self, tag):
-        if tag == "sup":
-            self.is_sup = False
-        elif tag == "pre":
-            self.is_pre = False
-            if self.children and self.children[-1].children:
-                self.new_line()
-        elif tag == "abbr":
-            self.is_abbr = False
-        elif tag == "p":
-            if self.children and self.children[-1].children:
-                self.new_line()
+    # def close_tag(self, tag):
+    #     # if tag == "sup":
+    #     #     self.is_sup = False
+    #     if tag == "pre":
+    #         self.is_pre = False
+    #         if self.children and self.children[-1].children:
+    #             self.new_line()
+    #     elif tag == "abbr":
+    #         self.is_abbr = False
+    #     elif tag == "p":
+    #         if self.children and self.children[-1].children:
+    #             self.new_line()
 
     def recurse(self,tree):
         if isinstance(tree,Text):
