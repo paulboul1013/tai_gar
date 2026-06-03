@@ -265,8 +265,21 @@ class LineLayout:
 
         baseline = self.y+1.25*max_ascent
 
+        normal_text_children=[
+            child for child in self.children
+            if isinstance(child,TextLayout) and not getattr(child,"is_sup",False)
+        ]
+
+        if normal_text_children:
+            normal_ascent=max(child.ascent for child in normal_text_children)
+        else:
+            normal_ascent=max_ascent
+        
         for child in self.children:
-            child.y=baseline-child.ascent
+            if getattr(child,"is_sup",False):
+                child.y=baseline-normal_ascent
+            else:
+                child.y=baseline-child.ascent
 
 
         self.height=1.25 *(max_ascent+max_descent)
