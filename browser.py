@@ -331,7 +331,10 @@ class TextLayout:
             size=max(1,int(size*0.8))
             weight="bold"
 
-        family = self.node.style["font-family"]
+        if self.font_family_override:
+            family = self.font_family_override
+        else:
+            family = self.node.style["font-family"]
 
         self.font=get_font(size,weight,style,family=family)
 
