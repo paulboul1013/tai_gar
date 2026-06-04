@@ -739,7 +739,26 @@ class BlockLayout: # layout for block level elements
             
             self.close_tag(tree.tag)
         
-                
+    def append_pre_text(self,node,text):
+        line=self.children[-1]
+        previous_word = line.children[-1] if line.children else None
+
+        text_layout=TextLayout(
+            node,
+            text,
+            line,
+            previous_word,
+            self.is_sup,
+            False,
+            0,
+            "Courier New",
+        )
+
+        line.children.append(text_layout)
+
+        font=self.font_helper(node,family="Courier New")
+        self.cursor_x+=font.measure(text)
+
     def pre_word(self,node,text):
         lines=text.split("\n")
 
