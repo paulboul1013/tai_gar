@@ -814,6 +814,10 @@ class BlockLayout: # layout for block level elements
             
 
     def word(self,node,word):
+        if self.is_abbr:
+            self.abbr_word(node,word)
+            return
+
         font=self.font_helper(node)
         clean_word=word.replace("\xad","")
 
