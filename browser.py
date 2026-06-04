@@ -744,6 +744,74 @@ class BlockLayout: # layout for block level elements
         last_line=self.children[-1] if self.children else None
         new_line=LineLayout(self.node,self,last_line)
         self.children.append(new_line)
+    
+    def abbr_word(self,node,word):
+        clean_word=word.replace("\xad","")
+        
+        if not clean_word:
+            return
+
+        normal_font=self.font_helper(node)
+        space_w=normal_font.measure(" ")
+
+        pieces=[]
+        total_width=0
+
+        for char in clean_word:
+            if char.islower():
+                display_char=char.upper()
+                is_small_caps=True
+
+                weight="bold"
+
+                if style=="normal":
+                    style="roman"
+
+                size=int(float(node.style["font-size"][:-2])*0.75)
+
+                if self.is_sup:
+                    size=max(1,int(size/2))
+
+                size=max(1,int(size*0.8))
+
+                family =node.style["font-family"]
+                font=get_font(size,weight,sytle,family=family)
+
+            else:
+                display_char=char
+                is_small_caps=False
+                font=self.font_helper(node)
+
+            w=font.measure(display_char)
+            pieces.append((display_char,is_small_caps,w))
+            total_width+=w
+
+        if self.cursor_x+total_width > self.width and self.children[-1].children:
+            self.new_line()
+
+        for i,(display_char,is_small_caps,w) in enumerate(pieces):
+            line=self.children[-1]
+            previous_word=line.children[-1] if line.children else None
+
+            if i==len(pieces)-1:
+                space_after=space_w
+            else:
+                space_after=0
+
+            text = TextLayout(
+                node,
+                display_char,
+                line,
+                previous_word,
+                self.is_sup,
+                is_small_caps,
+                space_after,
+            )
+
+            line.children.append(text)
+
+        self.cursor_x+=total_width+space_w
+            
 
     def word(self,node,word):
         font=self.font_helper(node)
