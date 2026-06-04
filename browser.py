@@ -323,6 +323,10 @@ class TextLayout:
         if self.is_sup:
             size=max(1,int(size/2))
 
+        if self.is_small_caps:
+            size=max(1,int(size*0.8))
+            weight="bold"
+
         family = self.node.style["font-family"]
 
         self.font=get_font(size,weight,style,family=family)
