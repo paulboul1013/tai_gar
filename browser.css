@@ -14,10 +14,6 @@ div {
     display: block;
 }
 
-pre {
-    display: block;
-}
-
 ul {
     display: block;
 }
@@ -91,4 +87,9 @@ h1 {
 
 .title {
     text-align: center;
+}
+
+pre {
+    display: block;
+    font-family: Courier New;
 }
