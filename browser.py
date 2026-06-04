@@ -288,13 +288,18 @@ class LineLayout:
         return []
 
 class TextLayout:
-    def __init__(self,node,word,parent,previous,is_sup=False):
+    def __init__(self,node,word,parent,previous,is_sup=False,
+                is_small_caps=False,space_after_override=None):
         self.node=node
         self.word=word
         self.children=[]
         self.parent=parent
         self.previous=previous
+
+
         self.is_sup=is_sup
+        self.is_small_caps=is_small_caps
+        self.space_after_override=space_after_override
 
         self.x=None
         self.y=None
