@@ -336,7 +336,12 @@ class TextLayout:
 
         self.ascent=self.font.metrics("ascent")
         self.descent=self.font.metrics("descent")
-        self.space_after=self.font.measure(" ")
+        
+        if self.space_after_override is None:
+            self.space_after=self.font.measure(" ")
+        else:
+            self.space_after=self.space_after_override
+            
 
         self.x=None
 #        if self.previous:
