@@ -764,6 +764,7 @@ class BlockLayout: # layout for block level elements
 
                 weight="bold"
 
+                style=node.style["font-style"]
                 if style=="normal":
                     style="roman"
 
@@ -775,7 +776,7 @@ class BlockLayout: # layout for block level elements
                 size=max(1,int(size*0.8))
 
                 family =node.style["font-family"]
-                font=get_font(size,weight,sytle,family=family)
+                font=get_font(size,weight,style,family=family)
 
             else:
                 display_char=char
