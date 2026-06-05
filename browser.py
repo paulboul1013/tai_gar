@@ -2304,14 +2304,8 @@ if __name__ == "__main__":
         url_arg=sys.argv[1]
         
     else:
-        # url_arg = "data:text/html,This is default text showing 😀   "  
-         
-        # 使用 \xad 插入軟連字符
-        long_word = "super\xadcali\xadfragi\xadlistic\xadexpi\xadali\xaddocious"
-        # 重複多次以確保觸發換行
-        text = f"This is a test of soft hyphens. {long_word} " * 5
-        url_arg = f"data:text/html,{text}"     
-
+        print("need to input url argument")
+        sys.exit(1)
 
     target_url = URL(url_arg)
 
