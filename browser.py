@@ -1102,6 +1102,8 @@ class Browser:
         self.tokens=[]
         self.display_list = []
 
+        self.window.title("Tai Gar") 
+
         self.canvas = tkinter.Canvas(
             self.window,
             width=WIDTH,
