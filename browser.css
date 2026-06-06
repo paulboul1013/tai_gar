@@ -93,3 +93,7 @@ pre {
     display: block;
     font-family: Courier New;
 }
+
+nav {
+    display: block;
+}
