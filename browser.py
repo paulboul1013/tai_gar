@@ -6,7 +6,6 @@ import gzip
 import tkinter
 import os
 import tkinter.font
-
 # emolji cache
 # key: character (e.g. "😀")
 # value: tkinter.PhotoImage object
@@ -763,9 +762,16 @@ class BlockLayout: # layout for block level elements
         lines=text.split("\n")
 
         for i, line in enumerate(lines):
-            for word in line.split():
-                self.word(node,word)
+            # keep this line all content，include front whitespace，multi whitespace，tab
+            if line:
+                self.append_pre_text(node,line)
 
+            else:
+                # whitespace line must have height info，so append empty TextLayout
+                if i!=len(lines)-1:
+                    self.append_pre_text(node,"")
+            
+            # origin text have '\n' character，force to new line
             if i!=len(lines)-1:
                 self.new_line()
 
