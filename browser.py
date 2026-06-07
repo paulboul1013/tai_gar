@@ -1132,6 +1132,7 @@ class Browser:
         self.canvas.pack(fill=tkinter.BOTH,expand=True)
         self.canvas.bind("<Configure>",self.resize)
         self.scroll = 0
+        self.url=0
 
         # bind keyboard events
         self.window.bind("<Up>",self.scrollup)
@@ -1139,6 +1140,7 @@ class Browser:
 
         #bind mouse events
         self.window.bind("<MouseWheel>",self.mousewheel)
+        self.window.bind("<Button-1>",self.click)
 
         #use buttion4 and button5 to scroll
         self.window.bind("<Button-4>",self.scrollup)
