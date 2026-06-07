@@ -1628,7 +1628,9 @@ class URL:
         raise Exception("Redirect loop detected!")
 
     def resolve(self,url):
-        if "://" in url: # normal URL
+        # absolute URL with scheme
+        # examples: http://..., https://..., data:..., file:..., view-source:...
+        if "://" in url or ":" in url.split("/",1)[0]: 
             return URL(url)
 
         if url.startswith("//"): # scheme-relative URL
