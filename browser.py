@@ -1149,6 +1149,9 @@ class Browser:
         
 
     def load(self, url):
+        self.url=url
+        self.scroll=0
+        
         body = url.request()
 
         if url.view_source:
