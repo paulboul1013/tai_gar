@@ -1151,7 +1151,7 @@ class Browser:
     def load(self, url):
         self.url=url
         self.scroll=0
-        
+
         body = url.request()
 
         if url.view_source:
@@ -1274,6 +1274,38 @@ class Browser:
             self.scrollup(e)
         else:
             self.scrolldown(e)
+
+    def click(self,e):
+        x,y=e.x,e.y
+
+        # window/canvas coordinate -> page coordinate
+        y+=self.scroll
+
+        objs = [
+            obj for obj in tree_to_list(self.document,[])
+            if obj.x is not None
+            and obj.y is not None
+            and obj.width is not None
+            and obj.height is not None
+            and obj.x <= x < obj.x+obj.width
+            and obj.y <= y < obj.y+obj.height
+        ]
+
+        if not objs:
+            return
+
+        # last matched layout object is ususally the most specific one
+        elt=objs[-1].node
+
+        while elt:
+            if isinstance(elt,Text):
+                pass
+
+            elif elt.tag=="a" and "href" in elt.attributes:
+                url=self.url.resolve(elt.attributes["href"])
+                return self.load(url)
+
+            elt=elt.parent
 
     def resize(self,e):
         if e.width <=10 or e.height <=10:
