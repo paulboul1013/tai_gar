@@ -487,6 +487,9 @@ class BlockLayout: # layout for block level elements
         groups = []
         buffer = []
 
+        def is_whitespace_text(node):
+            return isinstance(node,Text) and node.text.isspace()
+
         all_children = []
         for node in self.nodes:
             if isinstance(node, Element):
@@ -500,9 +503,16 @@ class BlockLayout: # layout for block level elements
             child = all_children[i]
 
             # special case: <h6> followed by <p> should run in
+            # Add whitespace text node between h6 and p
             if isinstance(child, Element) and child.tag == "h6":
-                if i + 1 < len(all_children):
-                    next_child = all_children[i + 1]
+                j=i+1
+
+                # skip pure whitespace text node between <h6> and <p>
+                while j < len(all_children) and is_whitespace_text(all_children[j]):
+                    j+=1
+
+                if j < len(all_children):
+                    next_child = all_children[j]
 
                     if isinstance(next_child, Element) and next_child.tag == "p":
                         if buffer:
@@ -512,7 +522,9 @@ class BlockLayout: # layout for block level elements
                         # merge h6 + p into one inline/layout group
                         merged = [child] + next_child.children
                         groups.append(merged)
-                        i += 2
+
+                        # skip h6,whitespace,and p
+                        i=j+1
                         continue
 
                     # also allow h6 + normal text node
