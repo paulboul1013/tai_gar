@@ -216,7 +216,27 @@ class DrawLine:
             fill=self.color,
             width=self.thickness
         )
-        
+
+class DrawOutline:
+    def __init__(self,rect,color,thickness):
+        self.rect=rect
+        self.color=color
+        self.thickness=thickness
+
+        self.left=rect.left
+        self.top=rect.top
+        self.right=rect.right
+        self.bottom=rect.bottom
+
+    def execute(self,scroll,canvas):
+        canvas.create_rectangle(
+            self.rect.left,
+            self.rect.top-scroll,
+            self.rect.right,
+            self.rect.bottom-scroll,
+            width=self.thickness,
+            outline=self.color
+        )
 
 class DocumentLayout:
     def __init__(self,node):#build root of layout tree
