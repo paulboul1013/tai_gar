@@ -137,6 +137,19 @@ def style_tag_text(node):
 
     return "".join(out)
 
+class Rect:
+    def __init__(self,left,top,right,bottom):
+        self.left=left
+        self.top=top
+        self.right=right
+        self.bottom=bottom
+
+    def contains_point(self,x,y):
+        return (
+            x >= self.left and x < self.right and
+            y >= self.top and y < self.bottom
+        )
+
 class DrawText:
     def __init__(self,x1,y1,text,font,color):
         self.left=x1
