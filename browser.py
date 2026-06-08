@@ -196,6 +196,28 @@ class DrawRect:
             fill=self.color,
         )
 
+class DrawLine:
+    def __init__(self,x1,y1,x2,y2,color,thickness):
+        self.rect=Rect(x1,y1,x2,y2)
+        self.color=color
+        self.thickness=thickness
+
+        self.left=min(x1,x2)
+        self.right=max(x1,x2)
+        self.top=min(y1,y2)
+        self.bottom=max(y1,y2)
+
+    def execute(self,scroll,canvas):
+        canvas.create_line(
+            self.rect.left,
+            self.rect.top-scroll,
+            self.rect.right,
+            self.rect.bottom-scroll,
+            fill=self.color,
+            width=self.thickness
+        )
+        
+
 class DocumentLayout:
     def __init__(self,node):#build root of layout tree
         self.node=node
