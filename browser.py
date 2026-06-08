@@ -1284,8 +1284,7 @@ class Tab:
         else:
             self.scrolldown(e)
 
-    def click(self,e):
-        x,y=e.x,e.y
+    def click(self,x,y):
 
         # window/canvas coordinate -> page coordinate
         y+=self.scroll
