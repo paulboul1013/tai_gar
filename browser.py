@@ -1196,12 +1196,12 @@ class Tab:
 
         style(self.nodes,sorted(rules,key=cascade_priority))
 
-        self.document=DocumentLayout(self.nodes)
-        self.document.layout()
+        # self.document=DocumentLayout(self.nodes)
+        # self.document.layout()
 
-        self.display_list=[]
-        paint_tree(self.document,self.display_list)
-        self.draw()
+        # self.display_list=[]
+        # paint_tree(self.document,self.display_list)
+        # self.draw()
 
     def draw(self):
         self.canvas.delete("all")
