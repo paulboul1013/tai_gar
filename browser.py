@@ -1114,8 +1114,8 @@ def cascade_priority(rule):
 class Tab:
     def __init__(self):
         # self.window = tkinter.Tk()
-        # self.width=WIDTH
-        # self.height=HEIGHT
+        self.width=WIDTH
+        self.height=HEIGHT
 
         # self.tokens=[]
         self.display_list = []
