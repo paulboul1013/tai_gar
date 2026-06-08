@@ -1212,7 +1212,7 @@ class Tab:
         self.display_list=[]
         paint_tree(self.document,self.display_list)
 
-    def draw(self):
+    def draw(self,canvas):
         # self.canvas.delete("all")
         for item in self.display_list:
 
@@ -1224,7 +1224,7 @@ class Tab:
                 if item.bottom < self.scroll:
                     continue
 
-                item.execute(self.scroll,self.canvas)
+                item.execute(self.scroll,canvas)
 
 
             elif isinstance(item,tuple) and len(item)==3:
@@ -1234,7 +1234,7 @@ class Tab:
                 if y> self.scroll +self.height :continue
                 if y+img.height() < self.scroll: continue
 
-                self.canvas.create_image(
+                canvas.create_image(
                     x,
                     y-self.scroll,
                     image=img,
@@ -1259,7 +1259,7 @@ class Tab:
 
             #draw blue rectangle
             #pos:(right edge - width bound, top edge,right edge,down edge)
-            self.canvas.create_rectangle(
+            canvas.create_rectangle(
                 self.width-SCROLLBAR_WIDTH,
                 bar_y,
                 self.width,
