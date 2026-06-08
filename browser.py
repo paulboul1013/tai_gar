@@ -2471,12 +2471,12 @@ if __name__ == "__main__":
     target_url = URL(url_arg)
 
     browser = Browser()
-    browser.load(target_url)
+    browser.new_tab(target_url)
 
     print("--- DOM Tree ---")
-    print_tree(browser.nodes)
+    print_tree(browser.active_tab.nodes)
     print("----------------")
-    print("display items:", len(browser.display_list))
-    print("document height:", browser.document.height)
+    print("display items:", len(browser.active_tab.display_list))
+    print("document height:", browser.active_tab.document.height)
 
     tkinter.mainloop()
