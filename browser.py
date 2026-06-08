@@ -1341,6 +1341,100 @@ class Tab:
             self.draw()
 
 
+class Browser:
+    def __init__(self):
+        self.tabs=[]
+        self.active_tab=None
+
+        self.window=tkinter.Tk()
+        self.window.title("Tai Gar")
+
+        self.canvas = tkinter.Canvas(
+            self.window,
+            width=WIDTH,
+            height=HEIGHT,
+            bg="white"
+        )
+
+        self.canvas.pack(fill=tkinter.BOTH,expand=True)
+
+        self.canvas.bind("<Configure>",self.resize)
+
+        self.window.bind("<Down>",self.handle_down)
+        self.window.bind("<Up>",self.handle_up)
+
+        self.window.bind("<MouseWheel>",self.handle_mousewheel)
+        self.window.bind("<Button-4>",self.handle_up)
+        self.window.bind("<Button-5>",self.handle_down)
+
+        self.window.bind("<Button-1>",self.handle_click)
+
+    def new_tab(self,url):
+        new_tab=Tab()
+        new_tab.load(url)
+
+        self.tabs.append(new_tab)
+        self.active_tab=new_tab
+
+        self.draw()
+
+    def draw(self):
+        self.canvas.delete("all")
+
+        if self.active_tab:
+            self.active_tab.draw(self.canvas)
+
+    def handle_down(self,e):
+        if not self.active_tab:
+            return
+
+        self.active_tab.scrolldown()
+        self.draw()
+
+    def handle_up(self,e):
+        if not self.active_tab:
+            return
+
+        self.active_tab.scrollup()
+        self.draw()
+
+    def handle_mousewheel(self,e):
+        if not self.active_tab:
+            return
+
+        if e.data > 0:
+            self.active_tab.scrollup()
+        else:
+            self.active_tab.scrolldown()
+
+        self.draw()
+
+    def handle_click(self,e):
+        if not self.active_tab:
+            return 
+
+        self.active_tab.click(e.x,e.y)
+        self.draw()
+
+    def resize(self,e):
+        if e.width <=10 or e.height<=10:
+            return
+
+        global WIDTH,HEIGHT
+
+        if WIDTH==e.width and HEIGHT == e.height:
+            return
+
+        WIDTH=e.width
+        HEIGHT=e.height
+
+        for tab in self.tabs:
+            if tab.nodes:
+                tab.relayout()
+
+        self.draw()
+
+
 class URL:
     def __init__(self, url):
         self.view_source=False
