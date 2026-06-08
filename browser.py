@@ -1269,17 +1269,14 @@ class Tab:
 
             
 
-    def scrolldown(self, e):
-        
+    def scrolldown(self):
         max_y=max(self.document.height+2*VSTEP-self.height,0)
         self.scroll=min(self.scroll+SCROLL_STEP,max_y)
-        self.draw()
 
-    def scrollup(self,e):
+    def scrollup(self):
         self.scroll-=SCROLL_STEP
         if self.scroll<0:
             self.scroll=0
-        self.draw()
 
     def mousewheel(self,e):
         if e.delta>0:
