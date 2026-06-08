@@ -1111,40 +1111,43 @@ def cascade_priority(rule):
     selector, body=rule
     return selector.priority
 
-class Browser:
+class Tab:
     def __init__(self):
-        self.window = tkinter.Tk()
-        self.width=WIDTH
-        self.height=HEIGHT
+        # self.window = tkinter.Tk()
+        # self.width=WIDTH
+        # self.height=HEIGHT
 
-        self.tokens=[]
+        # self.tokens=[]
         self.display_list = []
-
-        self.window.title("Tai Gar") 
-
-        self.canvas = tkinter.Canvas(
-            self.window,
-            width=WIDTH,
-            height=HEIGHT,
-            bg="white",
-        )
-        # let canvas fill the window
-        self.canvas.pack(fill=tkinter.BOTH,expand=True)
-        self.canvas.bind("<Configure>",self.resize)
         self.scroll = 0
-        self.url=0
+        self.url=None
+        self.nodes=None
+        self.document=None
 
-        # bind keyboard events
-        self.window.bind("<Up>",self.scrollup)
-        self.window.bind("<Down>", self.scrolldown)
+        # self.window.title("Tai Gar") 
 
-        #bind mouse events
-        self.window.bind("<MouseWheel>",self.mousewheel)
-        self.window.bind("<Button-1>",self.click)
+        # self.canvas = tkinter.Canvas(
+        #     self.window,
+        #     width=WIDTH,
+        #     height=HEIGHT,
+        #     bg="white",
+        # )
+        # let canvas fill the window
+        # self.canvas.pack(fill=tkinter.BOTH,expand=True)
+        # self.canvas.bind("<Configure>",self.resize)
 
-        #use buttion4 and button5 to scroll
-        self.window.bind("<Button-4>",self.scrollup)
-        self.window.bind("<Button-5>",self.scrolldown)
+
+        # # bind keyboard events
+        # self.window.bind("<Up>",self.scrollup)
+        # self.window.bind("<Down>", self.scrolldown)
+
+        # #bind mouse events
+        # self.window.bind("<MouseWheel>",self.mousewheel)
+        # self.window.bind("<Button-1>",self.click)
+
+        # #use buttion4 and button5 to scroll
+        # self.window.bind("<Button-4>",self.scrollup)
+        # self.window.bind("<Button-5>",self.scrolldown)
 
         
 
