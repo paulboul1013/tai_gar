@@ -1213,7 +1213,7 @@ class Tab:
         paint_tree(self.document,self.display_list)
 
     def draw(self):
-        self.canvas.delete("all")
+        # self.canvas.delete("all")
         for item in self.display_list:
 
             # DrawText/DrawRect architecture
