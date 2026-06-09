@@ -1296,10 +1296,11 @@ class Chrome:
         
 
 class Tab:
-    def __init__(self):
+    def __init__(self,tab_height):
         # self.window = tkinter.Tk()
         self.width=WIDTH
         self.height=HEIGHT
+        self.tab_height=tab_height
 
         # self.tokens=[]
         self.display_list = []
