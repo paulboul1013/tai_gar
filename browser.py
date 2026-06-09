@@ -179,11 +179,20 @@ class DrawText:
         )
 
 class DrawRect:
-    def __init__(self,x1,y1,x2,y2,color):
-        self.left=x1
-        self.top=y1
-        self.right=x2
-        self.bottom=y2
+    def __init__(self,*args):
+        if len(args)==2 and isinstance(args[0],Rect):
+            rect,color=args
+            self.rect=rect
+            self.color=color
+        else:
+            x1,y1,x2,y2,color=args
+            self.rect=Rect(x1,y1,x2,y2)
+            self.color=color
+
+        self.left=self.rect.left
+        self.top=self.rect.top
+        self.right=self.rect.right
+        self.bottom=self.rect.bottom
         self.color=color
 
     def execute(self,scroll,canvas):
@@ -1207,6 +1216,84 @@ class Chrome:
             tabs_start+tab_width*(i+1),
             self.tabbar_bottom
         )
+
+    def paint(self):
+        cmds=[]
+
+        # chrome background，must be first draw
+        cmds.append(DrawRect(Rect(0,0,WIDTH,self.bottom),"white"))
+
+        # new tab button
+        cmds.append(DrawOutline(self.newtab_rect,"black",1))
+        cmds.append(DrawText(
+            self.newtab_rect.left+self.padding,
+            self.newtab_rect.top,
+            "+",
+            self.font,
+            "black"
+        ))
+
+        active_bounds=None
+
+        for i,tab in enumerate(self.browser.tabs):
+            bounds=self.tab_rect(i)
+
+            cmds.append(DrawLine(
+                bounds.left,0,
+                bounds.left,bounds.bottom,
+                "black",1
+            ))
+
+            cmds.append(DrawLine(
+                bounds.right,0,
+                bounds.right,bounds.bottom,
+                "black",1
+            ))
+
+            cmds.append(DrawText(
+                bounds.left+self.padding,
+                bounds.top+self.padding,
+                "Tab {}".format(i),
+                self.font,
+                "black"
+            ))
+
+            if tab==self.browser.active_tab:
+                active_bounds=bounds
+
+        # bottom line:active tab under line
+        if active_bounds:
+            cmds.append(DrawLine(
+                0,active_bounds.bottom,
+                active_bounds.left,active_bounds.bottom,
+                "black",1
+            ))
+
+            cmds.append(DrawLine(
+                active_bounds.right,active_bounds.bottom,
+                WIDTH,active_bounds.bottom,
+                "black",1
+            ))
+
+        else:
+            cmds.append(DrawLine(
+                0,self.bottom,
+                WIDTH,self.bottom,
+                "black",1
+            ))
+
+        return cmds
+
+    def click(self,x,y):
+        if self.newtab_rect.contains_point(x,y):
+            self.browser.new_tab(URL("https://browser.engineering/"))
+            return
+        
+        for i, tab in enumerate(self.browser.tabs):
+            if self.tab_rect(i).contains_point(x,y):
+                self.browser.active_tab=tab
+                return
+        
 
 class Tab:
     def __init__(self):
