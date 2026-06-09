@@ -1569,7 +1569,10 @@ class Browser:
         self.canvas.delete("all")
 
         if self.active_tab:
-            self.active_tab.draw(self.canvas)
+            self.active_tab.draw(self.canvas,self.chrome.bottom)
+
+        for cmd in self.chrome.paint():
+            cmd.execute(0,self.canvas)
 
     def handle_down(self,e):
         if not self.active_tab:
