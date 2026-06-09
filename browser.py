@@ -1543,6 +1543,8 @@ class Browser:
 
         self.canvas.pack(fill=tkinter.BOTH,expand=True)
 
+        self.chrome=Chrome(self)
+
         self.canvas.bind("<Configure>",self.resize)
 
         self.window.bind("<Down>",self.handle_down)
