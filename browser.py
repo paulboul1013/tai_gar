@@ -1592,7 +1592,7 @@ class Browser:
         if not self.active_tab:
             return
 
-        if e.data > 0:
+        if e.delta > 0:
             self.active_tab.scrollup()
         else:
             self.active_tab.scrolldown()
@@ -1625,7 +1625,7 @@ class Browser:
 
         for tab in self.tabs:
             tab.tab_height=HEIGHT-self.chrome.bottom
-            
+
             if tab.nodes:
                 tab.relayout()
 
