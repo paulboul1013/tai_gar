@@ -1397,7 +1397,7 @@ class Tab:
         self.display_list=[]
         paint_tree(self.document,self.display_list)
 
-    def draw(self,canvas):
+    def draw(self,canvas,offset):
         # self.canvas.delete("all")
         for item in self.display_list:
 
@@ -1409,7 +1409,7 @@ class Tab:
                 if item.bottom < self.scroll:
                     continue
 
-                item.execute(self.scroll,canvas)
+                item.execute(self.scroll-offset,canvas)
 
 
             elif isinstance(item,tuple) and len(item)==3:
@@ -1421,7 +1421,7 @@ class Tab:
 
                 canvas.create_image(
                     x,
-                    y-self.scroll,
+                    y-self.scroll+offset,
                     image=img,
                     anchor="nw"
                 )
