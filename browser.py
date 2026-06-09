@@ -164,7 +164,7 @@ class DrawText:
         self.rect=Rect(
             self.left,
             self.top,
-            self+left+self.width,
+            self.left+self.width,
             self.bottom
         )
 
