@@ -1455,7 +1455,7 @@ class Tab:
             
 
     def scrolldown(self):
-        max_y=max(self.document.height+2*VSTEP-self.height,0)
+        max_y=max(self.document.height+2*VSTEP-self.tab_height,0)
         self.scroll=min(self.scroll+SCROLL_STEP,max_y)
 
     def scrollup(self):
