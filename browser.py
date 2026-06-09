@@ -1600,10 +1600,15 @@ class Browser:
         self.draw()
 
     def handle_click(self,e):
-        if not self.active_tab:
-            return 
+        if e.y < self.chrome.bottom:
+            self.chrome.click(e.x,e.y)
+        else:
+            if not self.active_tab:
+                return
 
-        self.active_tab.click(e.x,e.y)
+            tab_y=e.y-self.chrome.bottom
+            self.active_tab.click(e.x,tab_y)
+
         self.draw()
 
     def resize(self,e):
