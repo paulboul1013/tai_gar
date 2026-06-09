@@ -1624,6 +1624,8 @@ class Browser:
         HEIGHT=e.height
 
         for tab in self.tabs:
+            tab.tab_height=HEIGHT-self.chrome.bottom
+            
             if tab.nodes:
                 tab.relayout()
 
