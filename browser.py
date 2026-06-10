@@ -1403,6 +1403,7 @@ class Tab:
     def load(self, url):
         self.url=url
         self.scroll=0
+        self.history.append(url)
 
         body = url.request()
 
