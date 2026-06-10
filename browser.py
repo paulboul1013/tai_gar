@@ -1699,6 +1699,9 @@ class Browser:
         WIDTH=e.width
         HEIGHT=e.height
 
+        #rebuild chrome，let address bar with also change
+        self.chrome=Chrome(self)
+
         for tab in self.tabs:
             tab.tab_height=HEIGHT-self.chrome.bottom
 
