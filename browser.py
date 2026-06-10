@@ -1479,7 +1479,7 @@ class Tab:
 
             # DrawText/DrawRect architecture
             if hasattr(item,"execute"):
-                if item.top > self.scroll + self.height:
+                if item.top > self.scroll + self.tab_height:
                     continue
 
                 if item.bottom < self.scroll:
@@ -1492,7 +1492,7 @@ class Tab:
 
                 x,y,img=item
 
-                if y> self.scroll +self.height :continue
+                if y> self.scroll +self.tab_height :continue
                 if y+img.height() < self.scroll: continue
 
                 canvas.create_image(
