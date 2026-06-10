@@ -1455,6 +1455,17 @@ class Tab:
         # paint_tree(self.document,self.display_list)
         # self.draw()
 
+    def go_back(self):
+        if len(self.history)>1:
+            # remove current page
+            self.history.pop()
+
+            # load previous page
+            back=self.history.pop()
+
+            # reload back page and save it
+            self.load(back)
+
     def relayout(self):
         self.document=DocumentLayout(self.nodes)
         self.document.layout()
