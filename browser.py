@@ -1370,6 +1370,8 @@ class Tab:
         self.url=None
         self.nodes=None
         self.document=None
+        
+        self.history=[]
 
         # self.window.title("Tai Gar") 
 
