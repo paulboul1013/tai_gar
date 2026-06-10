@@ -1784,8 +1784,6 @@ class URL:
             self.path="blank"
             self.url_string="about:blank"
 
-
-
     def request(self):
 
         if self.scheme=="about":
@@ -2001,6 +1999,29 @@ class URL:
 
 
         raise Exception("Redirect loop detected!")
+
+    def __str__(self):
+        if self.view_source:
+            return "view-source:" + self.url_string
+
+        if self.scheme=="about":
+            return "about:"+self.path
+
+        if self.scheme=="data":
+            return "data:"+self.path
+
+        if self.scheme=="file":
+            return "file://"+self.path
+
+        port_part=":"+str(self.port)
+
+        if self.scheme=="https" and self.port==443:
+            port_part=""
+
+        if self.scheme=="http" and self.port==80:
+            port_part=""
+
+        return self.scheme+"://"+self.host+port_part+self.path
 
     def resolve(self,url):
         # absolute URL with scheme
