@@ -1303,6 +1303,42 @@ class Chrome:
                 "black",1
             ))
 
+        # back button
+        cmds.append(DrawOutline(self.back_rect,"black",1))
+        cmds.append(DrawText(
+            self.back_rect.left+self.padding,
+            self.back_rect.top,
+            "<",
+            self.font,
+            "black"
+        ))
+
+        # addres bar
+        cmds.append(DrawOutline(self.address_rect,"black",1))
+
+        if self.browser.active_tab and self.browser.active_tab.url:
+            url=str(self.browser.active_tab.url)
+        else:
+            url=""
+
+        cmds.append(DrawText(
+            self.address_rect.left+self.padding,
+            self.address_rect.top,
+            url,
+            self.font,
+            "black"
+        ))
+
+        # chrome and website content split line
+        cmds.append(DrawLine(
+            0,
+            self.bottom,
+            WIDTH,
+            self.bottom,
+            "black",
+            1
+        ))
+
         return cmds
 
     def click(self,x,y):
