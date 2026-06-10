@@ -1346,6 +1346,11 @@ class Chrome:
             self.browser.new_tab(URL("https://browser.engineering/"))
             return
         
+        if self.back_rect.contains_point(x,y):
+            if self.browser.active_tab:
+                self.browser.active_tab.go_back()
+            return
+        
         for i, tab in enumerate(self.browser.tabs):
             if self.tab_rect(i).contains_point(x,y):
                 self.browser.active_tab=tab
