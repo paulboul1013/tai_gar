@@ -1193,6 +1193,7 @@ class Chrome:
 
         self.padding=5
 
+        # first row: tab bar
         self.tabbar_top=0
         self.tabbar_bottom=self.font_height+2*self.padding
 
@@ -1205,7 +1206,27 @@ class Chrome:
             self.padding+self.font_height
         )
 
-        self.bottom = self.tabbar_bottom
+        # second row: URL bar
+        self.urlbar_top=self.tabbar_bottom
+        self.urlbar_bottom=self.urlbar_top+self.font_height+2*self.padding
+
+        back_width=self.font.measure("<")+2*self.padding
+
+        self.back_rect=Rect(
+            self.padding,
+            self.urlbar_top+self.padding,
+            self.padding+back_width,
+            self.urlbar_bottom-self.padding
+        )
+
+        self.address_rect=Rect(
+            self.back_rect.right+self.padding,
+            self.urlbar_top+self.padding,
+            WIDTH-self.padding,
+            self.urlbar_bottom-self.padding
+        )
+
+        self.bottom = self.urlbar_bottom
 
     def tab_rect(self,i):
         tabs_start=self.newtab_rect.right+self.padding
