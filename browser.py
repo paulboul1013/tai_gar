@@ -1673,6 +1673,9 @@ class Browser:
 
         self.window.bind("<Button-1>",self.handle_click)
 
+        self.window.bind("<Key>",self.handle_key)
+        self.window.bind("<Return>",self.handle_enter)
+
     def new_tab(self,url):
         new_tab=Tab(HEIGHT-self.chrome.bottom)
         new_tab.load(url)
