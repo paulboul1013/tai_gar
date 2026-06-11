@@ -1590,6 +1590,34 @@ class Tab:
         else:
             self.scrolldown(e)
 
+    def link_at(self,x,y):
+        # tab coordinate -> page coordinate
+        y+=self.scroll
+
+        objs = [
+            obj for obj in tree_to_list(self.document,[])
+            if obj.x is not None
+            and obj.y is not None
+            and obj.width is not None
+            and obj.height is not None
+            and obj.x <= x < obj.x+obj.width
+            and obj.y <= y < obj.y+obj.height
+        ]
+
+        if not objs:
+            return
+
+        # last matched layout object is ususally the most specific one
+        elt=objs[-1].node
+
+        while elt:
+            if isinstance(elt,Element) and elt.tag=="a" and "href" in elt.attributes:
+                return self.url.resolve(elt.attributes["href"])
+
+            elt=elt.parent
+
+        return None
+
     def click(self,x,y):
 
         # window/canvas coordinate -> page coordinate
