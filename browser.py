@@ -1679,6 +1679,7 @@ class Browser:
 
         self.window.bind("<Key>",self.handle_key)
         self.window.bind("<Return>",self.handle_enter)
+        self.window.bind("<BackSpace>",self.handle_backspace)
 
     def new_tab(self,url):
         new_tab=Tab(HEIGHT-self.chrome.bottom)
