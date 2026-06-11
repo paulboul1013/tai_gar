@@ -1753,6 +1753,10 @@ class Browser:
         self.chrome.enter()
         self.draw()
 
+    def handle_backspace(self,e):
+        self.chrome.backspace()
+        self.draw()
+
     def resize(self,e):
         if e.width <=10 or e.height<=10:
             return
