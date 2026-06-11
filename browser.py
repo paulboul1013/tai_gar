@@ -1741,7 +1741,9 @@ class Browser:
         self.chrome.keypress(e.char)
         self.draw()
 
-        
+    def handle_enter(self,e):
+        self.chrome.enter()
+        self.draw()
 
     def resize(self,e):
         if e.width <=10 or e.height<=10:
