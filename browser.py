@@ -1319,18 +1319,39 @@ class Chrome:
         # addres bar
         cmds.append(DrawOutline(self.address_rect,"black",1))
 
-        if self.browser.active_tab and self.browser.active_tab.url:
-            url=str(self.browser.active_tab.url)
-        else:
-            url=""
+        # if have focus，showing user inputing url and draw red cursor behind the url text
+        if self.focus=="address bar":
+            cmds.append(DrawText(
+                self.address_rect.left+self.padding,
+                self.address_rect.top,
+                self.address_bar,
+                self.font,
+                "black"
+            ))
 
-        cmds.append(DrawText(
-            self.address_rect.left+self.padding,
-            self.address_rect.top,
-            url,
-            self.font,
-            "black"
-        ))
+            w=self.font.measure(self.address_bar)
+            cmds.append(DrawRect(
+                self.address_rect.left+self.padding+w,
+                self.address_rect.top,
+                self.address_rect.left+self.padding+w,
+                self.address_rect.bottom,
+                "red",
+                1
+            ))
+        else:
+            # no focus, display url
+            if self.browser.active_tab and self.browser.active_tab.url:
+                url=str(self.browser.active_tab.url)
+            else:
+                url=""
+
+            cmds.append(DrawText(
+                self.address_rect.left+self.padding,
+                self.address_rect.top,
+                url,
+                self.font,
+                "black"
+            ))
 
         # chrome and website content split line
         cmds.append(DrawLine(
