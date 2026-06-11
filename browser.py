@@ -1391,6 +1391,11 @@ class Chrome:
     def keypress(self,char):
         if self.focus=="address bar":
             self.address_bar+=char
+
+    def enter(self):
+        if self.focus=="address bar":
+            self.browser.active_tab.load(URL(self.address_bar))
+            self.focus=None
         
 
 class Tab:
