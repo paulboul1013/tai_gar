@@ -1723,6 +1723,9 @@ class Browser:
         if e.y < self.chrome.bottom:
             self.chrome.click(e.x,e.y)
         else:
+            #click web page content,clear address bar focus
+            self.chrome.focus=None
+
             if not self.active_tab:
                 return
 
