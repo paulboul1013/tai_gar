@@ -1387,6 +1387,10 @@ class Chrome:
             if self.tab_rect(i).contains_point(x,y):
                 self.browser.active_tab=tab
                 return
+
+    def keypress(self,char):
+        if self.focus=="address bar":
+            self.address_bar+=char
         
 
 class Tab:
