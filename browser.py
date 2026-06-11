@@ -1345,6 +1345,9 @@ class Chrome:
         return cmds
 
     def click(self,x,y):
+        #click any chrome section，default is clear first
+        self.focus=None
+        
         if self.newtab_rect.contains_point(x,y):
             self.browser.new_tab(URL("https://browser.engineering/"))
             return
@@ -1352,6 +1355,11 @@ class Chrome:
         if self.back_rect.contains_point(x,y):
             if self.browser.active_tab:
                 self.browser.active_tab.go_back()
+            return
+
+        if self.address_rect.contains_point(x,y):
+            self.focus="address bar"
+            self.address_bar=""
             return
         
         for i, tab in enumerate(self.browser.tabs):
