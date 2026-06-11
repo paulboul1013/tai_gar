@@ -1731,6 +1731,18 @@ class Browser:
 
         self.draw()
 
+    def handle_key(self,e):
+        if len(e.char)==0:
+            return
+
+        if not (0x20 <= ord(e.char) < 0x7f): #skip non ASCII characters
+            return
+
+        self.chrome.keypress(e.char)
+        self.draw()
+
+        
+
     def resize(self,e):
         if e.width <=10 or e.height<=10:
             return
