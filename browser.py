@@ -1330,7 +1330,7 @@ class Chrome:
             ))
 
             w=self.font.measure(self.address_bar)
-            cmds.append(DrawRect(
+            cmds.append(DrawLine(
                 self.address_rect.left+self.padding+w,
                 self.address_rect.top,
                 self.address_rect.left+self.padding+w,
