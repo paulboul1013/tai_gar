@@ -1605,7 +1605,7 @@ class Tab:
         ]
 
         if not objs:
-            return
+            return None
 
         # last matched layout object is ususally the most specific one
         elt=objs[-1].node
