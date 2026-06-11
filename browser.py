@@ -1679,6 +1679,7 @@ class Browser:
         self.window.bind("<Button-5>",self.handle_down)
 
         self.window.bind("<Button-1>",self.handle_click)
+        self.window.bind("<Button-2>",self.handle_middle_click)
 
         self.window.bind("<Key>",self.handle_key)
         self.window.bind("<Return>",self.handle_enter)
