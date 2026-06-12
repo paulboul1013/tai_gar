@@ -1710,6 +1710,8 @@ class Browser:
     def draw(self):
         self.canvas.delete("all")
 
+        self.update_title()
+
         if self.active_tab:
             self.active_tab.draw(self.canvas,self.chrome.bottom)
 
