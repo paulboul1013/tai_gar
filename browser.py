@@ -1743,6 +1743,28 @@ class Browser:
 
         self.draw()
 
+    def handle_middle_click(self,e):
+        if not self.active_tab:
+            return
+
+        # middle click on the chrome，do nothing
+        if e.y < self.chrome.bottom:
+            return
+
+
+        # click web page content，clear address bar focus
+        self.chrome.focus=None
+        
+        # window coordinate -> tab coordinate
+        tab_y=e.y-self.chrome.bottom
+
+        url = self.active_tab.link_at(e.x,tab_y)
+
+        if url:
+            self.new_tab(url)
+        else:
+            self.draw()
+
     def handle_key(self,e):
         if len(e.char)==0:
             return
