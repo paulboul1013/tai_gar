@@ -1716,6 +1716,12 @@ class Browser:
         for cmd in self.chrome.paint():
             cmd.execute(0,self.canvas)
 
+    def update_title(self):
+        if self.active_tab:
+            self.window.title(self.active_tab.get_title())
+        else:
+            self.window.title("Tai Gar")
+
     def handle_down(self,e):
         if not self.active_tab:
             return
