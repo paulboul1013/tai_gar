@@ -1511,6 +1511,19 @@ class Tab:
             # reload back page and save it
             self.load(back)
 
+    def get_title(self):
+        if not self.nodes:
+            return "Tai Gar"
+
+        for node in tree_to_list(self.nodes,[]):
+            if isinstance(node,Element) and node.tag=="title":
+                title=style_tag_text(node).strip()
+
+                if title:
+                    return title
+
+        return "Tai Gar"
+
     def relayout(self):
         self.document=DocumentLayout(self.nodes)
         self.document.layout()
