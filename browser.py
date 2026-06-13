@@ -1546,6 +1546,12 @@ class Tab:
         # paint_tree(self.document,self.display_list)
         # self.draw()
 
+    def can_go_back(self):
+        return self.history_index > 0
+
+    def can_go_forward(self):
+        return self.history_index < len(self.history)-1
+
     def go_back(self):
         if len(self.history)>1:
             # remove current page
