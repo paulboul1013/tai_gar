@@ -1211,6 +1211,7 @@ class Chrome:
         self.urlbar_bottom=self.urlbar_top+self.font_height+2*self.padding
 
         back_width=self.font.measure("<")+2*self.padding
+        forward_width=self.font.measure(">")+2*self.padding
 
         self.back_rect=Rect(
             self.padding,
@@ -1219,8 +1220,15 @@ class Chrome:
             self.urlbar_bottom-self.padding
         )
 
-        self.address_rect=Rect(
+        self.forward_rect = Rect(
             self.back_rect.right+self.padding,
+            self.urlbar_top+self.padding,
+            self.back_rect.right+self.padding+forward_width,
+            self.urlbar_bottom-self.padding
+        )
+
+        self.address_rect=Rect(
+            self.forward_rect.right+self.padding,
             self.urlbar_top+self.padding,
             WIDTH-self.padding,
             self.urlbar_bottom-self.padding
