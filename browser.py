@@ -1408,6 +1408,11 @@ class Chrome:
                 self.browser.active_tab.go_back()
             return
 
+        if self.forward_rect.contains_point(x,y):
+            if self.browser.active_tab:
+                self.browser.active_tab.go_forward()
+            return
+
         if self.address_rect.contains_point(x,y):
             self.focus="address bar"
             self.address_bar=""
