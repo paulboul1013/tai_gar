@@ -1553,15 +1553,15 @@ class Tab:
         return self.history_index < len(self.history)-1
 
     def go_back(self):
-        if len(self.history)>1:
-            # remove current page
-            self.history.pop()
+        if self.can_go_back():
+            self.history_index-=1
+            self.load(self.history[self.history_index],add_to_history=False)
 
-            # load previous page
-            back=self.history.pop()
-
-            # reload back page and save it
-            self.load(back)
+        
+    def go_forward(self):
+        if self.can_go_forward():
+            self.history_index+=1
+            self.load(self.history[self.history_index],add_to_history=False)
 
     def get_title(self):
         if not self.nodes:
