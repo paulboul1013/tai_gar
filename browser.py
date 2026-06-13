@@ -1484,7 +1484,17 @@ class Tab:
     def load(self, url):
         self.url=url
         self.scroll=0
-        self.history.append(url)
+
+        if add_to_history:
+            # if current page in the history，not last page
+            #　represent user click back button
+            # if click new link or enter new URL
+            # forward history will be clear
+            if self.history_index < len(self.history)-1:
+                self.history=self.history[:self.history_index+1]
+
+            self.history.append(url)
+            self.history+=1
 
         body = url.request()
 
