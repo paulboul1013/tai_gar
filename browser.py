@@ -1481,7 +1481,7 @@ class Tab:
 
         
 
-    def load(self, url):
+    def load(self, url,add_to_history=True):
         self.url=url
         self.scroll=0
 
