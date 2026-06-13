@@ -1452,6 +1452,7 @@ class Tab:
         self.document=None
         
         self.history=[]
+        self.history_index=-1
 
         # self.window.title("Tai Gar") 
 
