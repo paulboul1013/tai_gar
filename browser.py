@@ -1494,7 +1494,7 @@ class Tab:
                 self.history=self.history[:self.history_index+1]
 
             self.history.append(url)
-            self.history+=1
+            self.history_index+=1
 
         body = url.request()
 
