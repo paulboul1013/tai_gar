@@ -1315,14 +1315,36 @@ class Chrome:
             ))
 
         # back button
-        cmds.append(DrawOutline(self.back_rect,"black",1))
+        if self.browser.active_tab and self.browser.active_tab.can_go_back():
+            back_color="black"
+        else:
+            back_color="gray"
+
+
+        cmds.append(DrawOutline(self.back_rect,back_color,1))
         cmds.append(DrawText(
             self.back_rect.left+self.padding,
             self.back_rect.top,
             "<",
             self.font,
-            "black"
+            back_color
         ))
+
+        # forward button
+        if self.browser.active_tab and self.browser.active_tab.can_go_forward():
+            forward_color="black"
+        else:
+            forward_color="gray"
+
+        cmds.append(DrawOutline(self.forward_rect,forward_color,1))
+        cmds.append(DrawText(
+            self.forward_rect.left+self.padding,
+            self.forward_rect.top,
+            ">",
+            self.font,
+            forward_color
+        ))
+        
 
         # addres bar
         cmds.append(DrawOutline(self.address_rect,"black",1))
