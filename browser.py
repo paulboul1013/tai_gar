@@ -1610,6 +1610,20 @@ class Tab:
 
             return
 
+    def navigate_to_fragment(self,fragment,add_to_history=True):
+        url=self.url.with_fragment(fragment)
+        self.url=url
+
+        if add_to_history:
+            if self.history_index < len(self.history)-1:
+                self.history=self.history[:self.history_index+1]
+
+            self.history.append(url)
+            self.history_index+=1
+
+        self.scroll_to_fragment(fragment)
+
+
     def draw(self,canvas,offset):
         # self.canvas.delete("all")
         for item in self.display_list:
