@@ -4,6 +4,7 @@ import sys
 import time 
 import gzip
 import tkinter
+from urllib.parse import unquote
 import os
 import tkinter.font
 # emolji cache
@@ -2029,7 +2030,7 @@ class URL:
             #example: text/html,Hello World!
             if "," in self.path:
                 media_type,body=self.path.split(",",1)
-                return body
+                return unquote(body)
             else:
                 return ""
 
