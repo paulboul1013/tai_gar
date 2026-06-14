@@ -2268,10 +2268,10 @@ class URL:
         base=str(self).split("#",1)[0]
 
         if fragment:
-            return base+"#"+fragment
+            return URL(base+"#"+fragment)
 
         else:
-            return base
+            return URL(base)
 
     def resolve(self,url):
 
