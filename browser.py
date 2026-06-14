@@ -2215,6 +2215,11 @@ class URL:
             return base
 
     def resolve(self,url):
+
+        # fragment-only relative URL: #section
+        if url.startswith("#"):
+            return self.with_fragment(url[1:])
+
         # absolute URL with scheme
         # examples: http://..., https://..., data:..., file:..., view-source:...
         if "://" in url or ":" in url.split("/",1)[0]: 
