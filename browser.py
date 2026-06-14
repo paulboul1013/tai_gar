@@ -1719,7 +1719,7 @@ class Tab:
 
         while elt:
             if isinstance(elt,Element) and elt.tag=="a" and "href" in elt.attributes:
-                return self.url.resolve(elt.attributes["href"])
+                return elt.attributes["href"]
 
             elt=elt.parent
 
