@@ -1887,6 +1887,7 @@ class URL:
         self.host=""
         self.path=""
         self.port=0
+        self.fragment=""
         self.url_string=url
         
         try:
@@ -1896,6 +1897,11 @@ class URL:
                 # 例如 "view-source:http://google.com" 變成 "http://google.com"
                 self.view_source=True
                 _,url=url.split(":",1)
+
+            # parse fragment: page.html#section
+            if "#" in url:
+                url,self.fragment=url.split("#",1)
+                
 
             if url=="about:blank":
                 self.scheme="about"
