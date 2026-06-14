@@ -1733,8 +1733,17 @@ class Tab:
         return self.url.resolve(href)
 
     def click(self,x,y):
-        url=self.link_at(x,y)
+        href = self.href_at(x,y)
 
+        if href is None:
+            return
+
+        if href.startswith("#"):
+            self.navigate_to_fragment(href[1:])
+            return
+
+        url=self.url.resolve(href)
+        
         if url:
             self.load(url)
 
