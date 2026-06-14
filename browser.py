@@ -1539,6 +1539,9 @@ class Tab:
 
         self.relayout()
 
+        if self.url.fragment:
+            self.scroll_to_fragment(self.url.fragment)
+
         # self.document=DocumentLayout(self.nodes)
         # self.document.layout()
 
