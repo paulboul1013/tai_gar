@@ -2205,6 +2205,15 @@ class URL:
 
         return self.scheme+"://"+self.host+port_part+self.path+fragment_part
 
+    def with_fragment(self,fragment):
+        base=str(self).split("#",1)[0]
+
+        if fragment:
+            return base+"#"+fragment
+
+        else:
+            return base
+
     def resolve(self,url):
         # absolute URL with scheme
         # examples: http://..., https://..., data:..., file:..., view-source:...
