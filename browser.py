@@ -2243,16 +2243,16 @@ class URL:
             fragment_part="#"+self.fragment
 
         if self.view_source:
-            return "view-source:" + self.url_string
+            return "view-source:" + self.url_string +fragment_part
 
         if self.scheme=="about":
-            return "about:"+self.path
+            return "about:"+self.path +fragment_part
 
         if self.scheme=="data":
-            return "data:"+self.path
+            return "data:"+self.path +fragment_part
 
         if self.scheme=="file":
-            return "file://"+self.path
+            return "file://"+self.path +fragment_part
 
         port_part=":"+str(self.port)
 
