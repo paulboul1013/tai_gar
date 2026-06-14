@@ -1583,6 +1583,30 @@ class Tab:
         self.display_list=[]
         paint_tree(self.document,self.display_list)
 
+    def scroll_to_fragment(self,fragment):
+        if not fragment:
+            return
+        
+        if not self.document:
+            return
+
+        for obj in tree_to_list(self.document,[]):
+            node=getattr(obj,"node",None)
+
+            if not isinstance(node,Element):
+                continue
+
+            if node.attributes.get("id") != fragment:
+                continue
+
+            if obj.y is None:
+                continue
+
+            max_y=max(self.document.height+2*VSTEP-self.tab_height,0)
+            self.scroll=min(obj.y,max_y)
+
+            return
+
     def draw(self,canvas,offset):
         # self.canvas.delete("all")
         for item in self.display_list:
