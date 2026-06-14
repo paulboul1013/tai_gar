@@ -1901,7 +1901,7 @@ class URL:
             # parse fragment: page.html#section
             if "#" in url:
                 url,self.fragment=url.split("#",1)
-                
+
 
             if url=="about:blank":
                 self.scheme="about"
@@ -2179,6 +2179,10 @@ class URL:
         raise Exception("Redirect loop detected!")
 
     def __str__(self):
+        fragment_part=""
+        if self.fragment:
+            fragment_part="#"+self.fragment
+
         if self.view_source:
             return "view-source:" + self.url_string
 
@@ -2199,7 +2203,7 @@ class URL:
         if self.scheme=="http" and self.port==80:
             port_part=""
 
-        return self.scheme+"://"+self.host+port_part+self.path
+        return self.scheme+"://"+self.host+port_part+self.path+fragment_part
 
     def resolve(self,url):
         # absolute URL with scheme
