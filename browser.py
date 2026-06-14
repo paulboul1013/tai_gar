@@ -1682,7 +1682,7 @@ class Tab:
         else:
             self.scrolldown(e)
 
-    def link_at(self,x,y):
+    def href_at(self,x,y):
         # tab coordinate -> page coordinate
         y+=self.scroll
 
@@ -1709,6 +1709,14 @@ class Tab:
             elt=elt.parent
 
         return None
+
+    def link_at(self,x,y):
+        href=self.href_at(x,y)
+        
+        if href is None:
+            return None
+
+        return self.url.resolve(href)
 
     def click(self,x,y):
         url=self.link_at(x,y)
