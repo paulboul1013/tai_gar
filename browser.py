@@ -4,7 +4,7 @@ import sys
 import time 
 import gzip
 import tkinter
-from urllib.parse import unquote
+from urllib.parse import unquote, quote_plus
 import os
 import tkinter.font
 # emolji cache
