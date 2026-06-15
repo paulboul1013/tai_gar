@@ -449,7 +449,11 @@ class TextLayout:
 
 
     def paint(self):
-        color=self.node.style["color"]
+        if in_visited_link(self.node):
+            color="purple"
+        else:
+            color=self.node.style["color"]
+            
         return [DrawText(self.x,self.y,self.word,self.font,color)]
 
 
