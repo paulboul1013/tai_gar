@@ -139,6 +139,19 @@ def style_tag_text(node):
 
     return "".join(out)
 
+def is_visited_link(node):
+    while node:
+        if (
+            isinstance(node,Element)
+            and node.tag=="a"
+            and getattr(node,"is_visited",False)
+        ):
+            return True
+
+        node=node.parent
+
+    return False
+
 class Rect:
     def __init__(self,left,top,right,bottom):
         self.left=left
