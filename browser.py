@@ -453,7 +453,7 @@ class TextLayout:
             color="purple"
         else:
             color=self.node.style["color"]
-            
+
         return [DrawText(self.x,self.y,self.word,self.font,color)]
 
 
@@ -1481,7 +1481,7 @@ class Chrome:
         
 
 class Tab:
-    def __init__(self,tab_height):
+    def __init__(self,tab_height,visited_urls):
         # self.window = tkinter.Tk()
         self.width=WIDTH
         self.height=HEIGHT
@@ -1493,6 +1493,8 @@ class Tab:
         self.url=None
         self.nodes=None
         self.document=None
+
+        self.visited_urls = visited_urls
         
         self.history=[]
         self.history_index=-1
