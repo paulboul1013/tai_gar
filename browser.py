@@ -1424,6 +1424,24 @@ class Chrome:
                 self.browser.active_tab=tab
                 return
 
+    def is_url_like(self,text):
+        return(
+            "://" in text
+            or text.startswith("about:")
+            or text.startswith("data:")
+            or text.startswith("file:")
+            or text.startswith("view-source:")
+        )
+
+    def address_bar_to_url(self,text):
+        text=text.strip()
+
+        if self.is_url_like(text):
+            return URL(text)
+
+        query=quote_plus(text)
+        return URL("https://google.com/search?1="+query)
+
     def keypress(self,char):
         if self.focus=="address bar":
             self.address_bar+=char
