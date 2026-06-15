@@ -1448,7 +1448,13 @@ class Chrome:
 
     def enter(self):
         if self.focus=="address bar":
-            self.browser.active_tab.load(URL(self.address_bar))
+            url=self.address_bar_to_url(self.address_bar)
+
+            if self.browser.active_tab:
+                self.browser.active_tab.load(url)
+            else:
+                self.browser.new_tab(url)
+
             self.focus=None
 
     def backspace(self):
