@@ -1440,7 +1440,7 @@ class Chrome:
             return URL(text)
 
         query=quote_plus(text)
-        return URL("https://google.com/search?1="+query)
+        return URL("https://google.com/search?q="+query)
 
     def keypress(self,char):
         if self.focus=="address bar":
