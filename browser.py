@@ -2951,6 +2951,15 @@ def style(node,rules):
             else:
                 node.style[property]=INHERITED_PROPERTIES[property]
 
+    # handle unsupported font-size keyword
+    font_size=node.style.get("font-size","16px")
+
+    if (not font_size.endswith("px") and not font_size.endswith("%")):
+        if node.parent:
+            node.style["font-size"]=node.parent.style["font-size"]
+        else:
+            node.style["font-size"]=INHERITED_PROPERTIES["font-size"]
+
     # convert the percentage of font-size to px
     # example: 150% -> parent_font_size * 1.5
     if node.style["font-size"].endswith("%"):
