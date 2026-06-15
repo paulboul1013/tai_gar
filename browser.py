@@ -5,6 +5,7 @@ import time
 import gzip
 import tkinter
 from urllib.parse import unquote, quote_plus
+from html import unescape
 import os
 import tkinter.font
 # emolji cache
@@ -2451,7 +2452,7 @@ class HTMLParser:
         if not self.unfinished: return
         parent=self.unfinished[-1]
 
-        decode_text=text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+        decode_text=unescape(text)
 
         node=Text(decode_text,parent)
         parent.children.append(node)
