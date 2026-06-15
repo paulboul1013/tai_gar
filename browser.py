@@ -2943,6 +2943,14 @@ def style(node,rules):
 
                 apply_style(node,prop,value,priority)
 
+    #handle CSS inherit keyword
+    for property in INHERITED_PROPERTIES:
+        if node.style.get(property) == "inherit":
+            if node.parent:
+                node.style[property]=node.parent.style[property]
+            else:
+                node.style[property]=INHERITED_PROPERTIES[property]
+
     # convert the percentage of font-size to px
     # example: 150% -> parent_font_size * 1.5
     if node.style["font-size"].endswith("%"):
