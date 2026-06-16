@@ -1698,6 +1698,10 @@ class Tab:
             self.history.append(url)
             self.history_index+=1
 
+        self.mark_visited_links()
+
+        self.relayout()
+
         self.scroll_to_fragment(fragment)
 
 
