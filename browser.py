@@ -1584,6 +1584,8 @@ class Tab:
 
         style(self.nodes,sorted(rules,key=cascade_priority))
 
+        self.mark_visited_links()
+
         self.relayout()
 
         if self.url.fragment:
