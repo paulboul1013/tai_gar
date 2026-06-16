@@ -2015,6 +2015,7 @@ class Browser:
             tab.tab_height=HEIGHT-self.chrome.bottom
 
             if tab.nodes:
+                tab.mark_visited_links()
                 tab.relayout()
 
         self.draw()
