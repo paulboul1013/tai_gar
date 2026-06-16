@@ -1885,7 +1885,7 @@ class Browser:
         self.window.bind("<BackSpace>",self.handle_backspace)
 
     def new_tab(self,url):
-        new_tab=Tab(HEIGHT-self.chrome.bottom)
+        new_tab=Tab(HEIGHT-self.chrome.bottom,self.visited_urls)
         new_tab.load(url)
 
         self.tabs.append(new_tab)
