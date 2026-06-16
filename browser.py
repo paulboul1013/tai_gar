@@ -1687,6 +1687,8 @@ class Tab:
         url=self.url.with_fragment(fragment)
         self.url=url
 
+        self.visited_urls.add(str(url))
+
         if add_to_history:
             if self.history_index < len(self.history)-1:
                 self.history=self.history[:self.history_index+1]
