@@ -1852,6 +1852,7 @@ class Browser:
     def __init__(self):
         self.tabs=[]
         self.active_tab=None
+        self.visited_urls=set()
 
         self.window=tkinter.Tk()
         self.window.title("Tai Gar")
