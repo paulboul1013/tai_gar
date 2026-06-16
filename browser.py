@@ -1643,7 +1643,7 @@ class Tab:
             if node.tag != "a":
                 continue
 
-            if "href" not in node.attribute:
+            if "href" not in node.attributes:
                 continue
 
             try:
