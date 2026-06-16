@@ -1530,6 +1530,8 @@ class Tab:
         self.url=url
         self.scroll=0
 
+        self.visited_urls.add(str(url))
+
         if add_to_history:
             # if current page in the history，not last page
             #　represent user click back button
