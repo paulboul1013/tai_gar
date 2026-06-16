@@ -1624,6 +1624,30 @@ class Tab:
 
         return "Tai Gar"
 
+    def mark_visited_links(self):
+        if not self.nodes or not self.url:
+            return
+
+        for node in tree_to_list(self.nodes,[]):
+            if not isinstance(node,Element):
+                continue
+
+            node.is_visited=False
+
+            if node.tag != "a":
+                continue
+
+            if "href" not in node.attribute:
+                continue
+
+            try:
+                link_url=self.url.resolve(node.attributes["href"])
+            except Exception:
+                continue
+
+            if str(link_url) in self.visited_urls:
+                node.is_visited=True
+
     def relayout(self):
         self.document=DocumentLayout(self.nodes)
         self.document.layout()
