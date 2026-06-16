@@ -1439,6 +1439,8 @@ class Chrome:
         
         for i, tab in enumerate(self.browser.tabs):
             if self.tab_rect(i).contains_point(x,y):
+                tab.mark_visited_links()
+                tab.relayout()
                 self.browser.active_tab=tab
                 return
 
