@@ -1175,6 +1175,18 @@ class HasSelector:
 
         return False
 
+class VisitedSelector:
+    def __init__(self):
+        # pseduo-class selector has same priority as class selector 
+        self.priority=10
+
+    def matches(self,node):
+        return (
+            isinstance(node,Element) 
+            and node.tag=="a"
+            and getattr(node,"is_visited",False)
+        )
+
 class DescendantSelector:
     def __init__(self,selectors):
         self.selectors=selectors
