@@ -1493,6 +1493,7 @@ class Tab:
         self.document=None
 
         self.visited_urls = visited_urls
+        self.rules=[]
         
         self.history=[]
         self.history_index=-1
