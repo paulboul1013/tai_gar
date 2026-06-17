@@ -1651,6 +1651,13 @@ class Tab:
             if str(link_url) in self.visited_urls:
                 node.is_visited=True
 
+    def restyle(self):
+        if not self.nodes:
+            return
+
+        self.mark_visited_links()
+        style(self.nodes,self.rules)
+
     def relayout(self):
         self.document=DocumentLayout(self.nodes)
         self.document.layout()
