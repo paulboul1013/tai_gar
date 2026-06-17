@@ -2879,9 +2879,9 @@ class CSSParser:
             
             elif self.s[self.i]==":":
                 self.literal(":")
-                pseduo = self.identifier().casefold()
+                pseudo = self.identifier().casefold()
 
-                if pseduo=="has":
+                if pseudo=="has":
                     inner_selector = self.parenthesized_selector()
                     selectors.append(HasSelector(inner_selector))
                 else:
