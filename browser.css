@@ -32,6 +32,10 @@ a {
     color: blue;
 }
 
+a:visited {
+    color: purple;
+}
+
 i {
     font-style: italic;
 }
