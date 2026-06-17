@@ -1581,9 +1581,9 @@ class Tab:
             rules.extend(CSSParser(css_text).parse())
 
 
-        style(self.nodes,sorted(rules,key=cascade_priority))
+        self.rules=sorted(rules,key=cascade_priority)
 
-        self.mark_visited_links()
+        self.restyle()
 
         self.relayout()
 
