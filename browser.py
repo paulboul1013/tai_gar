@@ -2884,6 +2884,10 @@ class CSSParser:
                 if pseudo=="has":
                     inner_selector = self.parenthesized_selector()
                     selectors.append(HasSelector(inner_selector))
+                
+                elif pseudo=="visited":
+                    selectors.append(VisitedSelector())
+
                 else:
                     raise Exception("Parsing error")
 
