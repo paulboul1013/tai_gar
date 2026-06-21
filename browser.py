@@ -1448,6 +1448,7 @@ class Chrome:
             or text.startswith("data:")
             or text.startswith("file:")
             or text.startswith("view-source:")
+            or text.startswith("mailto:")
         )
 
     def address_bar_to_url(self,text):
