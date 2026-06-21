@@ -5,7 +5,7 @@ import time
 import gzip
 import tkinter
 from urllib.parse import unquote, quote_plus
-from html import unescape
+from html import unescape,escape
 import webbrowser
 import os
 import tkinter.font
