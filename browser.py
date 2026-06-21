@@ -1883,6 +1883,7 @@ class Browser:
         self.tabs=[]
         self.active_tab=None
         self.visited_urls=set()
+        self.bookmarks=set()
 
         self.window=tkinter.Tk()
         self.window.title("Tai Gar")
