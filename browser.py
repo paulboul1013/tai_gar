@@ -2377,7 +2377,9 @@ class URL:
 
     def open_external(self):
         if self.scheme=="mailto":
-            webbrowser.open(str(self))
+            print("open external URL:",str(self))
+            ok = webbrowser.open(str(self))
+            print("webbrowser.open returned:",ok)
             return True
 
         return False
@@ -2449,8 +2451,6 @@ class URL:
             # unsupported scheme: javascript:,tel:,sms:,ftp:,..
             return None
 
-
-
         # path-relative URL: page.html
         dir,_ = self.path.rsplit("/",1) 
         while url.startswith("../"): # deal with relative URL parent directory `..`
@@ -2458,7 +2458,7 @@ class URL:
             if "/" in dir:
                 dir, _ = dir.rsplit("/",1)
 
-                # host-relative URL
+        # host-relative URL
         if url.startswith("/"):
             if self.scheme in ["http","https"]:
                 return URL(self.scheme+"://"+self.host+":"+str(self.port)+dir+"/"+url)
