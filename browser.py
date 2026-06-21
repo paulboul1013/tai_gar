@@ -2054,6 +2054,12 @@ class URL:
                 self.path="blank"
                 return
 
+            if url.startswith("mailto:"):
+                # self.scheme="mailto"
+                self.scheme,self.path=url.split(":",1)
+                self.url_string="mailto:"+self.path
+                return
+
             
             if url.startswith("data:"):
                 self.scheme="data"
@@ -2065,7 +2071,7 @@ class URL:
                 self.scheme, url = url.split("://", 1)
 
             # 支援的 URL Scheme
-            if self.scheme not in ["http", "https","file","data","about"]:
+            if self.scheme not in ["http", "https","file","data","about","mailto"]:
                 raise ValueError(f"Unsupported scheme: {self.scheme}")
             
 
