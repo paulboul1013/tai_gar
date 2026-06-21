@@ -2144,6 +2144,15 @@ class URL:
                     return f.read()
             except Exception as e:
                 print(f"File read error: {e}")
+                return f"""
+                <html>
+                <body>
+                    <h1>File not found</h1>
+                    <p>{self.path}</p>
+                    <pre>{e}</pre>
+                </body>
+                </html>
+                """
         
         current_url=self
         redirect_limit=10 
