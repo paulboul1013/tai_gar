@@ -2330,6 +2330,16 @@ class URL:
 
         raise Exception("Redirect loop detected!")
 
+    def is_external(self):
+        return self.scheme in ["mailto"]
+
+    def open_external(self):
+        if self.scheme=="mailto":
+            webbrowser.open(str(self))
+            return True
+
+        return False
+
     def __str__(self):
         fragment_part=""
         if self.fragment:
