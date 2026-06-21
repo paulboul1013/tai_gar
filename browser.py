@@ -6,6 +6,7 @@ import gzip
 import tkinter
 from urllib.parse import unquote, quote_plus
 from html import unescape
+import webbrowser
 import os
 import tkinter.font
 # emolji cache
