@@ -2449,15 +2449,7 @@ class URL:
             # unsupported scheme: javascript:,tel:,sms:,ftp:,..
             return None
 
-        # host-relative URL
-        if url.startswith("/"):
-            if self.scheme in ["http","https"]:
-                return URL(self.scheme+"://"+self.host+":"+str(self.port)+url)
 
-            if self.scheme=="file":
-                return URL("file://"+url)
-
-            return None
 
         # path-relative URL: page.html
         dir,_ = self.path.rsplit("/",1) 
@@ -2465,6 +2457,16 @@ class URL:
             _,url= url.split("/",1)
             if "/" in dir:
                 dir, _ = dir.rsplit("/",1)
+
+                # host-relative URL
+        if url.startswith("/"):
+            if self.scheme in ["http","https"]:
+                return URL(self.scheme+"://"+self.host+":"+str(self.port)+dir+"/"+url)
+
+            if self.scheme=="file":
+                return URL("file://"+dir+"/"+url)
+
+            return None
 
         return URL(self.scheme+ "://" +self.host+":"+str(self.port)+dir+"/"+url)
         
