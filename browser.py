@@ -1468,6 +1468,11 @@ class Chrome:
         if self.focus=="address bar":
             url=self.address_bar_to_url(self.address_bar)
 
+            if url.is_external():
+                url.open_external()
+                self.focus=None
+                return
+
             if self.browser.active_tab:
                 self.browser.active_tab.load(url)
             else:
