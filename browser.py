@@ -1941,6 +1941,36 @@ class Browser:
         else:
             self.window.title("Tai Gar")
 
+    def current_url_string(self):
+        if not self.active_tab:
+            return None
+
+        if not self.active_tab.url:
+            return None
+
+        url = str(self.active_tab.url)
+
+        # first not allow bookmark internal page,avoid about:bookmarks marks self
+        if url in ["about:blank","about:bookmarks"]:
+            return None
+        
+        return url
+
+    def is_current_page_bookmarked(self):
+        url = self.current_url_string()
+        return url is not None and url in self.bookmarks
+
+    def toggle_bookmark(self):
+        url = self.current_url_string()
+
+        if url is None:
+            return 
+
+        if url in self.bookmarks:
+            self.bookmarks.remove(url)
+        else:
+            self.bookmarks.add(url)
+
     def handle_down(self,e):
         if not self.active_tab:
             return
