@@ -1830,8 +1830,14 @@ class Tab:
 
         url=self.url.resolve(href)
         
-        if url:
-            self.load(url)
+        if url is None:
+            return
+
+        if url.is_external():
+            url.open_external()
+            return
+        
+        self.load(url)
 
     def resize(self,e):
         if e.width <=10 or e.height <=10:
