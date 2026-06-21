@@ -1486,7 +1486,7 @@ class Chrome:
         
 
 class Tab:
-    def __init__(self,tab_height,visited_urls):
+    def __init__(self,tab_height,visited_urls,bookmarks):
         # self.window = tkinter.Tk()
         self.width=WIDTH
         self.height=HEIGHT
@@ -1500,6 +1500,7 @@ class Tab:
         self.document=None
 
         self.visited_urls = visited_urls
+        self.bookmarks = bookmarks
         self.rules=[]
         
         self.history=[]
