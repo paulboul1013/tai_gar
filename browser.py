@@ -2127,6 +2127,16 @@ class URL:
             else:
                 return ""
 
+        if self.scheme=="mailto":
+            return """
+            <html>
+            <body>
+                <h1>External mail link</h1>
+                <p>This link should be opened by your mail application.</p>
+            </body>
+            </html>
+            """
+
 
         if self.scheme=="file":
             try:
