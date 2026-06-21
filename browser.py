@@ -2072,9 +2072,10 @@ class URL:
                 url,self.fragment=url.split("#",1)
 
 
-            if url=="about:blank":
+            if url.startswith("about:"):
                 self.scheme="about"
-                self.path="blank"
+                self.path=url.split(":",1)[1]
+                self.url_string = "about:"+self.path
                 return
 
             if url.startswith("mailto:"):
