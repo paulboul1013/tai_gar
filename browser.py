@@ -2370,23 +2370,44 @@ class URL:
             return URL(base)
 
     def resolve(self,url):
+        if url is None:
+            return None
+
+        url=url.strip()
+        
+        if not url:
+            return self
 
         # fragment-only relative URL: #section
         if url.startswith("#"):
             return self.with_fragment(url[1:])
 
-        # absolute URL with scheme
-        # examples: http://..., https://..., data:..., file:..., view-source:...
-        if "://" in url or ":" in url.split("/",1)[0]: 
-            return URL(url)
 
-        if url.startswith("//"): # scheme-relative URL
+        if url.startswith("//"): # scheme-relative URL: //example.com/path
             return URL(self.scheme+":"+url)
 
-        if url.startswith("/"): # host-relative URL
-            return URL(self.scheme+"://"+self.host+":"+str(self.port)+url)
+        # explicit URL with scheme
+        # examples: http:, https:, data:, file:, view-source:, mailto
+        if ":" in url.split("/",1)[0]: 
+            scheme = url.split(":",1)[0].casefold()
 
-        # path-relative URL
+            if scheme in ["http", "https", "file", "data", "about", "view-source", "mailto"]:
+                return URL(url)
+
+            # unsupported scheme: javascript:,tel:,sms:,ftp:,..
+            return None
+
+        # host-relative URL
+        if url.startswith("/"):
+            if self.scheme in ["http","https"]:
+                return URL(self.scheme+"://"+self.host+":"+str(self.port)+url)
+
+            if self.scheme=="file":
+                return URL("file://"+url)
+
+            return None
+
+        # path-relative URL: page.html
         dir,_ = self.path.rsplit("/",1) 
         while url.startswith("../"): # deal with relative URL parent directory `..`
             _,url= url.split("/",1)
