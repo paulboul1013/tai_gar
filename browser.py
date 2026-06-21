@@ -1649,6 +1649,9 @@ class Tab:
             except Exception:
                 continue
 
+            if link_url is None:
+                continue
+
             if str(link_url) in self.visited_urls:
                 node.is_visited=True
 
