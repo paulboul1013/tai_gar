@@ -1564,6 +1564,10 @@ class Tab:
 
         for link in links:
             style_url=url.resolve(link)
+
+            if style_url is None:
+                continue
+
             try:
                 body=style_url.request()
             except Exception:
