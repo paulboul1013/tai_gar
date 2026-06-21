@@ -2335,6 +2335,9 @@ class URL:
         if self.fragment:
             fragment_part="#"+self.fragment
 
+        if self.scheme=="mailto":
+            return "mailto:"+self.path
+
         if self.view_source:
             return "view-source:" + self.url_string +fragment_part
 
