@@ -1985,7 +1985,11 @@ class Browser:
         url = self.active_tab.link_at(e.x,tab_y)
 
         if url:
-            self.new_tab(url)
+            if url.is_external():
+                url.open_external()
+                self.draw()
+            else:
+                self.new_tab(url)
         else:
             self.draw()
 
