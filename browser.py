@@ -1369,7 +1369,25 @@ class Chrome:
             self.font,
             forward_color
         ))
-        
+
+        # bookmark button
+        if self.browser.is_current_page_bookmarked():
+            bookmark_bg="yellow"
+            bookmark_fg="black"
+        else:
+            bookmark_bg="white"
+            bookmark_fg = "black" if self.browser.current_url_string() else "gray"
+
+
+        cmds.append(DrawRect(self.bookmark_rect,bookmark_bg))
+        cmds.append(DrawOutline(self.bookmark_rect,bookmark_fg,1))
+        cmds.append(DrawText(
+            self.bookmark_rect.left+self.padding,
+            self.bookmark_rect.top,
+            "★",
+            self.font,
+            bookmark_fg
+        ))
 
         # addres bar
         cmds.append(DrawOutline(self.address_rect,"black",1))
