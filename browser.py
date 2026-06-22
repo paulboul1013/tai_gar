@@ -1243,8 +1243,17 @@ class Chrome:
             self.urlbar_bottom-self.padding
         )
 
-        self.address_rect=Rect(
+        bookmark_width = self.font.measure("★")+2*self.padding
+
+        self.bookmark_rect=Rect(
             self.forward_rect.right+self.padding,
+            self.urlbar_top+self.padding,
+            self.forward_rect.right+self.padding+bookmark_width,
+            self.urlbar_bottom-self.padding
+        )
+
+        self.address_rect=Rect(
+            self.bookmark_rect.right+self.padding,
             self.urlbar_top+self.padding,
             WIDTH-self.padding,
             self.urlbar_bottom-self.padding
