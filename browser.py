@@ -1562,7 +1562,7 @@ class Tab:
         # self.window.bind("<Button-4>",self.scrollup)
         # self.window.bind("<Button-5>",self.scrolldown)
 
-    def is_internal(self,url):
+    def is_internal_page(self,url):
         return url.scheme=="about" and url.path=="bookmarks"
 
     def request_internal_page(self,url):
@@ -1611,15 +1611,22 @@ class Tab:
             self.history.append(url)
             self.history_index+=1
 
-        body = url.request()
+        
 
-        if url.view_source:
-            # execute syntax highlight: make raw html turn into highlighted html
-            highlighted_body=ViewSourceParser(body).handle_view_source()
-            # after highlight html feed standard Parser make DOM tree
-            self.nodes=HTMLParser(highlighted_body).parse()
-        else:
+        if self.is_internal_page(url):
+            body = self.request_internal_page(url)
             self.nodes=HTMLParser(body).parse()
+        
+        else:
+            body = url.request()
+
+            if url.view_source:
+                # execute syntax highlight: make raw html turn into highlighted html
+                highlighted_body=ViewSourceParser(body).handle_view_source()
+                # after highlight html feed standard Parser make DOM tree
+                self.nodes=HTMLParser(highlighted_body).parse()
+            else:
+                self.nodes=HTMLParser(body).parse()
 
         rules=DEFAULT_STYLE_SHEET.copy()
 
