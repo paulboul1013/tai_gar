@@ -1562,7 +1562,37 @@ class Tab:
         # self.window.bind("<Button-4>",self.scrollup)
         # self.window.bind("<Button-5>",self.scrolldown)
 
+    def is_internal(self,url):
+        return url.scheme=="about" and url.path=="bookmarks"
+
+    def request_internal_page(self,url):
+        if url.path=="bookmarks":
+            return self.bookmarks_page()
         
+        return ""
+        
+    def bookmarks_page(self):
+        out=[]
+        out.append("<html>")
+        out.append("<head><title>Bookmarks</title></head>")
+        out.append("<body>")
+        out.append("<h1>Bookmarks</h1>")
+
+        if not self.bookmarks:
+            out.append("<p>No bookmarks yet.</p>")
+        else:
+            out.append("<ul>")
+            
+            for url in sorted(self.bookmarks):
+                safe_url=escape(url,quote=True)
+                out.append(f'<li><a href="{safe_url}">{safe_url}</a></li>')
+
+            out.append("</ul>")
+
+        out.append("</body>")
+        out.append("</html>")
+
+        return "\n".join(out)
 
     def load(self, url,add_to_history=True):
         self.url=url
