@@ -2089,13 +2089,23 @@ class BrowserWindow:
         self.window.protocol("WM_DELETE_WINDOW",self.close)
 
     def close(self):
+        is_root_window  = self.window == self.app.root
+
         if self in self.app.windows:
             self.app.windows.remove(self) # remove closed window
 
-        self.window.destroy()
+        # still have other browser windows
+        # if this window is root,not destroy it，withdraw window
+        if self.app.windows:
+            if is_root_window:
+                self.window.withdraw()
+            else:
+                self.window.destroy()
 
-        if not self.app.windows: # no any windows ，end the process
-            self.app.root.quit()
+            return
+
+        # last window is root，can destroy
+        self.app.root.destroy()
 
     def new_tab(self,url):
         new_tab=Tab(HEIGHT-self.chrome.bottom,self.app.visited_urls,self.app.bookmarks)
