@@ -3427,17 +3427,15 @@ if __name__ == "__main__":
         print("RTL mode enabled")
 
     
-    if len(sys.argv) > 1:
-        url_arg=sys.argv[1]
-        
+    if len(sys.argv) >= 2:
+        url = URL(sys.argv[1])
     else:
-        print("need to input url argument")
-        sys.exit(1)
+        url = URL("https://browser.engineering/")
 
-    target_url = URL(url_arg)
 
-    browser = Browser()
-    browser.new_tab(target_url)
+    app = BrowserApp()
+    app.new_window(url)
+    app.run()
 
     print("--- DOM Tree ---")
     print_tree(browser.active_tab.nodes)
