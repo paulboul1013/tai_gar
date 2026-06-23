@@ -1468,6 +1468,8 @@ class Chrome:
         return cmds
 
     def click(self,x,y):
+        was_address_bar_focused = self.focus=="address bar"
+
         #click any chrome section，default is clear first
         self.focus=None
         
@@ -1491,7 +1493,17 @@ class Chrome:
 
         if self.address_rect.contains_point(x,y):
             self.focus="address bar"
-            self.address_bar=""
+        
+            # first click address bar: copy current page URL
+            # If it was already focused, keep user's current editing text
+            if not was_address_bar_focused:
+                if self.browser.active_tab and self.browser.active_tab.url:
+                    self.address_bar = str(self.browser.active_tab.url)
+                else:
+                    self.address_bar = ""
+
+            self.address_bar_cursor = self.cursor_index_from_x(x)
+
             return
         
         for i, tab in enumerate(self.browser.tabs):
