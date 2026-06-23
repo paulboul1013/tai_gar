@@ -2095,7 +2095,7 @@ class BrowserWindow:
         self.window.destroy()
 
         if not self.app.windows: # no any windows ，end the process
-            self.app.root.quite()
+            self.app.root.quit()
 
     def new_tab(self,url):
         new_tab=Tab(HEIGHT-self.chrome.bottom,self.app.visited_urls,self.app.bookmarks)
@@ -3439,9 +3439,9 @@ if __name__ == "__main__":
     app.run()
 
     print("--- DOM Tree ---")
-    print_tree(browser.active_tab.nodes)
+    print_tree(app.active_tab.nodes)
     print("----------------")
-    print("display items:", len(browser.active_tab.display_list))
-    print("document height:", browser.active_tab.document.height)
+    print("display items:", len(app.active_tab.display_list))
+    print("document height:", app.active_tab.document.height)
 
     tkinter.mainloop()
