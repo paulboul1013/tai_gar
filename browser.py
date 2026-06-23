@@ -1274,6 +1274,12 @@ class Chrome:
             self.tabbar_bottom
         )
 
+    def clamp_address_bar_cursor(self):
+        self.address_bar_cursor=max(
+            0,
+            min(self.address_bar_cursor,len(self.address_bar))
+        )
+
     # convert mouse x coordinate to string index
     def cursor_index_from_x(self,x):
         local_x = x-self.address_rect.left-self.padding
