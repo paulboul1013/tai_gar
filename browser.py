@@ -2198,6 +2198,14 @@ class Browser:
         self.chrome.backspace()
         self.draw()
 
+    def handle_left(self,e):
+        self.chrome.left()
+        self.draw()
+
+    def handle_right(self,e):
+        self.chrome.right()
+        self.draw()
+
     def resize(self,e):
         if e.width <=10 or e.height<=10:
             return
