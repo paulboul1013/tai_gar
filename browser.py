@@ -2044,14 +2044,14 @@ class Tab:
             self.draw()
 
 
-class Browser:
-    def __init__(self):
+class BrowserWindow:
+    def __init__(self,app,window):
+        self.app=app
+        self.window=window
+
         self.tabs=[]
         self.active_tab=None
-        self.visited_urls=set()
-        self.bookmarks=set()
 
-        self.window=tkinter.Tk()
         self.window.title("Tai Gar")
 
         self.canvas = tkinter.Canvas(
