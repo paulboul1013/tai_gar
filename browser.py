@@ -2126,7 +2126,7 @@ class BrowserWindow:
 
     def is_current_page_bookmarked(self):
         url = self.current_url_string()
-        return url is not None and url in self.bookmarks
+        return url is not None and url in self.app.bookmarks
 
     def toggle_bookmark(self):
         url = self.current_url_string()
@@ -2134,10 +2134,10 @@ class BrowserWindow:
         if url is None:
             return 
 
-        if url in self.bookmarks:
-            self.bookmarks.remove(url)
+        if url in self.app.bookmarks:
+            self.app.bookmarks.remove(url)
         else:
-            self.bookmarks.add(url)
+            self.app.bookmarks.add(url)
 
     def handle_down(self,e):
         if not self.active_tab:
