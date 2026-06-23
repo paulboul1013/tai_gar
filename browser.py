@@ -2083,6 +2083,10 @@ class BrowserWindow:
         self.window.bind("<Left>",self.handle_left)
         self.window.bind("<Right>",self.handle_right)
 
+        self.window.bind("<Control-n>",self.handle_new_window)
+        self.window.bind("<Control-N>",self.handle_new_window)
+
+
     def new_tab(self,url):
         new_tab=Tab(HEIGHT-self.chrome.bottom,self.visited_urls,self.bookmarks)
         new_tab.load(url)
@@ -2230,6 +2234,9 @@ class BrowserWindow:
     def handle_right(self,e):
         self.chrome.right()
         self.draw()
+
+    def handle_new_window(self,e):
+        self.app.new_window(URL("https://browser.engineering/"))
 
     def resize(self,e):
         if e.width <=10 or e.height<=10:
