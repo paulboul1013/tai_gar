@@ -1425,11 +1425,17 @@ class Chrome:
                 "black"
             ))
 
-            w=self.font.measure(self.address_bar)
+            self.clamp_address_bar_cursor()
+
+            cursor_text = self.address_bar[:self.address_bar_cursor]
+            w=self.font.measure(cursor_text)
+
+            cursor_x = self.address_rect.left+self.padding+w
+
             cmds.append(DrawLine(
-                self.address_rect.left+self.padding+w,
+                cursor_x,
                 self.address_rect.top,
-                self.address_rect.left+self.padding+w,
+                cursor_x,
                 self.address_rect.bottom,
                 "red",
                 1
