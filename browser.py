@@ -2098,7 +2098,8 @@ class BrowserWindow:
             self.app.root.quite()
 
     def new_tab(self,url):
-        new_tab=Tab(HEIGHT-self.chrome.bottom,self.visited_urls,self.bookmarks)
+        new_tab=Tab(HEIGHT-self.chrome.bottom,self.app.visited_urls,self.app.bookmarks)
+        
         new_tab.load(url)
 
         self.tabs.append(new_tab)
