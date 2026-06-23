@@ -1534,7 +1534,16 @@ class Chrome:
 
     def keypress(self,char):
         if self.focus=="address bar":
-            self.address_bar+=char
+            self.clamp_address_bar_cursor()
+
+            i=self.address_bar_cursor
+            self.address_bar =(
+                self.address_bar[:i]
+                + char
+                + self.address_bar[i:]
+            )
+
+            self.address_bar_cursor += len(char)
 
     def enter(self):
         if self.focus=="address bar":
