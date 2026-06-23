@@ -1575,6 +1575,17 @@ class Chrome:
             )
 
             self.address_bar_cursor -= 1
+
+    def left(self):
+        if self.focus=="address bar":
+            self.address_bar_cursor = max(0,self.address_bar_cursor-1)
+
+    def right(self):
+        if self.focus=="address bar":
+            self.address_bar_cursor = min(
+                len(self.address_bar),
+                self.address_bar_cursor+1
+            )
         
 
 class Tab:
