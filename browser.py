@@ -1274,6 +1274,23 @@ class Chrome:
             self.tabbar_bottom
         )
 
+    # convert mouse x coordinate to string index
+    def cursor_index_from_x(self,x):
+        local_x = x-self.address_rect.left-self.padding
+
+        if local_x <= 0:
+            return 0
+
+        for i in range(len(self.address_bar)):
+            left=self.font.measure(self.address_bar[:i])
+            right=self.font.measure(self.address_bar[:i+1])
+            mid=(left+right)/2
+
+            if local_x < mid:
+                return i
+
+        return len(self.address_bar)
+
     def paint(self):
         cmds=[]
 
