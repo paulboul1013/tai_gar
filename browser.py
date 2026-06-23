@@ -1563,7 +1563,18 @@ class Chrome:
 
     def backspace(self):
         if self.focus=="address bar":
-            self.address_bar = self.address_bar[:-1]
+            self.clamp_address_bar_cursor()
+
+            if self.address_bar_cursor==0:
+                return
+                
+            i = self.address_bar_cursor
+            self.address_bar = (
+                self.address_bar[:i-1]
+                +self.address_bar[i:]
+            )
+
+            self.address_bar_cursor -= 1
         
 
 class Tab:
