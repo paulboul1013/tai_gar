@@ -140,7 +140,6 @@ def style_tag_text(node):
 
     return "".join(out)
 
-
 class Rect:
     def __init__(self,left,top,right,bottom):
         self.left=left
@@ -1263,6 +1262,7 @@ class Chrome:
 
         self.focus=None
         self.address_bar = ""
+        self.address_bar_cursor=0
 
     def tab_rect(self,i):
         tabs_start=self.newtab_rect.right+self.padding
