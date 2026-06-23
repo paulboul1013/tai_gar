@@ -3435,13 +3435,13 @@ if __name__ == "__main__":
 
 
     app = BrowserApp()
-    app.new_window(url)
-    app.run()
+    main_window=app.new_window(url)
+    
 
     print("--- DOM Tree ---")
-    print_tree(app.active_tab.nodes)
+    print_tree(main_window.active_tab.nodes)
     print("----------------")
-    print("display items:", len(app.active_tab.display_list))
-    print("document height:", app.active_tab.document.height)
+    print("display items:", len(main_window.active_tab.display_list))
+    print("document height:", main_window.active_tab.document.height)
 
-    tkinter.mainloop()
+    app.run()
