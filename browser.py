@@ -140,6 +140,31 @@ def style_tag_text(node):
 
     return "".join(out)
 
+
+class BrowserApp:
+    def __init__(self):
+        self.root=tkinter.Tk()
+        self.windows = []
+        self.visited_urls = set() 
+        self.bookmarks = set()
+
+    def new_window(self,url=None):
+        if url is None:
+            url = URL("https://browser.engineering/")
+
+        if not self.windows: 
+            window = self.root #create first window 
+        else:
+            window = tkinter.Toplevel(self.root) # create others windows
+
+        browser_window = BrowserWindow(self,window)
+        self.windows.append(browser_window)
+        browser_window.new_tab(url)
+        return browser_window
+
+    def run(self):
+        self.root.mainloop()
+
 class Rect:
     def __init__(self,left,top,right,bottom):
         self.left=left
