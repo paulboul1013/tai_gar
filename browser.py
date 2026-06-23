@@ -2086,6 +2086,16 @@ class BrowserWindow:
         self.window.bind("<Control-n>",self.handle_new_window)
         self.window.bind("<Control-N>",self.handle_new_window)
 
+        self.window.protocol("WM_DELETE_WINDOW",self.close)
+
+    def close(self):
+        if self in self.app.windows:
+            self.app.windows.remove(self) # remove closed window
+
+        self.window.destroy()
+
+        if not self.app.windows: # no any windows ，end the process
+            self.app.root.quite()
 
     def new_tab(self,url):
         new_tab=Tab(HEIGHT-self.chrome.bottom,self.visited_urls,self.bookmarks)
