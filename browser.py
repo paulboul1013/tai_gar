@@ -1509,15 +1509,18 @@ class Chrome:
         self.focus=None
         
         if self.newtab_rect.contains_point(x,y):
+            self.discard_address_bar_edit()
             self.browser.new_tab(URL("https://browser.engineering/"))
             return
         
         if self.back_rect.contains_point(x,y):
+            self.discard_address_bar_edit()
             if self.browser.active_tab:
                 self.browser.active_tab.go_back()
             return
 
         if self.forward_rect.contains_point(x,y):
+            self.discard_address_bar_edit()
             if self.browser.active_tab:
                 self.browser.active_tab.go_forward()
             return
