@@ -1315,6 +1315,15 @@ class Chrome:
         self.address_bar_cursor = 0
         self.address_bar_dirty = False
 
+    def address_bar_display_text(self):
+        if self.focus == "address bar" or self.address_bar_dirty:
+            return self.address_bar
+        
+        if self.browser.active_tab and self.browser.active_tab.url:
+            return str(self.browser.active_tab.url)
+        
+        return ""
+
     # convert mouse x coordinate to string index
     def cursor_index_from_x(self,x):
         local_x = x-self.address_rect.left-self.padding
