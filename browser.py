@@ -2239,7 +2239,7 @@ class BrowserWindow:
 
             # If the page click actually navigated somewhere, discard the old draft
             if old_url != new_url:
-                self.chrome.clear_draft()
+                self.chrome.discard_address_bar_edit()
 
         self.draw()
 
