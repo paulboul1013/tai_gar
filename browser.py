@@ -1531,7 +1531,8 @@ class Chrome:
         
             # first click address bar: copy current page URL
             # If it was already focused, keep user's current editing text
-            if not was_address_bar_focused:
+            # If have dirty flag, keep it
+            if not was_address_bar_focused and not self.address_bar_dirty:
                 if self.browser.active_tab and self.browser.active_tab.url:
                     self.address_bar = str(self.browser.active_tab.url)
                 else:
