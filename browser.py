@@ -1459,15 +1459,19 @@ class Chrome:
         # addres bar
         cmds.append(DrawOutline(self.address_rect,"black",1))
 
-        # if have focus，showing user inputing url and draw red cursor behind the url text
+        display_text = self.address_bar_display_text()
+
+        cmds.append(DrawText(
+            self.address_rect.left+self.padding,
+            self.address_rect.top,
+            display_text,
+            self.font,
+            "black"
+        ))
+
+        # only draw cursor when address bar is focused
+        # if dirty but not focus,show draft text but no cursor showing
         if self.focus=="address bar":
-            cmds.append(DrawText(
-                self.address_rect.left+self.padding,
-                self.address_rect.top,
-                self.address_bar,
-                self.font,
-                "black"
-            ))
 
             self.clamp_address_bar_cursor()
 
