@@ -1288,6 +1288,7 @@ class Chrome:
         self.focus=None
         self.address_bar = ""
         self.address_bar_cursor=0
+        self.address_bar_dirty = False
 
     def tab_rect(self,i):
         tabs_start=self.newtab_rect.right+self.padding
