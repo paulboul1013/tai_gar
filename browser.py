@@ -1580,6 +1580,7 @@ class Chrome:
             )
 
             self.address_bar_cursor += len(char)
+            self.address_bar_dirty = True
 
     def enter(self):
         if self.focus=="address bar":
@@ -1611,6 +1612,7 @@ class Chrome:
             )
 
             self.address_bar_cursor -= 1
+            self.address_bar_dirty = True
 
     def left(self):
         if self.focus=="address bar":
