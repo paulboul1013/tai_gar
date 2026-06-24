@@ -1526,6 +1526,7 @@ class Chrome:
             return
 
         if self.bookmark_rect.contains_point(x,y):
+            self.blur_address_bar()
             self.browser.toggle_bookmark()
             return
 
