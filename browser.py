@@ -1588,7 +1588,7 @@ class Chrome:
 
             if url.is_external():
                 url.open_external()
-                self.focus=None
+                self.discard_address_bar_edit()
                 return
 
             if self.browser.active_tab:
@@ -1596,7 +1596,7 @@ class Chrome:
             else:
                 self.browser.new_tab(url)
 
-            self.focus=None
+            self.discard_address_bar_edit()
 
     def backspace(self):
         if self.focus=="address bar":
