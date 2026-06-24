@@ -2206,14 +2206,23 @@ class BrowserWindow:
         if e.y < self.chrome.bottom:
             self.chrome.click(e.x,e.y)
         else:
-            #click web page content,clear address bar focus
-            self.chrome.focus=None
+            # click web page content:
+            # blur address bar, keep url draft
+            self.chrome.blur_address_bar()
 
             if not self.active_tab:
                 return
 
+            old_url = str(self.active_tab.url) if self.active_tab and self.active_tab.url else None
+
             tab_y=e.y-self.chrome.bottom
             self.active_tab.click(e.x,tab_y)
+
+            new_url = str(self.active_tab.url) if self.active_tab and self.active_tab.url else None
+
+            # If the page click actually navigated somewhere, discard the old draft
+            if old_url != new_url:
+                self.chrome.clear_draft()
 
         self.draw()
 
