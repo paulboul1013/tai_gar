@@ -1306,6 +1306,15 @@ class Chrome:
             min(self.address_bar_cursor,len(self.address_bar))
         )
 
+    def blur_address_bar(self):
+        self.focus=None
+
+    def discard_address_bar_edit(self):
+        self.focus = None
+        self.address_bar = ""
+        self.address_bar_cursor = 0
+        self.address_bar_dirty = False
+
     # convert mouse x coordinate to string index
     def cursor_index_from_x(self,x):
         local_x = x-self.address_rect.left-self.padding
