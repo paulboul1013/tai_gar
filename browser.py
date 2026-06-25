@@ -2011,7 +2011,7 @@ class Tab:
             if not hasattr(cmd,"rect"):
                 continue
 
-            if not cmd.rect.contains(x,y):
+            if not cmd.rect.contains_point(x,y):
                 continue
 
             if not hasattr(cmd,"layout_object"):
