@@ -2022,24 +2022,13 @@ class Tab:
         return None
 
     def href_at(self,x,y):
-        # tab coordinate -> page coordinate
-        y+=self.scroll
+        obj = self.layout_object_at(x,y)
 
-        objs = [
-            obj for obj in tree_to_list(self.document,[])
-            if obj.x is not None
-            and obj.y is not None
-            and obj.width is not None
-            and obj.height is not None
-            and obj.x <= x < obj.x+obj.width
-            and obj.y <= y < obj.y+obj.height
-        ]
-
-        if not objs:
+        if obj is None:
             return None
 
-        # last matched layout object is ususally the most specific one
-        elt=objs[-1].node
+        # last matched layout object
+        elt=obj.node
 
         while elt:
             if isinstance(elt,Element) and elt.tag=="a" and "href" in elt.attributes:
