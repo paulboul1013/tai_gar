@@ -1999,6 +1999,28 @@ class Tab:
         else:
             self.scrolldown(e)
 
+    def layout_object_at(self,x,y):
+        # tab coordinate -> page coordinate
+        y += self.scroll
+
+        # reverse scan display list
+        # first get top level draw command
+        for cmd in reversed(self.display_list):
+            # only deal with DrawText / DrawRect / DrawLine / DrawOutline
+            # skip emoji tuple
+            if not hasattr(cmd,"rect"):
+                continue
+
+            if not cmd.rect.contains(x,y):
+                continue
+
+            if not hasattr(cmd,"layout_object"):
+                continue
+
+            return cmd.layout_object
+
+        return None
+
     def href_at(self,x,y):
         # tab coordinate -> page coordinate
         y+=self.scroll
