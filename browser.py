@@ -119,7 +119,15 @@ def get_emoji(char):
     return None
 
 def paint_tree(layout_object,display_list):
-    display_list.extend(layout_object.paint())
+    cmds = layout_object.paint()
+
+    for cmd in cmds:
+        # DrawText / DrawRect / DrawLine / DrawOutline
+        # normal object，can add attribute
+        if hasattr(cmd,"execute"):
+            cmd.layout_object = layout_object
+
+        display_list.append(cmd)
 
     for child in layout_object.children:
         paint_tree(child,display_list)
