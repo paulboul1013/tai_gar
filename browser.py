@@ -34,7 +34,7 @@ SCROLL_STEP = 100
 
 SCROLLBAR_WIDTH=12
 
-INPUT_WIDTH = 200
+INPUT_WIDTH_PX = 200
 
 USE_RTL=False
 
@@ -479,6 +479,87 @@ class TextLayout:
         color=self.node.style["color"]
         return [DrawText(self.x,self.y,self.word,self.font,color)]
 
+class InputLayout:
+    def __init__(self,node,parent,previous):
+        self.node = node
+        self.childrent = []
+        self.parent = parent
+        self.previous = previous
+
+        self.x = None
+        self.y = None
+        self.width = None
+        self.height = None
+        
+        self.font= None
+        self.ascent = None
+        self.descent = None
+        self.space_after = None
+
+    def layout(self):
+        weight = self.node.style["font-weight"]
+        
+        style = self.node.style["font-style"]
+        if style == "normal":
+            style = "roman"
+
+        size = int(float(self.node.style["font-size"][:-2])*0.75)
+        family = self.node.style["font-family"]
+
+        self.font=get_font(size,weight,style,family=family)
+
+        self.width = INPUT_WIDTH_PX
+        self.height = self.font.metrics("linespace")
+
+        self.ascent=self.font.metrics("ascent")
+        self.descent=self.font.metrics("descent")
+        self.space_after=self.font.measure(" ")
+
+        self.x=None
+
+    def self_rect(self):
+        return Rect(
+            self.x,
+            self.y,
+            self.x+self.width,
+            self.y+self.height
+        )
+
+    def paint(self):
+        cmds=[]
+
+        bgcolor=self.node.style.get("background-color","transparent")
+        if bgcolor!="transparent":
+            cmds.append(DrawRect(
+                self.self_rect(),
+                bgcolor
+            ))
+
+        if self.node.tag=="input":
+            text=self.node.attributes.get("value","")
+
+        elif self.node.tag=="button":
+            if len(self.node.children) ==1 and isinstance(self.node.children[0],Text):
+                text= self.node.children[0].text
+
+            else:
+                print("Ignoring HTML contents insdie button")
+                text = ""
+
+        else:
+            text = ""
+
+        color=self.node.style["color"]
+        cmds.append(DrawText(
+            self.x,
+            self.y,
+            text,
+            self.font,
+            color
+        ))
+
+        return cmds
+        
 
 class EmojiLayout:
     def __init__(self,node,img,parent, previous, space_after):
