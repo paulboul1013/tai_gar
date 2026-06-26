@@ -616,6 +616,16 @@ class BlockLayout: # layout for block level elements
 
         #self.display_list=[]
 
+
+    def should_paint(self):
+        if isinstance(self.node,Text):
+            return True
+
+        if not isinstance(self.node,Element):
+            return True
+
+        return self.node.tag not in ["input","button"]
+
     def paint(self):
         cmds=[]
 
