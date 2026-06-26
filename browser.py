@@ -2678,7 +2678,7 @@ class URL:
 
         while redirect_limit>0:
             
-            if current_url.url_string in http_cache:
+            if payload is None and current_url.url_string in http_cache:
                 cached_body,expires_at=http_cache[current_url.url_string]
 
                 if time.time() < expires_at:
