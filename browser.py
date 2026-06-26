@@ -558,6 +558,17 @@ class InputLayout:
             color
         ))
 
+        if self.node.is_focused:
+            cx = self.x + self.font.measure(text)
+            cmds.append(DrawLine(
+                cx,
+                self.y,
+                cx,
+                self.y+self.height,
+                "black",
+                1
+            ))
+
         return cmds
         
 
