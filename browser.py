@@ -2396,6 +2396,7 @@ class BrowserWindow:
 
     def handle_click(self,e):
         if e.y < self.chrome.bottom:
+            self.focus = None
             self.chrome.click(e.x,e.y)
         else:
             self.focus = "content"
