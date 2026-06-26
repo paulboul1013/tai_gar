@@ -2250,6 +2250,7 @@ class BrowserWindow:
 
         self.tabs=[]
         self.active_tab=None
+        self.focus = None
 
         self.window.title("Tai Gar")
 
