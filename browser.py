@@ -482,7 +482,7 @@ class TextLayout:
 class InputLayout:
     def __init__(self,node,parent,previous):
         self.node = node
-        self.childrent = []
+        self.children = []
         self.parent = parent
         self.previous = previous
 
