@@ -1918,9 +1918,9 @@ class Tab:
 
         self.rules=sorted(rules,key=cascade_priority)
 
-        self.restyle()
+        self.focus=None
 
-        self.relayout()
+        self.render()
 
         if self.url.fragment:
             self.scroll_to_fragment(self.url.fragment)
