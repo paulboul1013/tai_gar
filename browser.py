@@ -1996,6 +1996,10 @@ class Tab:
         self.mark_visited_links()
         style(self.nodes,self.rules)
 
+    def render(self):
+        self.restyle()
+        self.relayout()
+
     def relayout(self):
         self.document=DocumentLayout(self.nodes)
         self.document.layout()
