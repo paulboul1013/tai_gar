@@ -2694,8 +2694,10 @@ class URL:
 
             key=(self.scheme,self.host,self.port)
             
+            # POST don't reuse socket
+            use_socket_cache = payload is None
 
-            if key in socket_cache:
+            if use_socket_cache and key in socket_cache:
                 s=socket_cache[key]
             else:
                 # 建立 TCP Socket 連線
@@ -2706,11 +2708,11 @@ class URL:
                 )
 
                 # 連接到伺服器的Port
-                s.connect((self.host, self.port))
+                s.connect((current_url.host,current_url.port))
 
-                if self.scheme == "https":
+                if current_url.scheme == "https":
                     ctx = ssl.create_default_context()
-                    s = ctx.wrap_socket(s, server_hostname=self.host)
+                    s = ctx.wrap_socket(s, server_hostname=current_url.host)
 
                 socket_cache[key]=s
 
@@ -2718,7 +2720,7 @@ class URL:
             # 定義要發送的headers
             headers = {
                     "Host": current_url.host, # 注意：轉址後 Host 也要變，所以用 current_url.host
-                    "Connection":"keep-alive", # 關閉連線
+                    "Connection":"close" if payload is not None else "keep-alive", # 關閉連線
                     "User-Agent":"MyToyBrowser/1.0", # 自定義 User-Agent
                     "Accept-Encoding":"gzip" # support gzip
             }
@@ -2749,6 +2751,9 @@ class URL:
                 # 讀取狀態行 (Status Line)，例如: HTTP/1.0 200 OK
                 statusline = response.readline().decode("utf-8")
                 if not statusline:
+                    s.close()
+                    if key in socket_cache:
+                        del socket_cache[key]
                     break
 
                 version, status, explanation = statusline.split(" ", 2)
@@ -2868,6 +2873,9 @@ class URL:
             if "transfer-encoding" in response_headers:
                 print(f"Debug - Transfer-Encoding: {response_headers['transfer-encoding']}")
 
+            if payload is not None:
+                s.close()
+
             # 如果不是轉址 (200 OK 或其他錯誤)，直接回傳結果
             return content_bytes.decode("utf-8",errors="replace")
 
@@ -2963,10 +2971,18 @@ class URL:
         # host-relative URL
         if url.startswith("/"):
             if self.scheme in ["http","https"]:
-                return URL(self.scheme+"://"+self.host+":"+str(self.port)+dir+"/"+url)
+                port_part=""
+
+                if self.scheme == "http" and self.port !=80:
+                    port_part=":"+str(self.port)
+                    
+                elif self.scheme == "https" and self.port!= 443:
+                    port_part = ":"+str(self.port)
+
+                return URL(self.scheme+"://"+self.host+port_part+url)
 
             if self.scheme=="file":
-                return URL("file://"+dir+"/"+url)
+                return URL("file://"+url)
 
             return None
 
