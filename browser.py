@@ -2217,6 +2217,11 @@ class Tab:
 
         self.render()
 
+    def keypress(self,char):
+        if self.focus:
+            self.focus.attributes["value"] += char
+            self.render()
+
     def resize(self,e):
         if e.width <=10 or e.height <=10:
             return
