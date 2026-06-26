@@ -1105,6 +1105,29 @@ class BlockLayout: # layout for block level elements
 
         self.cursor_x+=w+space_w
 
+    def input(self,node):
+        w = INPUT_WIDTH_PX
+        
+        if self.cursor_x+w > self.width and self.children[-1].children:
+            self.new_line()
+
+        line = self.children[-1]
+        previous_word = line.children[-1] if line.children else None
+
+        input_layout = InputLayout(node,line,previous_word)
+        line.children.append(input_layout)
+
+        weight = node.style["font-weight"]
+        if style=="normal":
+            style="roman"
+
+        size=int(float(node.style["font-size"][:-2])*0.75)
+        family =node.style["font-family"]
+
+        font = get_font(size,weight,style,family=family)
+
+        self.cursor_x+=w+font.measure(" ")
+        
 
     def flush_line(self):
         pass
