@@ -1849,7 +1849,7 @@ class Tab:
 
         return "\n".join(out)
 
-    def load(self, url,add_to_history=True):
+    def load(self, url,payload=None,add_to_history=True):
         self.url=url
         self.scroll=0
 
@@ -1873,7 +1873,7 @@ class Tab:
             self.nodes=HTMLParser(body).parse()
         
         else:
-            body = url.request()
+            body = url.request(payload)
 
             if url.view_source:
                 # execute syntax highlight: make raw html turn into highlighted html
