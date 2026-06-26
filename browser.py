@@ -2173,6 +2173,34 @@ class Tab:
 
         return self.url.resolve(href)
 
+    def submit_form(self,elt):
+        inputs = [
+            node for node in tree_to_list(elt,[])
+            if isinstance(node,Element)
+            and node.tag == "input"
+            and "name" in node.attributes
+        ]
+
+        body_parts = []
+
+        for input in inputs:
+            name = input.attributes["name"]
+            value = input.attributes.get("value","")
+
+            name = quote(name,safe="")
+            value = quote(value,safe="")
+
+            body_parts.append(name+"="+value)
+
+        body = "&".join(body_parts)
+
+        url = self.url.resolve(elt.attributes["action"])
+
+        if url is None:
+            return
+
+        self.load(url,body)
+
     def click(self,x,y):
         if self.focus:
             self.focus.is_focused = False
