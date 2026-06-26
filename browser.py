@@ -1638,20 +1638,20 @@ class Chrome:
                 "red",
                 1
             ))
-        else:
-            # no focus, display url
-            if self.browser.active_tab and self.browser.active_tab.url:
-                url=str(self.browser.active_tab.url)
-            else:
-                url=""
+        # else:
+        #     # no focus, display url
+        #     if self.browser.active_tab and self.browser.active_tab.url:
+        #         url=str(self.browser.active_tab.url)
+        #     else:
+        #         url=""
 
-            cmds.append(DrawText(
-                self.address_rect.left+self.padding,
-                self.address_rect.top,
-                url,
-                self.font,
-                "black"
-            ))
+        #     cmds.append(DrawText(
+        #         self.address_rect.left+self.padding,
+        #         self.address_rect.top,
+        #         url,
+        #         self.font,
+        #         "black"
+        #     ))
 
         # chrome and website content split line
         cmds.append(DrawLine(
