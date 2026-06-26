@@ -2735,7 +2735,8 @@ class URL:
         
             request += "\r\n"  # 請求標頭結束，需多一個空行
 
-
+            if payload is not None:
+                request += payload
 
             # 發送編碼後的請求
             s.send(request.encode("utf-8"))
