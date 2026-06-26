@@ -2722,8 +2722,10 @@ class URL:
                     "User-Agent":"MyToyBrowser/1.0", # 自定義 User-Agent
                     "Accept-Encoding":"gzip" # support gzip
             }
+
+            method = "POST" if payload is not None else "GET"
         
-            request = "GET {} HTTP/1.1\r\n".format(current_url.path)
+            request = "{} {} HTTP/1.1\r\n".format(method,current_url.path)
 
             for header,value in headers.items():
                 request+= "{}: {}\r\n".format(header,value)
