@@ -1748,6 +1748,9 @@ class Chrome:
 
             self.address_bar_cursor += len(char)
             self.address_bar_dirty = True
+            return True
+
+        return False
 
     def enter(self):
         if self.focus=="address bar":
