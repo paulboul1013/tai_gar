@@ -753,6 +753,9 @@ class BlockLayout: # layout for block level elements
 
 
     def layout_mode(self):
+        if isinstance(self.node,Element) and self.node.tag in ["input","button"]:
+            return "inline"
+
         if any(self.is_block_node(child)
                 for node in self.nodes if isinstance(node,Element)
                 for child in node.children):
