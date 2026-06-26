@@ -1798,17 +1798,17 @@ class Chrome:
 
 class Tab:
     def __init__(self,tab_height,visited_urls,bookmarks):
-        # self.window = tkinter.Tk()
         self.width=WIDTH
         self.height=HEIGHT
         self.tab_height=tab_height
 
-        # self.tokens=[]
         self.display_list = []
         self.scroll = 0
         self.url=None
         self.nodes=None
         self.document=None
+
+        self.focus=None
 
         self.visited_urls = visited_urls
         self.bookmarks = bookmarks
@@ -1816,31 +1816,6 @@ class Tab:
         
         self.history=[]
         self.history_index=-1
-
-        # self.window.title("Tai Gar") 
-
-        # self.canvas = tkinter.Canvas(
-        #     self.window,
-        #     width=WIDTH,
-        #     height=HEIGHT,
-        #     bg="white",
-        # )
-        # let canvas fill the window
-        # self.canvas.pack(fill=tkinter.BOTH,expand=True)
-        # self.canvas.bind("<Configure>",self.resize)
-
-
-        # # bind keyboard events
-        # self.window.bind("<Up>",self.scrollup)
-        # self.window.bind("<Down>", self.scrolldown)
-
-        # #bind mouse events
-        # self.window.bind("<MouseWheel>",self.mousewheel)
-        # self.window.bind("<Button-1>",self.click)
-
-        # #use buttion4 and button5 to scroll
-        # self.window.bind("<Button-4>",self.scrollup)
-        # self.window.bind("<Button-5>",self.scrolldown)
 
     def is_internal_page(self,url):
         return url.scheme=="about" and url.path=="bookmarks"
