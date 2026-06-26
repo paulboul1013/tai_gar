@@ -2393,6 +2393,8 @@ class BrowserWindow:
         if e.y < self.chrome.bottom:
             self.chrome.click(e.x,e.y)
         else:
+            self.focus = "content"
+            
             # click web page content:
             # blur address bar, keep url draft
             self.chrome.blur_address_bar()
