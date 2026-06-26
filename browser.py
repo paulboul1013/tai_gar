@@ -2723,6 +2723,9 @@ class URL:
                     "Accept-Encoding":"gzip" # support gzip
             }
 
+            if payload is not None:
+                headers["Content-Length"] = str(len(payload.encode("utf-8")))
+
             method = "POST" if payload is not None else "GET"
         
             request = "{} {} HTTP/1.1\r\n".format(method,current_url.path)
