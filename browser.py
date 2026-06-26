@@ -1131,6 +1131,8 @@ class BlockLayout: # layout for block level elements
         line.children.append(input_layout)
 
         weight = node.style["font-weight"]
+        
+        style = node.style["font-style"]
         if style=="normal":
             style="roman"
 
