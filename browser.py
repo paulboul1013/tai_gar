@@ -2829,7 +2829,7 @@ class URL:
                     continue
 
             # 檢查 Cache-Control
-            if status==200 and "cache-control" in response_headers:
+            if payload is None and status==200 and "cache-control" in response_headers:
                 cache_control=response_headers["cache-control"]
 
                 cache_control = cache_control.lower()
