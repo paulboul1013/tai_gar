@@ -4,7 +4,7 @@ import sys
 import time 
 import gzip
 import tkinter
-from urllib.parse import unquote, quote_plus
+from urllib.parse import unquote, quote_plus, quote
 from html import unescape,escape
 import webbrowser
 import os
