@@ -2394,7 +2394,7 @@ class BrowserWindow:
             self.chrome.click(e.x,e.y)
         else:
             self.focus = "content"
-            
+
             # click web page content:
             # blur address bar, keep url draft
             self.chrome.blur_address_bar()
@@ -2448,8 +2448,12 @@ class BrowserWindow:
         if not (0x20 <= ord(e.char) < 0x7f): #skip non ASCII characters
             return
 
-        self.chrome.keypress(e.char)
-        self.draw()
+        if self.chrome.keypress(e.char):
+            self.draw()
+
+        elif self.focus == "content" and self.active_tab:
+            self.active_tab.keypress(e.char)
+            self.draw()
 
     def handle_enter(self,e):
         self.chrome.enter()
