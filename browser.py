@@ -2174,25 +2174,48 @@ class Tab:
         return self.url.resolve(href)
 
     def click(self,x,y):
-        href = self.href_at(x,y)
+        if self.focus:
+            self.focus.is_focused = False
+            
+        self.focus = None
 
-        if href is None:
+        obj = self.layout_object_at(x,y)
+
+        if obj is None:
+            self.render()
             return
 
-        if href.startswith("#"):
-            self.navigate_to_fragment(href[1:])
-            return
-
-        url=self.url.resolve(href)
+        elt = obj.node
         
-        if url is None:
-            return
+        while elt:
+            if isinstance(elt,Element) and elt.tag == "input":
+                elt.attributes["value"] = ""
+                self.focus = elt
+                elt.is_focused = True
+                self.render()
+                return
 
-        if url.is_external():
-            url.open_external()
-            return
-        
-        self.load(url)
+            if isinstance(elt,Element) and elt.tag == "a" and "href" in elt.attributes:
+                href = elt.attributes["href"]
+
+                if href.startswith("#"):
+                    self.navigate_to_fragment(href[1:])
+                    return
+
+                url=self.url.resolve(href)
+                if url is None:
+                    return
+
+                if url.is_external():
+                    url.open_external()
+                    return
+
+                self.load(url)
+                return
+
+            elt = elt.parent
+
+        self.render()
 
     def resize(self,e):
         if e.width <=10 or e.height <=10:
