@@ -2633,7 +2633,7 @@ class URL:
             self.path="blank"
             self.url_string="about:blank"
 
-    def request(self):
+    def request(self,payload=None):
 
         if self.scheme=="about":
             return ""
