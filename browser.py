@@ -939,6 +939,10 @@ class BlockLayout: # layout for block level elements
                 self.new_line()
                 return
 
+            if tree.tag == "input" or tree.tag == "button":
+                self.input(tree)
+                return
+
             self.open_tag(tree.tag)
 
             for child in tree.children:
