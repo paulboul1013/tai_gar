@@ -2223,6 +2223,17 @@ class Tab:
                 self.render()
                 return
 
+            if isinstance(elt,Element) and elt.tag == "button":
+                while elt:
+                    if isinstance(elt,Element) and elt.tag == "form" and "action" in elt.attributes:
+                        self.submit_form(elt)
+                        return
+
+                    elt = elt.parent
+
+                self.render()
+                return
+
             if isinstance(elt,Element) and elt.tag == "a" and "href" in elt.attributes:
                 href = elt.attributes["href"]
 
