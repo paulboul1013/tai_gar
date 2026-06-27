@@ -41,7 +41,14 @@ def show_comments():
         out += "</form>"
     return out
 
-
+def do_request(method, url, headers, body):
+    if method == "GET" and url =="/":
+        return "200 OK", show_comments()
+    elif method == "POST" and url=="/add":
+        params = form_decode(body)
+        return "200 OK", add_entry(params)
+    else:
+        return "404 Not Found", not_found(url,method)
 
 
 if __name__ == "__main__":
