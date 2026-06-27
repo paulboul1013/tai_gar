@@ -2261,6 +2261,25 @@ class Tab:
             self.focus.attributes["value"] += char
             self.render()
 
+    def enter(self):
+        if not self.focus:
+            return
+
+        elt = self.focus
+
+        if not isinstance(elt,Element):
+            return
+
+        if elt.tag != "input":
+            return
+
+        while elt:
+            if isinstance(elt,Element) and elt.tag == "form" and "action" in elt.attributes:
+                self.submit_form(elt)
+                return
+
+            elt=elt.parent
+
     def resize(self,e):
         if e.width <=10 or e.height <=10:
             return
