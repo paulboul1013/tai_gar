@@ -56,6 +56,11 @@ def add_entry(params):
 
     return show_comments()
 
+def not_found(url,method):
+    out = "<!doctype html>"
+    out += "<h1>{} {} not found!</h1>".format(method, url)
+    return out
+
 def do_request(method, url, headers, body):
     if method == "GET" and url =="/":
         return "200 OK", show_comments()
