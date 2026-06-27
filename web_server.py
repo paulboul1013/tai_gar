@@ -50,6 +50,12 @@ def form_decode(body):
         params[name] = value
     return params
 
+def add_entry(params):
+    if 'guest' in params:
+        ENTRIES.append(params['guest'])
+
+    return show_comments()
+
 def do_request(method, url, headers, body):
     if method == "GET" and url =="/":
         return "200 OK", show_comments()
