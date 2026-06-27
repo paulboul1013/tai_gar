@@ -1,5 +1,5 @@
 import socket
-
+import urllib.parse
 
 ENTRIES = [ 'Pavel was here' ]
 
@@ -35,10 +35,14 @@ def show_comments():
     out = "<!doctype html>"
     for entry in ENTRIES:
         out += "<p>" + entry + "</p>"
-        out += "<form action=add method=post>"
-        out +=   "<p><input name=guest></p>"
-        out +=   "<p><button>Sign the book!</button></p>"
-        out += "</form>"
+
+    out += "<form action=add method=post>"
+    out +=   "<p><input name=guest></p>"
+    out +=   "<p><button>Sign the book!</button></p>"
+    out += "</form>"
+
+    out+="</body>"
+    out+="</html>"
     return out
 
 def form_decode(body):
