@@ -9,6 +9,9 @@ s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind(('', 8000))
 s.listen()
 
+ENTRIES = [ 'Pavel was here' ]
+
+
 def handle_connection(conx):
     req = conx.makefile("b")
     reqline = req.readline().decode('utf8')
