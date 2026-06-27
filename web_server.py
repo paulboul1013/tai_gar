@@ -33,13 +33,17 @@ def handle_connection(conx):
 
 def show_comments():
     out = "<!doctype html>"
-    for entry in ENTRIES:
-        out += "<p>" + entry + "</p>"
+    out += "<html>"
+    out += "<body>"
 
     out += "<form action=add method=post>"
     out +=   "<p><input name=guest></p>"
     out +=   "<p><button>Sign the book!</button></p>"
     out += "</form>"
+
+    for entry in ENTRIES:
+        out += "<p>" + entry + "</p>"
+
 
     out+="</body>"
     out+="</html>"
