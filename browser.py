@@ -2173,6 +2173,28 @@ class Tab:
 
         return self.url.resolve(href)
 
+    def encode_form_data(self,elt):
+        inputs = [
+            node for node in tree_to_list(elt,[])
+            if isinstance(node,Element)
+            and node.tag == "input"
+            and "name" in node.attributes
+        ]
+
+        body_parts = []
+
+        for input in inputs:
+            name = input.attributes["name"]
+            value = input.attributes.get("value","")
+
+            name = quote_plus(name)
+            value = quote_plus(value)
+
+            body_parts.append(name+"="+value)
+
+        return "&".join(body_parts)
+
+
     def submit_form(self,elt):
         inputs = [
             node for node in tree_to_list(elt,[])
