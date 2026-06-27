@@ -31,7 +31,7 @@ def handle_connection(conx):
     conx.send(response.encode('utf8'))
     conx.close()
 
-def do_request(method, url, headers, body):
+def show_comments():
     out = "<!doctype html>"
     for entry in ENTRIES:
         out += "<p>" + entry + "</p>"
@@ -39,7 +39,10 @@ def do_request(method, url, headers, body):
         out +=   "<p><input name=guest></p>"
         out +=   "<p><button>Sign the book!</button></p>"
         out += "</form>"
-    return "200 OK", out
+    return out
+
+
+
 
 if __name__ == "__main__":
     s = socket.socket(
