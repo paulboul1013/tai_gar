@@ -35,6 +35,10 @@ def do_request(method, url, headers, body):
     out = "<!doctype html>"
     for entry in ENTRIES:
         out += "<p>" + entry + "</p>"
+        out += "<form action=add method=post>"
+        out +=   "<p><input name=guest></p>"
+        out +=   "<p><button>Sign the book!</button></p>"
+        out += "</form>"
     return "200 OK", out
 
 if __name__ == "__main__":
