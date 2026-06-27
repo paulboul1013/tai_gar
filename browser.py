@@ -2196,32 +2196,22 @@ class Tab:
 
 
     def submit_form(self,elt):
-        inputs = [
-            node for node in tree_to_list(elt,[])
-            if isinstance(node,Element)
-            and node.tag == "input"
-            and "name" in node.attributes
-        ]
+        body = self.encode_form_data(elt)
 
-        body_parts = []
-
-        for input in inputs:
-            name = input.attributes["name"]
-            value = input.attributes.get("value","")
-
-            name = quote(name,safe="")
-            value = quote(value,safe="")
-
-            body_parts.append(name+"="+value)
-
-        body = "&".join(body_parts)
-
-        url = self.url.resolve(elt.attributes["action"])
+        action = elt.attributes.get("action","")
+        url = self.url.resolve(action)
 
         if url is None:
             return
 
-        self.load(url,body)
+        method = elt.attributes.get("method","get").lower()
+
+        if method == "post":
+            self.load(url,body)
+        else:
+            separator = "&" if "?" in url.path else "?"
+            get_url = URL(str(url)+separator+body)
+            self.load(get_url)
 
     def click(self,x,y):
         if self.focus:
