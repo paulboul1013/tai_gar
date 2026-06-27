@@ -2728,7 +2728,7 @@ class URL:
 
 
 
-            key=(self.scheme,self.host,self.port)
+            key=(current_url.scheme, current_url.host, current_url.port)
             
             # POST don't reuse socket
             use_socket_cache = payload is None
@@ -2750,7 +2750,8 @@ class URL:
                     ctx = ssl.create_default_context()
                     s = ctx.wrap_socket(s, server_hostname=current_url.host)
 
-                socket_cache[key]=s
+                if use_socket_cache:
+                    socket_cache[key]=s
 
 
             # 定義要發送的headers
