@@ -31,6 +31,12 @@ def handle_connection(conx):
     conx.send(response.encode('utf8'))
     conx.close()
 
+def do_request(method, url, headers, body):
+    out = "<!doctype html>"
+    for entry in ENTRIES:
+        out += "<p>" + entry + "</p>"
+    return "200 OK", out
+
 if __name__ == "__main__":
     s = socket.socket(
         family=socket.AF_INET,
