@@ -2750,8 +2750,6 @@ class URL:
                     ctx = ssl.create_default_context()
                     s = ctx.wrap_socket(s, server_hostname=current_url.host)
 
-                if use_socket_cache:
-                    socket_cache[key]=s
 
 
             # 定義要發送的headers
