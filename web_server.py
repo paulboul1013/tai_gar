@@ -41,6 +41,15 @@ def show_comments():
         out += "</form>"
     return out
 
+def form_decode(body):
+    params ={}
+    for field in body.split("&"):
+        name, value = field.split("=",1)
+        name = urllib.parse.unquote_plus(name)
+        value = urllib.parse.unquote_plus(value)
+        params[name] = value
+    return params
+
 def do_request(method, url, headers, body):
     if method == "GET" and url =="/":
         return "200 OK", show_comments()
