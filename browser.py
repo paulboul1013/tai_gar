@@ -2520,7 +2520,12 @@ class BrowserWindow:
             self.draw()
 
     def handle_enter(self,e):
-        self.chrome.enter()
+        if self.chrome.focus=="address bar":
+            self.chrome.enter()
+
+        elif self.focus == "content" and self.active_tab:
+            self.active_tab.enter()
+        
         self.draw()
 
     def handle_backspace(self,e):
