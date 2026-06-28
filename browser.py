@@ -1999,7 +1999,10 @@ class Tab:
     def blur(self):
         if self.focus:
             self.focus.is_focused = False # Text or Element disable focused
-        self.focus = None
+            self.focus= None
+            self.render()
+        else:
+            self.focus = None
 
     def render(self):
         self.restyle()
