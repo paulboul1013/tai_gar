@@ -2469,6 +2469,11 @@ class BrowserWindow:
     def handle_click(self,e):
         if e.y < self.chrome.bottom:
             self.focus = None
+
+            # click chrome address bar，clear the page content focus
+            if self.active_tab:
+                self.active_tab.blur()
+
             self.chrome.click(e.x,e.y)
         else:
             self.focus = "content"
