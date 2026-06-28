@@ -514,13 +514,19 @@ class InputLayout:
 
         self.font=get_font(size,weight,style,family=family)
 
-        self.width = INPUT_WIDTH_PX
-        self.height = self.font.metrics("linespace")
+        if is_checkbox_input(self.node):
+            self.width = CHECKBOX_SIZE
+            self.height = CHECKBOX_SIZE
+            self.ascent = CHECKBOX_SIZE
+            self.descent = 0
+        else:
+            self.width = INPUT_WIDTH_PX
+            self.height = self.font.metrics("linespace")
+            self.ascent=self.font.metrics("ascent")
+            self.descent=self.font.metrics("descent")
 
-        self.ascent=self.font.metrics("ascent")
-        self.descent=self.font.metrics("descent")
+
         self.space_after=self.font.measure(" ")
-
         self.x=None
 
     def self_rect(self):
