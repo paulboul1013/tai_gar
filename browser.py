@@ -1275,6 +1275,10 @@ class Element:
         self.children=[]
         self.parent=parent
         self.is_focused=False
+
+        # checkbox status
+        # checkbox attribute only decide page just loading init status
+        self.is_checked = "checked" in attributes
     def __repr__(self):
         # return "<"+self.tag+">"
         return "<"+self.tag+" "+str(self.attributes)+">"
