@@ -2219,10 +2219,7 @@ class Tab:
             self.load(get_url)
 
     def click(self,x,y):
-        if self.focus:
-            self.focus.is_focused = False
-            
-        self.focus = None
+        self.blur()
 
         obj = self.layout_object_at(x,y)
 
