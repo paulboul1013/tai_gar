@@ -155,6 +155,11 @@ def style_tag_text(node):
 
     return "".join(out)
 
+def is_checkbox_input(node):
+    return (
+        getattr(node,"tag",None) == "input" 
+        and node.attributes.get("type") == "checkbox"
+    )
 
 class BrowserApp:
     def __init__(self):
