@@ -2298,7 +2298,7 @@ class Tab:
                 # checkbox input section
                 if is_checkbox_input(elt):
                     # reverse is_checked status and then re-render
-                    elt.is_checked = not getattr(elt,"is_checked",False) 
+                    elt.is_checked = not elt.is_checked
                     self.render()
                     return
                 
