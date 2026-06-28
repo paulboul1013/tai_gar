@@ -2288,6 +2288,13 @@ class Tab:
         
         while elt:
             if isinstance(elt,Element) and elt.tag == "input":
+                # checkbox input section
+                if is_checkbox_input(elt):
+                    # reverse is_checked status and then re-render
+                    elt.is_checked = not getattr(elt,"is_checked",False) 
+                    self.render()
+                    return
+                
                 elt.attributes["value"] = ""
                 self.focus = elt
                 elt.is_focused = True
