@@ -1,5 +1,6 @@
 import socket
 import urllib.parse
+from html import escape
 
 ENTRIES = [ 'Pavel was here' ]
 
@@ -36,7 +37,30 @@ def show_comments():
     out += "<html>"
     out += "<body>"
 
-    out += "<form action=add method=post>"
+    # checkbox GET form test
+    out += "<h1>Checkbox GET Form Test</h1>"
+    out += "<form action=/submit method=get>"
+    out +=   "<p>"
+    out +=     "<input type=checkbox name=agree checked>"
+    out +=     "I agree"
+    out +=   "</p>"
+    out +=   "<p>"
+    out +=     "<input type=checkbox name=news value=yes>"
+    out +=     "Subscribe news"
+    out +=   "</p>"
+    out +=   "<p>"
+    out +=     "<input name=guest>"
+    out +=   "</p>"
+    out +=   "<p>"
+    out +=     "<button>Submit</button>"
+    out +=   "</p>"
+    out += "</form>"
+
+    out += "<hr>"
+
+    # POST form test
+    out += "<h1>Guest Book</h1>"
+    out += "<form action=/add method=post>"
     out +=   "<p><input name=guest></p>"
     out +=   "<p><button>Sign the book!</button></p>"
     out += "</form>"
@@ -51,12 +75,59 @@ def show_comments():
 
 def form_decode(body):
     params ={}
+    if not body:
+        return params
+
+    
     for field in body.split("&"):
-        name, value = field.split("=",1)
+        if "=" in field:
+            name, value = field.split("=",1)
+        else:
+            name , value  = field,""
+        
         name = urllib.parse.unquote_plus(name)
         value = urllib.parse.unquote_plus(value)
         params[name] = value
+
     return params
+
+def query_decode(url):
+    if "?" not in url:
+        return {}
+
+    path,query=url.split("?",1)
+    return form_decode(query)
+ 
+def show_submit_result(url):
+    params = query_decode(url)
+
+    out = "<!doctype html>"
+    out += "<html>"
+    out += "<body>"
+
+    out += "<h1>Submitted GET Form</h1>"
+
+    out += "<p>Raw URL:</p>"
+    out += "<p>" + escape(url) + "</p>"
+
+    out += "<h2>Decoded fields</h2>"
+
+    if not params:
+        out += "<p>No fields submitted.</p>"
+    else:
+        for name,value in params.items():
+            out += "<p>"
+            out += escape(name)
+            out += " = "
+            out += escape(value)
+            out += "</p>"
+
+    out += "<p><a href=/>Back</a></p>"
+
+    out += "</body>"
+    out += "</html>"
+
+    return out
 
 def add_entry(params):
     if 'guest' in params:
@@ -72,6 +143,10 @@ def not_found(url,method):
 def do_request(method, url, headers, body):
     if method == "GET" and url =="/":
         return "200 OK", show_comments()
+
+    elif method=="GET" and (url=="/submit" or url.startswith("/submit?")):
+        return "200 OK" ,show_submit_result(url)
+
     elif method == "POST" and url=="/add":
         params = form_decode(body)
         return "200 OK", add_entry(params)
