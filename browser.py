@@ -2504,11 +2504,13 @@ class BrowserWindow:
 
         # middle click on the chrome，do nothing
         if e.y < self.chrome.bottom:
+            self.active_tab.blur()
+            self.draw()
             return
 
 
         # click web page content，clear address bar focus
-        self.chrome.focus=None
+        self.chrome.blur_address_bar()
         
         # window coordinate -> tab coordinate
         tab_y=e.y-self.chrome.bottom
