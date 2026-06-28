@@ -1996,6 +1996,11 @@ class Tab:
         self.mark_visited_links()
         style(self.nodes,self.rules)
 
+    def blur(self):
+        if self.focus:
+            self.focus.is_focused = False # Text or Element disable focused
+        self.focus = None
+
     def render(self):
         self.restyle()
         self.relayout()
