@@ -541,7 +541,7 @@ class InputLayout:
         cmds=[]
 
         bgcolor=self.node.style.get("background-color","transparent")
-        if bgcolor!="transparent" and not is_checkbox_inputj(self.node):
+        if bgcolor!="transparent" and not is_checkbox_input(self.node):
             cmds.append(DrawRect(
                 self.self_rect(),
                 bgcolor
