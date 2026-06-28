@@ -2247,7 +2247,14 @@ class Tab:
 
         for input in inputs:
             name = input.attributes["name"]
-            value = input.attributes.get("value","")
+
+            if is_checkbox_input(input):
+                if not getattr(input,"is_checked",False):
+                    continue
+
+                value = input.attributes.get("value","on")
+            else:
+                value = input.attributes.get("value","")
 
             name = quote_plus(name)
             value = quote_plus(value)
