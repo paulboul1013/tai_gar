@@ -1177,7 +1177,10 @@ class BlockLayout: # layout for block level elements
         self.cursor_x+=w+space_w
 
     def input(self,node):
-        w = INPUT_WIDTH_PX
+        if is_checkbox_input(node):
+            w = CHECKBOX_SIZE
+        else:
+            w = INPUT_WIDTH_PX
         
         if self.cursor_x+w > self.width and self.children[-1].children:
             self.new_line()
