@@ -2,7 +2,14 @@ import socket
 import urllib.parse
 from html import escape
 
-ENTRIES = [ 'Pavel was here' ]
+TOPICS = {
+    "cooking" :[
+        "Pavel made soup",
+    ],
+    "cars" :[
+        "Toyota is reliable",
+    ],
+}
 
 
 def handle_connection(conx):
@@ -25,53 +32,15 @@ def handle_connection(conx):
         body = None
 
     status, body = do_request(method, url, headers, body)
+
     response = "HTTP/1.0 {}\r\n".format(status)
     response += "Content-Length: {}\r\n".format(
     len(body.encode("utf8")))
     response += "\r\n" + body
+
     conx.send(response.encode('utf8'))
     conx.close()
 
-def show_comments():
-    out = "<!doctype html>"
-    out += "<html>"
-    out += "<body>"
-
-    # checkbox GET form test
-    out += "<h1>Checkbox GET Form Test</h1>"
-    out += "<form action=/submit method=get>"
-    out +=   "<p>"
-    out +=     "<input type=checkbox name=agree checked>"
-    out +=     "I agree"
-    out +=   "</p>"
-    out +=   "<p>"
-    out +=     "<input type=checkbox name=news value=yes>"
-    out +=     "Subscribe news"
-    out +=   "</p>"
-    out +=   "<p>"
-    out +=     "<input name=guest>"
-    out +=   "</p>"
-    out +=   "<p>"
-    out +=     "<button>Submit</button>"
-    out +=   "</p>"
-    out += "</form>"
-
-    out += "<hr>"
-
-    # POST form test
-    out += "<h1>Guest Book</h1>"
-    out += "<form action=/add method=post>"
-    out +=   "<p><input name=guest></p>"
-    out +=   "<p><button>Sign the book!</button></p>"
-    out += "</form>"
-
-    for entry in ENTRIES:
-        out += "<p>" + entry + "</p>"
-
-
-    out+="</body>"
-    out+="</html>"
-    return out
 
 def form_decode(body):
     params ={}
@@ -90,6 +59,135 @@ def form_decode(body):
         params[name] = value
 
     return params
+
+def path_only(url):
+    if "?" in url:
+        path,query = url.split("?",1)
+        return path
+    
+    return url
+
+def topic_to_url(topic):
+    return "/"+urllib.parse.quote(topic,safe="")
+
+def add_topic_url(topic):
+    return "/add/" +urllib.parse.quote(topic,safe="")
+
+def normalize_topic_name(topic):
+    topic = topic.strip().lower()
+    
+    out = []
+    last_dash = False
+    
+    for ch in topic:
+        if ch.isalnum():
+            out.append(ch)
+            last_dash = False
+        elif ch in [" ","-","_"]:
+            if not last_dash:
+                out.append("-")
+                last_dash = True
+
+    topic = "".join(out).strip("-")
+    return topic
+
+def show_home():
+    out = "<!doctype html>"
+    out += "<html>"
+    out += "<body>"
+
+    out += "<h1>Message Board</h1>"
+
+    out += "<h2>Topics</h2>"
+
+    if not TOPICS:
+        out += "<p>No topics yet.</p>"
+    else:
+        out+="<ul>"
+
+        for topic in sorted(TOPICS.keys()):
+            topic_url = topic_to_url(topic)
+
+            out += "<li>"
+            out += "<a href={}>".format(escape(topic_url, quote=True))
+            out += escape(topic)
+            out += "</a>"
+            out += "</li>"
+
+        out+="</ul>"
+
+    out += "<h2>Add new topic</h2>"
+    out += "<form action=/add-topic method=post>"
+    out +=   "<p><input name=topic></p>"
+    out +=   "<p><button>Add topic</button></p>"
+    out += "</form>"
+
+    out += "</body>"
+    out += "</html>"
+
+    return out
+
+def show_topic(topic):
+    messages = TOPICS[topic]
+
+    out = "<!doctype html>"
+    out += "<html>"
+    out += "<body>"
+
+    out += "<p><a href=/>Back to topics</a></p>"
+
+    out += "<h1>Topic: "
+    out += escape(topic)
+    out += "</h1>"
+
+    out += "<form action={} method=post>".format(
+        escape(add_topic_url(topic), quote=True)
+    )
+    out +=   "<p><input name=message></p>"
+    out +=   "<p><button>Post message</button></p>"
+    out += "</form>"
+
+    out += "<h2>Messages</h2>"
+
+    if not messages:
+        out += "<p>No messages yet.</p>"
+    else:
+        for message in messages:
+            out += "<p>"
+            out += escape(message)
+            out += "</p>"
+
+    out += "</body>"
+    out += "</html>"
+
+    return out
+
+def add_topic(params):
+    if "topic" not in params:
+        return show_home()
+
+    topic = normalize_topic_name(params["topic"])
+    
+
+    if topic=="":
+        return show_home()
+
+    if topic not in TOPICS:
+        TOPICS[topic] = []
+
+    return show_home()
+
+def add_message(topic,params):
+    if topic not in TOPICS:
+        return not_found("/add/"+topic,"POST")
+
+    if "message" in params:
+        message = params["message"].strip()
+
+        if message:
+            TOPICS[topic].append(message)
+
+    return show_topic(topic)
 
 def query_decode(url):
     if "?" not in url:
@@ -129,27 +227,42 @@ def show_submit_result(url):
 
     return out
 
-def add_entry(params):
-    if 'guest' in params:
-        ENTRIES.append(params['guest'])
-
-    return show_comments()
 
 def not_found(url,method):
     out = "<!doctype html>"
-    out += "<h1>{} {} not found!</h1>".format(method, url)
+    out += "<html>"
+    out += "<body>"
+    out += "<h1>{} {} not found!</h1>".format(
+        escape(method),
+        escape(url)
+    )
+    out += "<p><a href=/>Back to topics</a></p>"
+    out += "</body>"
+    out += "</html>"
     return out
 
 def do_request(method, url, headers, body):
-    if method == "GET" and url =="/":
-        return "200 OK", show_comments()
+    path = path_only(url)
 
-    elif method=="GET" and (url=="/submit" or url.startswith("/submit?")):
-        return "200 OK" ,show_submit_result(url)
+    if method == "GET" and path =="/":
+        return "200 OK", show_home()
 
-    elif method == "POST" and url=="/add":
+    elif method=="POST" and path=="/add-topic":
         params = form_decode(body)
-        return "200 OK", add_entry(params)
+        return "200 OK" ,add_topic(params)
+
+    elif method=="GET" and path.startswith("/") and len(path) > 1:
+        topic = urllib.parse.unquote(path[1:])
+
+        if topic in TOPICS:
+            return "200 OK", show_topic(topic)
+        else:
+            return "404 Not Found",not_found(url,method)
+
+    elif method == "POST" and path.startswith("/add/"):
+        topic = urllib.parse.unquote(path[len("/add/"):])
+        params = form_decode(body)
+        return "200 OK", add_message(topic,params)
     else:
         return "404 Not Found", not_found(url,method)
 
