@@ -1,8 +1,12 @@
 import socket
 import urllib.parse
 from html import escape
+import os
+import json
 
-TOPICS = {
+DATA_FILE = "message_board.json"
+
+DEFAULT_TOPICS = {
     "cooking" :[
         "Pavel made soup",
     ],
@@ -10,6 +14,60 @@ TOPICS = {
         "Toyota is reliable",
     ],
 }
+
+def load_topics():
+    if not os.path.exists(DATA_FILE):
+        return {
+            topic:message[:]
+            for topic,message in DEFAULT_TOPICS.items()
+        }
+
+    try:
+        with open(DATA_FILE,"r",encoding="utf8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print("Failed to load data file:",e)
+        return {
+            topic:message[:]
+            for topic,message in DEFAULT_TOPICS.items()
+        }
+
+    if not isinstance(data,dict):
+        return{
+            topic:message[:]
+            for topic,message in DEFAULT_TOPICS.items()
+        }
+
+    topics ={}
+
+    for topic,messages in data.items():
+        if not isinstance(topic,str):
+            continue
+    
+        if not isinstance(messages,list):
+            continue
+
+        clean_messages = []
+
+        for message in messages:
+            if isinstance(message,str):
+                clean_messages.append(message)
+
+        topics[topic] = clean_messages
+
+
+    return topics
+
+
+TOPICS = load_topics()
+
+def save_topics():
+    temp_file = DATA_FILE + ".tmp"
+
+    with open(temp_file,"w",encoding="utf8") as f:
+        json.dump(TOPICS,f,ensure_ascii=False,indent=2)
+
+    os.replace(temp_file,DATA_FILE)
 
 
 def handle_connection(conx):
@@ -174,6 +232,7 @@ def add_topic(params):
 
     if topic not in TOPICS:
         TOPICS[topic] = []
+        save_topics()
 
     return show_home()
 
@@ -186,6 +245,7 @@ def add_message(topic,params):
 
         if message:
             TOPICS[topic].append(message)
+            save_topics()
 
     return show_topic(topic)
 
