@@ -1885,6 +1885,20 @@ class Chrome:
         out += "</html>"
 
         return out
+
+    def find_address_node(self):
+        if not self.nodes:
+            return None
+
+        for node in tree_to_list(self.nodes,[]):
+            if (
+                isinstance(node,Element)
+                and node.tag =="input"
+                and node.attributes.get("id")=="address"
+            ):
+                return node
+
+        return None
         
     
     def keypress(self,char):
