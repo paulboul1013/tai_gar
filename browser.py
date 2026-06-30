@@ -1535,15 +1535,6 @@ class Chrome:
 
         self.render()
 
-    def tab_rect(self,i):
-        tabs_start=self.newtab_rect.right+self.padding
-        tab_width=self.font.measure("Tab X")+2*self.padding
-        return Rect(
-            tabs_start+tab_width*i,
-            self.tabbar_top,
-            tabs_start+tab_width*(i+1),
-            self.tabbar_bottom
-        )
 
     def clamp_address_bar_cursor(self):
         self.address_bar_cursor=max(
