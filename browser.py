@@ -507,6 +507,19 @@ class InputLayout:
         self.descent = None
         self.space_after = None
 
+    def parse_px(self,value):
+        if value=="auto":
+            return None
+
+        if isinstance(value,str) and value.endswith("px"):
+            try:
+                return int(value[:-2])
+
+            except ValueError:
+                return None
+
+        return None
+
     def layout(self):
         weight = self.node.style["font-weight"]
         
