@@ -1903,6 +1903,63 @@ class Chrome:
         query=quote_plus(text)
         return URL("https://html.duckduckgo.com/html/?q="+query)
 
+    def chrome_html(self):
+        tabs_html = ""
+
+        for i,tab in enumerate(self.browser.tabs):
+            if tab==self.browser.active_tab:
+                style="font-weight:bold;color:black"
+                label ="[Tab {}]".format(i)
+
+            else:
+                style = "color:blue"
+                label = "Tab {}".format(i)
+
+            tabs_html += (
+                "<a href='tab-{}' style='{}'>{}</a> "
+                .format(i,style,label)
+            )
+
+        if self.browser.active_tab and self.browser.active_tab.can_go_back():
+            back_color="black"
+        else:
+            back_color = "gray"
+
+        if self.browser.active_tab and self.browser.active_tab.can_go_forward():
+            forward_color="black"
+        else:
+            forward_color="gray"
+
+        if self.browser.is_current_page_bookmarked():
+            bookmark_color="yellow"
+        else:
+            bookmark_color="white"
+        
+        address_width = max(100,WIDTH-150)
+
+        out = "<!doctype html>"
+        out += "<html>"
+        out += "<body>"
+        out += "<div style='background-color:lightgray;width:{}px'>".format(WIDTH)
+
+        # first layer: new tab button + tab links 
+        out += "<button id=new-tab style='width:30px'>+</button> "
+        out += tabs_html
+
+        # second layer: back/ forward / bookmark / url address input
+        out += "<br>"
+        out += "<button id=back style='width:45px;color:{}'>Back</button> ".format(back_color)
+        out += "<button id=forward style='width:45px;color:{}'>Fwd</button> ".format(forward_color)
+        out += "<button id=bookmark style='width:30px;background-color:{}'>★</button> ".format(bookmark_bg)
+        out += "<input id=address style='width:{}px;background-color:white'>".format(address_width)
+
+        out += "</div>"
+        out += "</body>"
+        out += "</html>"
+
+        return out
+        
+    
     def keypress(self,char):
         if self.focus=="address bar":
             self.clamp_address_bar_cursor()
