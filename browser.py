@@ -1738,9 +1738,9 @@ class Chrome:
             forward_color="gray"
 
         if self.browser.is_current_page_bookmarked():
-            bookmark_color="yellow"
+            bookmark_bg="yellow"
         else:
-            bookmark_color="white"
+            bookmark_bg="white"
         
         address_width = max(100,WIDTH-150)
 
