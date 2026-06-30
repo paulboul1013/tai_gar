@@ -589,15 +589,6 @@ class InputLayout:
 
         if self.node.tag=="input":
             text=self.node.attributes.get("value","")
-
-        elif self.node.tag=="button":
-            if len(self.node.children) ==1 and isinstance(self.node.children[0],Text):
-                text= self.node.children[0].text
-
-            else:
-                print("Ignoring HTML contents insdie button")
-                text = ""
-
         else:
             text = ""
 
