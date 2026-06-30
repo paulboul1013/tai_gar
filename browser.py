@@ -2156,8 +2156,9 @@ class Tab:
             self.scrolldown(e)
 
     def layout_object_at(self,x,y):
+        # no need to adjust y coordinate
         # tab coordinate -> page coordinate
-        y += self.scroll
+        # y += self.scroll
 
         # reverse scan display list
         # first get top level draw command
