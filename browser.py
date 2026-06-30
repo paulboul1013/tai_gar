@@ -2181,6 +2181,14 @@ class Tab:
 
         return None
 
+    def ancestor(self,elt,tag):
+        while elt:
+            if isinstance(elt,Element) and elt.tag==tag:
+                return elt
+            elt=elt.parent
+        
+        return None
+
     def href_at(self,x,y):
         obj = self.layout_object_at(x,y)
 
