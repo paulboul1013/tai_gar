@@ -1677,7 +1677,7 @@ class Chrome:
         if link:
             href = link.attributes.get("href","")
 
-            if href.startsith("tab-"):
+            if href.startswith("tab-"):
                 try:
                     index = int(href[len("tab-"):])
                 except ValueError:
