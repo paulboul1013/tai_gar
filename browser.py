@@ -620,6 +620,135 @@ class InputLayout:
         return cmds
         
 
+class ButtonLayout:
+    def __init__(self,node,parent,previous):
+        self.node=node
+        self.parent=parent
+        self.previous=previous
+
+        self.x=None
+        self.y=None
+        self.width=None
+        self.height=None
+
+        self.font=None
+        self.ascent=None
+        self.descent=None
+        self.space_after=None
+        
+    def parse_px(self,value):
+        if value=="auto":
+            return None
+
+        if isinstance(value,str) and value.endswith("px"):
+            try:
+                return int(value[:-2])
+
+            except ValueError:
+                return None
+
+        return None
+
+    def make_content_node(self):
+        content_node = Element("button-content",{},self.node)
+
+        # don't change really DOM tree, just make a layout wrapper
+        content_node.children = self.node.children
+
+        # wrapper must have style，otherwise BlockLayout read style will wrong
+        content_node.style=dict(self.node.style)
+        content_node.style["background-color"] = "transparent"
+        content_node.style["display"] = "block"
+
+        return content_node
+
+    def layout(self):
+        weight = self.node.style["font-weight"]
+
+        style = self.node.style["font-style"]
+        if style=="normal":
+            style="roman"
+
+        size = int(float(self.node.style["font-size"][:-2])*0.75)
+        family = self.node.style["font-family"]
+        
+        self.font = get_font(size,weight,style,family=family)
+
+        css_width = self.parse_px(self.node.style.get("width","auto"))
+        if css_width:
+            self.width = css_width
+        else:
+            self.width = INPUT_WIDTH_PX
+
+        content_width = max(1,self.width-2*BUTTON_PADDING)
+        
+        if self.node.children:
+            content_node = self.make_content_node()
+            content_parent = ButtonContentParent(
+                0,
+                0,
+                content_width
+            )
+
+            child = BlockLayout([content_node],content_parent,None)
+            self.children = [child]
+            child.layout()
+
+            content_height = child.height
+
+        else:
+            content_height = self.font.metrics("linespace")
+            self.children=[]
+
+        self.height = max(
+            content_height + 2 * BUTTON_PADDING,
+            self.font.metrics("linespace") + 2*BUTTON_PADDING
+        )
+
+        # make full of the button to a very high inline object
+        self.ascent = self.height
+        self.descent = 0
+
+        self.space_after = self.font.measure(" ")
+        self.x = None
+
+    def layout_final(self):
+        if not self.node.children:
+            return
+        
+        content_width = max(1,self.width-2*BUTTON_PADDING)
+
+        content_node = self.make_content_node()
+        content_parent = ButtonContentParent(
+            self.x + BUTTON_PADDING,
+            self.y + BUTTON_PADDING,
+            content_width
+        )
+
+        child = BlockLayout([content_node],content_parent,None)
+        self.chlidren = [child]
+        child.layout()
+        
+    def self_rect(self):
+        return Rect(
+            self.x,
+            self.y,
+            self.x+self.width,
+            self.y+self.height
+        )
+
+    def paint(self):
+        rect = self.self_rect()
+
+        bgcolor = self.node.style.get("background-color","lightgray")
+        if bgcolor=="transparent":
+            bgcolor="lightgray"
+
+        return [
+            DrawRect(rect,bgcolor)
+            DrawOutline(rect,"black",1)
+        ]
+
 class EmojiLayout:
     def __init__(self,node,img,parent, previous, space_after):
         self.node=node
