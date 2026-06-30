@@ -1561,7 +1561,9 @@ class Chrome:
         return ""
 
     # convert mouse x coordinate to string index
-    def cursor_index_from_x(self,x):
+    def cursor_index_from_x(self,x,input_layout):
+        text = self.address_bar
+
         local_x = x-self.address_rect.left-self.padding
 
         if local_x <= 0:
