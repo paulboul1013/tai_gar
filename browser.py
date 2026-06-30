@@ -1311,7 +1311,14 @@ class BlockLayout: # layout for block level elements
         self.cursor_x+=w+space_w
 
     def input(self,node):
-        if is_checkbox_input(node):
+        if node.tag=="button":
+            css_width = self.parse_px(node.style.get("width","auto"))
+            if css_width:
+                w=css_width
+            else:
+                w = INPUT_WIDTH_PX
+            
+        elif is_checkbox_input(node):
             w = CHECKBOX_SIZE
         else:
             w = INPUT_WIDTH_PX
@@ -1322,7 +1329,11 @@ class BlockLayout: # layout for block level elements
         line = self.children[-1]
         previous_word = line.children[-1] if line.children else None
 
-        input_layout = InputLayout(node,line,previous_word)
+        if node.tag=="button":
+            input_layout = ButtonLayout(node,line,previous_word)
+        else:
+            input_layout = InputLayout(node,line,previous_word)
+
         line.children.append(input_layout)
 
         weight = node.style["font-weight"]
