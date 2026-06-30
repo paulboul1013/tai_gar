@@ -1626,55 +1626,79 @@ class Chrome:
 
 
     def click(self,x,y):
+        self.render()
+
         was_address_bar_focused = self.focus=="address bar"
+
+        obj = self.layout_object_at(x,y)
 
         #click any chrome section，default is clear first
         self.focus=None
-        
-        if self.newtab_rect.contains_point(x,y):
+
+        if obj is None:
             self.discard_address_bar_edit()
-            self.browser.new_tab(URL("https://browser.engineering/"))
-            return
-        
-        if self.back_rect.contains_point(x,y):
-            self.discard_address_bar_edit()
-            if self.browser.active_tab:
-                self.browser.active_tab.go_back()
             return
 
-        if self.forward_rect.contains_point(x,y):
-            self.discard_address_bar_edit()
-            if self.browser.active_tab:
-                self.browser.active_tab.go_forward()
-            return
+        elt = obj.node
 
-        if self.bookmark_rect.contains_point(x,y):
-            self.blur_address_bar()
-            self.browser.toggle_bookmark()
-            return
+        button = self.ancestor(elt,"button")
 
-        if self.address_rect.contains_point(x,y):
-            self.focus="address bar"
-        
-            # first click address bar: copy current page URL
-            # If it was already focused, keep user's current editing text
-            # If have dirty flag, keep it
+        if button:
+            button_id = button.attributes.get("id")
+
+            if buttion_id == "new_tab":
+                self.discard_address_bar_edit()
+                self.browser.new_tab(URL("https://browser.engineering/"))
+                return
+
+            elif button_id == "back":
+                self.discard_address_bar_edit()
+                if self.browser.active_tab:
+                    self.browser.active_tab.go_back()
+                return
+
+            elif button_id == "forward":
+                self.discard_address_bar_edit()
+                if self.browser.active_tab:
+                    self.browser.active_tab.go_forward()
+                return
+
+            elif button_id == "bookmark":
+                self.blur_address_bar()
+                self.browser.toggle_bookmark()
+                return
+
+        if isinstance(elt,Element) and elt.tag == "input" and elt.attributes.get("id") == "address":
+            self.focus = "address bar"
+            
             if not was_address_bar_focused and not self.address_bar_dirty:
                 if self.browser.active_tab and self.browser.active_tab.url:
-                    self.address_bar = str(self.browser.active_tab.url)
+                    self.address_bar=str(self.browser.active_tab.url)
                 else:
-                    self.address_bar = ""
+                    self.address_bar=""
 
-            self.address_bar_cursor = self.cursor_index_from_x(x)
-
+            self.address_bar_cursor = self.cursor_index_from_x(x,obj)
+            self.clamp_address_bar_cursor()
             return
+
+        link =self.ancestor(elt,"a")
         
-        for i, tab in enumerate(self.browser.tabs):
-            if self.tab_rect(i).contains_point(x,y):
-                tab.restyle()
-                tab.relayout()
-                self.browser.active_tab=tab
-                return
+        if link:
+            href = link.attributes.get("href","")
+
+            if href.startsith("tab-"):
+                try:
+                    index = int(href[len("tab-"):])
+                except ValueError:
+                    return
+
+                if 0 <= index < len(self.browser.tabs):
+                    self.discard_address_bar_edit()
+                    self.browser.active_tab = self.browser.tabs[index]
+                    return
+
+        self.discard_address_bar_edit()
+
 
     def is_url_like(self,text):
         return(
