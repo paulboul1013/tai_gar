@@ -1899,6 +1899,35 @@ class Chrome:
                 return node
 
         return None
+
+    def render(self):
+        html = self.chrome_html()
+        
+        self.nodes = HTMLParser(html).parse()
+
+        rules = DEFAULT_STYLE_SHEET.copy()
+        style(self.nodes,rules)
+
+        address_node = self.find_address_node()
+
+        if address_node:
+            address_node.attributes["value"] = self.address_bar_display_text()
+
+            if self.focus == "address bar":
+                address_node.is_focused = True
+                address_node.cursor_index = self.address_bar_cursor
+            else:
+                address_node.is_focused = False
+
+        parent = ChromeLayoutParent()
+
+        self.document = BlockLayout([self.nodes],parent,None)
+        self.document.layout()
+
+        self.display_list = []
+        paint_tree(self.nodes,self.display_list)
+
+        self.bottom = self.document.height + 2
         
     
     def keypress(self,char):
