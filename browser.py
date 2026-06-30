@@ -402,6 +402,10 @@ class LineLayout:
             else:
                 child.y=baseline-child.ascent
 
+        for child in self.children:
+            if hasattr(child,"layout_final"):
+                child.layout_final()
+
 
         self.height=1.25 *(max_ascent+max_descent)
 
