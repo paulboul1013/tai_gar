@@ -2371,6 +2371,26 @@ class Tab:
 
         return self.url.resolve(href)
 
+    def button_ancestor(self,elt):
+        while elt:
+            if isinstance(elt,Element) and elt.tag=="button":
+                return elt
+            elt=elt.parent
+
+        return None
+
+    def submit_button(self,button):
+        elt = button
+        
+        while elt:
+            if isinstance(elt,Element) and elt.tag=="form" and "acton" in elt.attributes:
+                self.submit_form(elt)
+                return True
+
+            elt = elt.parent
+
+        return False
+
     def encode_form_data(self,elt):
         inputs = [
             node for node in tree_to_list(elt,[])
@@ -2428,6 +2448,14 @@ class Tab:
             return
 
         elt = obj.node
+
+        button = self.button_ancestor(elt) # find button object
+        if button:
+            if self.submit_button(button): # find form and action attribution
+                return
+
+            self.render()
+            return
         
         while elt:
             if isinstance(elt,Element) and elt.tag == "input":
@@ -2441,17 +2469,6 @@ class Tab:
                 elt.attributes["value"] = ""
                 self.focus = elt
                 elt.is_focused = True
-                self.render()
-                return
-
-            if isinstance(elt,Element) and elt.tag == "button":
-                while elt:
-                    if isinstance(elt,Element) and elt.tag == "form" and "action" in elt.attributes:
-                        self.submit_form(elt)
-                        return
-
-                    elt = elt.parent
-
                 self.render()
                 return
 
