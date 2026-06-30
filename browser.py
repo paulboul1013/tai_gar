@@ -726,7 +726,7 @@ class ButtonLayout:
         )
 
         child = BlockLayout([content_node],content_parent,None)
-        self.chlidren = [child]
+        self.children = [child]
         child.layout()
         
     def self_rect(self):
