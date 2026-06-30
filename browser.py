@@ -2389,7 +2389,7 @@ class Tab:
         elt = button
         
         while elt:
-            if isinstance(elt,Element) and elt.tag=="form" and "acton" in elt.attributes:
+            if isinstance(elt,Element) and elt.tag=="form" and "action" in elt.attributes:
                 self.submit_form(elt)
                 return True
 
