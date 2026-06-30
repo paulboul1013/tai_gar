@@ -608,7 +608,11 @@ class InputLayout:
         ))
 
         if self.node.is_focused:
-            cx = self.x + self.font.measure(text)
+            cursor_index = getattr(self.node,"cursor_index",len(text))
+            cursor_index = max(0,min(cursor_index,len(text)))
+
+            cx = self.x + self.font.measure(text[:cursor_index])
+
             cmds.append(DrawLine(
                 cx,
                 self.y,
