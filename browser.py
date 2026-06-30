@@ -525,7 +525,13 @@ class InputLayout:
             self.ascent = CHECKBOX_SIZE
             self.descent = 0
         else:
-            self.width = INPUT_WIDTH_PX
+            css_width = self.parse_px(self.node.style.get("width","auto"))
+            
+            if css_width:
+                self.width = css_width
+            else:
+                self.width = INPUT_WIDTH_PX
+
             self.height = self.font.metrics("linespace")
             self.ascent=self.font.metrics("ascent")
             self.descent=self.font.metrics("descent")
