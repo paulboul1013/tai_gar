@@ -1807,7 +1807,7 @@ class Chrome:
         self.document.layout()
 
         self.display_list = []
-        paint_tree(self.nodes,self.display_list)
+        paint_tree(self.document,self.display_list)
 
         self.bottom = self.document.height + 2
         
