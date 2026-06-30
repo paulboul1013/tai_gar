@@ -1594,67 +1594,19 @@ class Chrome:
     def __init__(self,browser):
         self.browser=browser
 
-        self.font=get_font(20,"normal","roman")
-        self.font_height=self.font.metrics("linespace")
-
-        self.padding=5
-
-        # first row: tab bar
-        self.tabbar_top=0
-        self.tabbar_bottom=self.font_height+2*self.padding
-
-        plus_width=self.font.measure("+") + 2*self.padding
-
-        self.newtab_rect = Rect(
-            self.padding,
-            self.padding,
-            self.padding+plus_width,
-            self.padding+self.font_height
-        )
-
-        # second row: URL bar
-        self.urlbar_top=self.tabbar_bottom
-        self.urlbar_bottom=self.urlbar_top+self.font_height+2*self.padding
-
-        back_width=self.font.measure("<")+2*self.padding
-        forward_width=self.font.measure(">")+2*self.padding
-
-        self.back_rect=Rect(
-            self.padding,
-            self.urlbar_top+self.padding,
-            self.padding+back_width,
-            self.urlbar_bottom-self.padding
-        )
-
-        self.forward_rect = Rect(
-            self.back_rect.right+self.padding,
-            self.urlbar_top+self.padding,
-            self.back_rect.right+self.padding+forward_width,
-            self.urlbar_bottom-self.padding
-        )
-
-        bookmark_width = self.font.measure("★")+2*self.padding
-
-        self.bookmark_rect=Rect(
-            self.forward_rect.right+self.padding,
-            self.urlbar_top+self.padding,
-            self.forward_rect.right+self.padding+bookmark_width,
-            self.urlbar_bottom-self.padding
-        )
-
-        self.address_rect=Rect(
-            self.bookmark_rect.right+self.padding,
-            self.urlbar_top+self.padding,
-            WIDTH-self.padding,
-            self.urlbar_bottom-self.padding
-        )
-
-        self.bottom = self.urlbar_bottom
-
         self.focus=None
         self.address_bar = ""
         self.address_bar_cursor=0
         self.address_bar_dirty = False
+
+        self.nodes = None
+        self.document = None
+        self.display_list = []
+
+        # init height，new_tab build a Tab will use it
+        self.bottom = 80
+
+        self.render()
 
     def tab_rect(self,i):
         tabs_start=self.newtab_rect.right+self.padding
