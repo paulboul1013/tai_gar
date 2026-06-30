@@ -2484,7 +2484,10 @@ class BrowserWindow:
 
         self.update_title()
 
+        self.chrome.render()
+
         if self.active_tab:
+            self.active_tab.tab_height = HEIGHT - self.chrome.bottom
             self.active_tab.draw(self.canvas,self.chrome.bottom)
 
         for cmd in self.chrome.paint():
