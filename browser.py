@@ -1637,7 +1637,7 @@ class Chrome:
         if button:
             button_id = button.attributes.get("id")
 
-            if buttion_id == "new_tab":
+            if buttion_id == "new-tab":
                 self.discard_address_bar_edit()
                 self.browser.new_tab(URL("https://browser.engineering/"))
                 return
