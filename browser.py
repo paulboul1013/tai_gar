@@ -749,7 +749,7 @@ class ButtonLayout:
             bgcolor="lightgray"
 
         return [
-            DrawRect(rect,bgcolor)
+            DrawRect(rect,bgcolor),
             DrawOutline(rect,"black",1)
         ]
 
