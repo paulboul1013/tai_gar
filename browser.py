@@ -1582,9 +1582,11 @@ class Chrome:
         if local_x <= 0:
             return 0
 
+        font = input_layout.font
+
         for i in range(len(self.address_bar)):
-            left=self.font.measure(self.address_bar[:i])
-            right=self.font.measure(self.address_bar[:i+1])
+            left=font.measure(self.address_bar[:i])
+            right=font.measure(self.address_bar[:i+1])
             mid=(left+right)/2
 
             if local_x < mid:
