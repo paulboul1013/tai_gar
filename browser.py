@@ -9,6 +9,7 @@ from html import unescape,escape
 import webbrowser
 import os
 import tkinter.font
+import dukpy
 # emolji cache
 # key: character (e.g. "😀")
 # value: tkinter.PhotoImage object
@@ -1634,7 +1635,6 @@ class Chrome:
 
 
     def click(self,x,y):
-        # self.render()
 
         was_address_bar_focused = self.focus=="address bar"
 
