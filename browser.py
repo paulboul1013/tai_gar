@@ -1634,7 +1634,7 @@ class Chrome:
 
 
     def click(self,x,y):
-        self.render()
+        # self.render()
 
         was_address_bar_focused = self.focus=="address bar"
 
