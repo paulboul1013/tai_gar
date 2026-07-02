@@ -3154,13 +3154,6 @@ class URL:
             # unsupported scheme: javascript:,tel:,sms:,ftp:,..
             return None
 
-        # path-relative URL: page.html
-        dir,_ = self.path.rsplit("/",1) 
-        while url.startswith("../"): # deal with relative URL parent directory `..`
-            _,url= url.split("/",1)
-            if "/" in dir:
-                dir, _ = dir.rsplit("/",1)
-
         # host-relative URL
         if url.startswith("/"):
             if self.scheme in ["http","https"]:
@@ -3179,7 +3172,29 @@ class URL:
 
             return None
 
-        return URL(self.scheme+ "://" +self.host+":"+str(self.port)+dir+"/"+url)
+        # path-relative URL: page.html, test.js ../x.js
+        dir,_ = self.path.rsplit("/",1) 
+        while url.startswith("../"): # deal with relative URL parent directory `..`
+            _,url= url.split("/",1)
+
+            if "/" in dir:
+                dir, _ = dir.rsplit("/",1)
+    
+        # file:// URL has no host and no port
+        if self.scheme == "file":
+            return URL("file://"+dir+"/"+url)
+
+        # normal http /https relative URL
+        port_part = ""
+
+        if self.scheme == "http" and self.port !=80:
+            port_part=":"+str(self.port)
+            
+        elif self.scheme == "https" and self.port!= 443:
+            port_part = ":"+str(self.port)
+    
+
+        return URL(self.scheme+ "://" +self.host+port_part+dir+"/"+url)
         
 
 class HTMLParser:
