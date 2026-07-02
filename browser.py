@@ -1672,8 +1672,9 @@ class Chrome:
                 return
 
             elif button_id == "bookmark":
-                self.blur_address_bar()
+                self.discard_address_bar_edit()
                 self.browser.toggle_bookmark()
+                self.render()
                 return
 
         if isinstance(elt,Element) and elt.tag == "input" and elt.attributes.get("id") == "address":
