@@ -1995,7 +1995,7 @@ class Tab:
             except Exception:
                 continue
 
-        print("Script returned: ",dukpy.evaljs(body))
+            print("Script returned: ",dukpy.evaljs(body))
 
         rules=DEFAULT_STYLE_SHEET.copy()
 
