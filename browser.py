@@ -1976,6 +1976,27 @@ class Tab:
             else:
                 self.nodes=HTMLParser(body).parse()
 
+        scripts = [
+            node.attributes["src"]
+            for node in tree_to_list(self.nodes,[])
+            if isinstance(node,Element)
+            and node.tag=="script"
+            and "src" in node.attributes
+        ]
+        
+        for script in scripts:
+            script_url = url.resolve(script)
+
+            if script_url is None:
+                continue
+
+            try:
+                body = script_url.request()
+            except Exception:
+                continue
+
+        print("Script returned: ",dukpy.evaljs(body))
+
         rules=DEFAULT_STYLE_SHEET.copy()
 
         links = [node.attributes["href"]
