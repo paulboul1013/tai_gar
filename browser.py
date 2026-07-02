@@ -1577,7 +1577,7 @@ class Chrome:
     def cursor_index_from_x(self,x,input_layout):
         text = self.address_bar
 
-        local_x = x-self.address_rect.left-self.padding
+        local_x = x-input_layout.x
 
         if local_x <= 0:
             return 0
