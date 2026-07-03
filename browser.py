@@ -1525,6 +1525,17 @@ def cascade_priority(rule):
     selector, body=rule
     return selector.priority
 
+RUNTIME_JS = open("runtime.js").read()
+
+class JSContext:
+    def __init__(self):
+        self.interp=dukpy.JSInterpreter()
+        self.interp.export_function("log",print)
+        self.interp.eval(RUNTIME_JS)
+
+    def run(self,code):
+        return self.interp.eval(code)
+
 class ChromeLayoutParent:
     def __init__(self):
         self.x=0
