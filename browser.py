@@ -1994,6 +1994,8 @@ class Tab:
             and node.tag=="script"
             and "src" in node.attributes
         ]
+
+        self.js = JSContext()
         
         for script in scripts:
             script_url = url.resolve(script)
@@ -2006,7 +2008,8 @@ class Tab:
             except Exception:
                 continue
 
-            print("Script returned: ",dukpy.evaljs(body))
+            self.js.run(body)
+
 
         rules=DEFAULT_STYLE_SHEET.copy()
 
