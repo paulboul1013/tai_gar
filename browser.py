@@ -1533,8 +1533,11 @@ class JSContext:
         self.interp.export_function("log",print)
         self.interp.evaljs(RUNTIME_JS)
 
-    def run(self,code):
-        return self.interp.evaljs(code)
+    def run(self,script,code):
+        try:
+            return self.interp.evaljs(code)
+        except dukpy.JSRuntimeError as e:
+            print("Script",script,"crashed",e)
 
 class ChromeLayoutParent:
     def __init__(self):
