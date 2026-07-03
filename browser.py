@@ -2011,7 +2011,7 @@ class Tab:
             except Exception:
                 continue
 
-            self.js.run(body)
+            self.js.run(script,body)
 
 
         rules=DEFAULT_STYLE_SHEET.copy()
