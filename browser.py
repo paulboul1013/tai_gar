@@ -2410,7 +2410,7 @@ class Tab:
 
     def submit_form(self,elt):
         self.js.dispatch_event("submit",elt)
-        
+
         body = self.encode_form_data(elt)
 
         action = elt.attributes.get("action","")
@@ -2486,6 +2486,8 @@ class Tab:
 
     def keypress(self,char):
         if self.focus:
+            self.js.dispatch_event("keydown",self.focus)
+
             self.focus.attributes["value"] += char
             self.render()
 
