@@ -2441,6 +2441,9 @@ class Tab:
 
         button = self.button_ancestor(elt) # find button object
         if button:
+            self.js.dispatch_event("click",button)
+
+
             if self.submit_button(button): # find form and action attribution
                 return
 
@@ -2449,6 +2452,8 @@ class Tab:
         
         while elt:
             if isinstance(elt,Element) and elt.tag == "input":
+                self.js.dispatch_event("click",elt)
+
                 # checkbox input section
                 if is_checkbox_input(elt):
                     # reverse is_checked status and then re-render
@@ -2463,6 +2468,8 @@ class Tab:
                 return
 
             if isinstance(elt,Element) and elt.tag == "a" and "href" in elt.attributes:
+                self.js.dispatch_event("click",elt)
+
                 href = elt.attributes["href"]
 
                 if href.startswith("#"):
