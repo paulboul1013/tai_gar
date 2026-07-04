@@ -1561,6 +1561,11 @@ class JSContext:
 
         return [self.get_handle(node) for node in nodes]
 
+    def getAttribute(self,handle,name):
+        elt = self.handle_to_node[handle]
+        value = elt.attributes.get(name,None)
+        return value if value else ""
+
     def run(self,script,code):
         try:
             return self.interp.evaljs(code)
