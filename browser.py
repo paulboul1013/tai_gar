@@ -1528,7 +1528,7 @@ def cascade_priority(rule):
 RUNTIME_JS = open("runtime.js").read()
 
 class JSContext:
-    def __init__(self):
+    def __init__(self,tab):
         self.tab = tab
 
         self.node_to_handle = {}
