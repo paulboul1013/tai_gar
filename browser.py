@@ -1537,6 +1537,7 @@ class JSContext:
         self.interp=dukpy.JSInterpreter()
         self.interp.export_function("log",print)
         self.interp.export_function("querySelectorAll",self.querySelectorAll)
+        self.interp.export_function("getAttribute",self.getAttribute)
         self.interp.evaljs(RUNTIME_JS)
 
     def get_handle(self,node):
