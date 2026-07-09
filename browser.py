@@ -1586,6 +1586,16 @@ class JSContext:
         value = elt.attributes.get(name,None)
         return value if value else ""
 
+    def children(self,handle):
+        node = self.handle_to_node[handle]
+        
+        element_children = [
+            child for child in node.children
+            if isinstance(child,Element)
+        ]
+
+        return [self.get_handle(child) for child in element_children]
+
     def innerHTML_set(self,handle,s):
         doc = HTMLParser("<html><body>"+s+"</body></html>").parse()
 
