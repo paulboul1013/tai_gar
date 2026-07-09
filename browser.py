@@ -1570,6 +1570,23 @@ class JSContext:
         value = elt.attributes.get(name,None)
         return value if value else ""
 
+    def innerHTML_set(self,handle,s):
+        doc = HTMLParser("<html><body>"+s+"</body></html>").parse()
+
+        body = self.find_body(doc)
+        if body:
+            new_nodes = body.children
+        else:
+            new_nodes = []
+
+        elt = self.handle_to_node[handle]
+        elt.children = new_nodes
+
+        for child in elt.children:
+            child.parent = elt
+
+        self.tab.render()
+
     def dispatch_event(self,type,elt):
         handle = self.node_to_handle.get(elt,-1)
 
