@@ -2490,7 +2490,8 @@ class Tab:
         
         while elt:
             if isinstance(elt,Element) and elt.tag == "input":
-                self.js.dispatch_event("click",elt)
+                if self.js.dispatch_event("click",elt):
+                    return
 
                 # checkbox input section
                 if is_checkbox_input(elt):
