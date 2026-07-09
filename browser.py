@@ -1585,6 +1585,10 @@ class JSContext:
         for child in elt.children:
             child.parent = elt
 
+        print("--- after innerHTML_set full DOM Tree ---")
+        print_tree(self.tab.nodes)
+        print("---------------------------------------")
+
         self.tab.render()
 
     def dispatch_event(self,type,elt):
