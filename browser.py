@@ -2507,7 +2507,8 @@ class Tab:
                 return
 
             if isinstance(elt,Element) and elt.tag == "a" and "href" in elt.attributes:
-                self.js.dispatch_event("click",elt)
+                if self.js.dispatch_event("click",elt):
+                    return
 
                 href = elt.attributes["href"]
 
