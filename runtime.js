@@ -11,13 +11,25 @@ Node.prototype.addEventListener = function (type, listener) {
     list.push(listener);
 }
 
-Node.prototype.dispatchEvent = function (type) {
+function Event(type) {
+    this.type = type;
+    this.do_default = true;
+}
+
+Event.prototype.preventDefault = function () {
+    this.do_default = false;
+}
+
+Node.prototype.dispatchEvent = function (event) {
+    var type = event.type;
     var handle = this.handle;
     var list = (LISTENERS[handle] && LISTENERS[handle][type]) || [];
 
     for (var i = 0; i < list.length; i++) {
-        list[i].call(this);
+        list[i].call(this, event);
     }
+
+    return event.do_default;
 }
 
 
