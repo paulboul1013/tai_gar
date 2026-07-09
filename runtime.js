@@ -34,6 +34,12 @@ Node.prototype.getAttribute = function (attr) {
     return call_python("getAttribute", this.handle, attr)
 }
 
+Object.defineProperty(Node.prototype, "innerHTML", {
+    set: function (s) {
+        call_python("innerHTML_set", this.handle, s.toString());
+    }
+});
+
 document = {
     querySelectorAll: function (s) {
         var handles = call_python("querySelectorAll", s);
