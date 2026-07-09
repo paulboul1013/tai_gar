@@ -46,6 +46,15 @@ Node.prototype.getAttribute = function (attr) {
     return call_python("getAttribute", this.handle, attr)
 }
 
+Object.defineProperty(Node.prototype, "children", {
+    get: function () {
+        var handles = call_python("children", this.handle);
+        return handles.map(function (h) {
+            return new Node(h);
+        });
+    }
+});
+
 Object.defineProperty(Node.prototype, "innerHTML", {
     set: function (s) {
         call_python("innerHTML_set", this.handle, s.toString());
