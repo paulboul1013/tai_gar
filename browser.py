@@ -3589,6 +3589,17 @@ class HTMLParser:
         
         return tag,attributes  
 
+class IdSelector:
+    def __init__(seld,id_name):
+        self.id_name = id_name
+        self.priority = 100
+
+    def matches(self,node):
+        return (
+            isinstance(node,Element)
+            and node.attributes.get("id","") == self.id_name
+        )
+
 class CSSParser:
     def __init__(self,s):
         self.s=s
