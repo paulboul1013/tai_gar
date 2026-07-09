@@ -1595,14 +1595,17 @@ class JSContext:
         handle = self.node_to_handle.get(elt,-1)
 
         try:
-            self.interp.evaljs(
+            do_default = self.interp.evaljs(
                 EVENT_DISPATCH_JS,
                 type=type,
                 handle=handle
             )
 
+            return not do_default
+
         except dukpy.JSRuntimeError as e:
             print("Event",type,"crashed",e)
+            return False
 
     def run(self,script,code):
         try:
