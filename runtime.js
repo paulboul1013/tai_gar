@@ -20,11 +20,11 @@ Node.prototype.dispatchEvent = function (type) {
     }
 }
 
-console = {
-    log: function (x) {
-        call_python("log", x);
-    }
+
+function log(x) {
+    call_python("log", x);
 }
+
 
 function Node(handle) {
     this.handle = handle;
