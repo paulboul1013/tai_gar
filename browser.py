@@ -2478,7 +2478,8 @@ class Tab:
 
         button = self.button_ancestor(elt) # find button object
         if button:
-            self.js.dispatch_event("click",button)
+            if self.js.dispatch_event("click",button):
+                return
 
 
             if self.submit_button(button): # find form and action attribution
