@@ -1451,7 +1451,7 @@ class ClassSelector:
         return self.class_name in classes
 
 class IdSelector:
-    def __init__(seld,id_name):
+    def __init__(self,id_name):
         self.id_name = id_name
         # id selector priority is higher than class selector
         # tag selector priority is 1
