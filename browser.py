@@ -2445,7 +2445,8 @@ class Tab:
 
 
     def submit_form(self,elt):
-        self.js.dispatch_event("submit",elt)
+        if self.js.dispatch_event("submit",elt):
+            return
 
         body = self.encode_form_data(elt)
 
