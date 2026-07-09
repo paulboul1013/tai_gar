@@ -3797,8 +3797,8 @@ class CSSParser:
         # div.card.highlight
         # div.card:has(span)
 
-        # if current scan "." or ":"，it's no tag selector
-        if self.i < len(self.s) and self.s[self.i] not in ".:":
+        # if current scan "." or ":" or "#",it's no tag selector
+        if self.i < len(self.s) and self.s[self.i] not in ".:#":
             tag = self.identifier().casefold()
             selectors.append(TagSelector(tag))
 
@@ -3822,6 +3822,12 @@ class CSSParser:
 
                 else:
                     raise Exception("Parsing error")
+
+
+            elif self.s[self.i]=="#":
+                self.literal("#")
+                id_name = self.identifier()
+                selectors.append(IdSelector(id_name))
 
             else:
                 break
