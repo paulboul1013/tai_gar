@@ -1589,6 +1589,17 @@ class JSContext:
         except dukpy.JSRuntimeError as e:
             print("Script",script,"crashed",e)
 
+    def find_body(self,node):
+        body = None
+        
+        for n in tree_to_list(node,[]):
+            if isinstance(n,Element) and n.tag=="body":
+                body = n
+
+        return body
+            
+    
+
 class ChromeLayoutParent:
     def __init__(self):
         self.x=0
