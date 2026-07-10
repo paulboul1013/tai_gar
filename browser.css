@@ -115,3 +115,7 @@ button {
     font-style: normal;
     background-color: orange;
 }
+
+section {
+    display: block;
+}
