@@ -94,5 +94,14 @@ document = {
         return handles.map(function (h) {
             return new Node(h);
         });
+    },
+
+    createElement: function (tag_name) {
+        var handle = call_python(
+            "createElement",
+            tag_name
+        );
+
+        return new Node(handle);
     }
 };
