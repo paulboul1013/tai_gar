@@ -1617,9 +1617,15 @@ class JSContext:
 
         node.parent = None
 
-    
+    def check_insert_cycle(self,parent,child):
+        current = parent 
 
-    
+        while current is not None:
+            if current is child:
+                raise Exception("Cannot insert a node into itself or its descendant")
+
+            current = current.parent
+
 
     def innerHTML_set(self,handle,s):
         doc = HTMLParser("<html><body>"+s+"</body></html>").parse()
