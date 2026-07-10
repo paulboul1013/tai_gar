@@ -1642,6 +1642,39 @@ class JSContext:
 
         return child_handle
 
+    def insertBefore(self,parent_handle,new_child_handle,reference_child_handle):
+        parent = self.handle_to_node[parent_handle]
+        new_child = self.handle_to_node[new_child_handle]
+
+        # insertBefore(parent,new_child,null) equal to appendChild(new_child)
+        if reference_child_handle is None:
+            return self.appendChild(parent_handle,new_child_handle)
+
+        reference_child = self.handle_to_node[reference_child_handle]
+
+        if reference_child.parent is not parent:
+            raise Exception("Reference child is not a child of parent")
+
+        # if new_child is reference_child, do nothing
+        if new_child is reference_child:
+            return new_child_handle
+
+        self.check_insert_cycle(parent,new_child)
+
+        # remove from origin postition
+        self.detach_node(new_child)
+
+        # after remove，restart find reference_child postition
+        index = parent.children.index(reference_child)
+
+        new_child.parent = parent
+        parent.children.insert(index,new_child)
+
+        self.tab.render()
+
+        return new_child_handle
+        
+
     def innerHTML_set(self,handle,s):
         doc = HTMLParser("<html><body>"+s+"</body></html>").parse()
 
