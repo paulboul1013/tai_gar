@@ -1626,6 +1626,21 @@ class JSContext:
 
             current = current.parent
 
+    def appendChild(self,parent_handle,child_handle):
+        parent = self.handle_to_node[parent_handle]
+        child = self.handle_to_node[child_handle]
+        
+        self.check_insert_cycle(parent,child)
+        
+        # if child already in other place，remove from old parent
+        self.detach_node(child)
+
+        child.parent = parent # reconnect new parent
+        parent.children.append(child) # append new child
+        
+        self.tab.render()
+
+        return child_handle
 
     def innerHTML_set(self,handle,s):
         doc = HTMLParser("<html><body>"+s+"</body></html>").parse()
