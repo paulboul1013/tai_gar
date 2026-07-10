@@ -46,6 +46,16 @@ Node.prototype.getAttribute = function (attr) {
     return call_python("getAttribute", this.handle, attr)
 }
 
+Node.prototype.appendChild = function (child) {
+    call_python(
+        "appendChild",
+        this.handle,
+        child.handle
+    );
+
+    return child;
+};
+
 Object.defineProperty(Node.prototype, "children", {
     get: function () {
         var handles = call_python("children", this.handle);
