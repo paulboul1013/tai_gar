@@ -1601,6 +1601,16 @@ class JSContext:
 
         return [self.get_handle(child) for child in element_children]
 
+    def createElement(self,tag_name):
+        tag_name = str(tag_name).casefold()
+        
+        # build not connected DOM tree's element yet
+        node = Element(tag_name,{},None)
+
+        return self.get_handle(node)
+
+    
+
     def innerHTML_set(self,handle,s):
         doc = HTMLParser("<html><body>"+s+"</body></html>").parse()
 
