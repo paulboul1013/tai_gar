@@ -1557,6 +1557,11 @@ class JSContext:
         self.interp.export_function("querySelectorAll",self.querySelectorAll)
         self.interp.export_function("getAttribute",self.getAttribute)
         self.interp.export_function("children",self.children)
+
+        self.interp.export_function("createElement",self.createElement)
+        self.interp.export_function("appendChild",self.appendChild)
+        self.interp.export_function("insertBefore",self.insertBefore)
+
         self.interp.export_function("innerHTML_set",self.innerHTML_set)
         self.interp.evaljs(RUNTIME_JS)
 
