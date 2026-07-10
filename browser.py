@@ -1609,6 +1609,16 @@ class JSContext:
 
         return self.get_handle(node)
 
+    def detach_node(self,node):
+        old_parent = node.parent
+        
+        if old_parent is not None and node in old_parent.children:
+            old_parent.children.remove(node)
+
+        node.parent = None
+
+    
+
     
 
     def innerHTML_set(self,handle,s):
