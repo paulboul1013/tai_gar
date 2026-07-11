@@ -1566,6 +1566,8 @@ class JSContext:
         self.interp.export_function("innerHTML_set",self.innerHTML_set)
         self.interp.evaljs(RUNTIME_JS)
 
+        self.update_id_globals()
+
     def get_handle(self,node):
         if node not in self.node_to_handle:
             handle = len(self.node_to_handle)
