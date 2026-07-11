@@ -73,6 +73,16 @@ Node.prototype.insertBefore = function (new_child, reference_child) {
     return new_child;
 };
 
+Node.prototype.removeChild = function (child) {
+    call_python(
+        "removeChild",
+        this.handle,
+        child.handle
+    );
+
+    return child;
+}
+
 Object.defineProperty(Node.prototype, "children", {
     get: function () {
         var handles = call_python("children", this.handle);
