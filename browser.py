@@ -1674,6 +1674,23 @@ class JSContext:
         self.tab.render()
 
         return new_child_handle
+
+    def removeChild(self,parent_handle,child_handle):
+        parent = self.handle_to_node[parent_handle]
+        child = self.handle_to_node[child_handle]
+
+        # only remove direct child node itself
+        if child.parent is not parent or child not in parent.children:
+            raise Exception("Node is not a child of this parent")
+
+        # from python DOM tree unlock connect
+        self.detach_node(child)
+
+        # after DOM changed，render it
+        self.tab.render()
+
+        # return removed child
+        return child_handle
         
 
     def innerHTML_set(self,handle,s):
