@@ -1561,6 +1561,7 @@ class JSContext:
         self.interp.export_function("createElement",self.createElement)
         self.interp.export_function("appendChild",self.appendChild)
         self.interp.export_function("insertBefore",self.insertBefore)
+        self.interp.export_function("removeChild",self.removeChild)
 
         self.interp.export_function("innerHTML_set",self.innerHTML_set)
         self.interp.evaljs(RUNTIME_JS)
