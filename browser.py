@@ -1671,6 +1671,7 @@ class JSContext:
         child.parent = parent # reconnect new parent
         parent.children.append(child) # append new child
         
+        self.update_id_globals() # after subtree connect into document, maybe have add id globals
         self.tab.render()
 
         return child_handle
