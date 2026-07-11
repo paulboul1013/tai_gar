@@ -1739,6 +1739,12 @@ class JSContext:
             new_nodes = []
 
         elt = self.handle_to_node[handle]
+
+        # old children become detaced subtree roots
+        for old_child in elt.children:
+            old_child.parent = None
+
+        
         elt.children = new_nodes
 
         for child in elt.children:
@@ -1748,6 +1754,8 @@ class JSContext:
         # print_tree(self.tab.nodes)
         # print("---------------------------------------")
 
+        # delete old id globals，add new id globals
+        self.update_id_globals()
         self.tab.render()
 
     def dispatch_event(self,type,elt):
