@@ -1579,6 +1579,36 @@ class JSContext:
 
         return handle
 
+    def update_id_globals(self):
+        entries = []
+        seen_ids = set()
+
+        # only scan document root can reach nodes
+        for node in tree_to_list(self.tab.nodes,[]):
+            if not isinstance(node,Element):
+                continue
+
+            id_name = node.attributes.get("id","")
+            
+            if not id_name:
+                continue
+
+            # simplfity deal with duplicate id
+            if id_name in seen_ids:
+                continue
+
+            seen_ids.add(id_name)
+            
+            entries.append([
+                id_name,
+                self.get_handle(node)
+            ])
+
+        self.interp.evaljs(
+            "sync_id_globals(dukpy.entries)",
+            entries=entries
+        )
+
     def querySelectorAll(self,selector_text):
         selector = CSSParser(selector_text).selector()
 
