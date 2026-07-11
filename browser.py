@@ -1720,6 +1720,8 @@ class JSContext:
         # from python DOM tree unlock connect
         self.detach_node(child)
 
+        self.update_id_globals() # after subtree remove from document, maybe have remove id globals
+
         # after DOM changed，render it
         self.tab.render()
 
