@@ -37,6 +37,55 @@ function log(x) {
     call_python("log", x);
 }
 
+//global window object
+var window = this;
+
+//record from browser auto build ID global variable
+//like :
+/*
+<div id="foo"></div> will build 
+window.foo = new Node(handle);
+*/
+var ID_GLOBALS = {};
+
+function sync_id_globals() {
+    //first remove last time build ID global variable from browser
+
+    for (var name in ID_GLOBALS) {
+        if (window[name] === ID_GLOBALS[name]) {
+            delete window[name];
+        }
+    }
+
+    ID_GLOBALS = {};
+
+    /* entries format:
+        [
+            ["foo",3],
+            ["message",9]
+        ]
+    */
+
+    for (var i = 0; i < entries.length; i++) {
+        var name = entries[i][0];
+        var handle = entries[i][1];
+
+        /*
+            don't overwrite document,window,Node,Event,
+            or already builed global variable
+        */
+
+        if (name in window) {
+            continue;
+        }
+
+        var node = new Node(handle);
+
+        window[name] = node;
+        ID_GLOBALS[name] = node;
+    }
+
+}
 
 function Node(handle) {
     this.handle = handle;
