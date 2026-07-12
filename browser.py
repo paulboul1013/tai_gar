@@ -1759,13 +1759,25 @@ class JSContext:
         self.tab.render()
 
     def dispatch_event(self,type,elt):
-        handle = self.node_to_handle.get(elt,-1)
+        handles =[] 
+        
+        current = elt
+
+        # from target start，up parent to document root
+        while current is not None:
+            if isinstance(current,Element):
+                handles.append(self.get_handle(current))
+
+            current = current.parent
+
+        if not handles:
+            return False
 
         try:
             do_default = self.interp.evaljs(
                 EVENT_DISPATCH_JS,
                 type=type,
-                handle=handle
+                handles=handles
             )
 
             return not do_default
