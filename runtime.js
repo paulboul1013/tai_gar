@@ -41,6 +41,9 @@ Node.prototype.dispatchEvent = function (event) {
     var handle = this.handle;
     var list = (LISTENERS[handle] && LISTENERS[handle][type]) || [];
 
+    //dealing with event node right now
+    event.currentTarget = this;
+
     for (var i = 0; i < list.length; i++) {
         list[i].call(this, event);
     }
