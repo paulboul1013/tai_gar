@@ -51,6 +51,38 @@ Node.prototype.dispatchEvent = function (event) {
     return event.do_default;
 }
 
+function dispatch_event_path(type, handles) {
+    var event = new Event(type);
+
+    if (handles.length === 0) {
+        return true;
+    }
+
+    // handles's order 
+    /*
+        [
+            target,
+            parent,
+            grandparent
+        ]
+    */
+
+    event.target = new Node(handles[0]);
+
+    for (var i = 0; i < handles.length; i++) {
+        var current = new Node(handles[i]);
+
+        current.dispatchEvent(event);
+
+        //when current node listeners all done
+        //and then check need to bubble up
+        if (event.propagation_stopped) {
+            break;
+        }
+    }
+
+    return event.do_default;
+}
 
 function log(x) {
     call_python("log", x);
