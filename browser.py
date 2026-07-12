@@ -1543,7 +1543,7 @@ def cascade_priority(rule):
 RUNTIME_JS = open("runtime.js").read()
 
 EVENT_DISPATCH_JS = \
-    "new Node(dukpy.handle).dispatchEvent(new Event(dukpy.type))"
+    "dispatch_event_path(dukpy.type, dukpy.handles)"
 
 class JSContext:
     def __init__(self,tab):
