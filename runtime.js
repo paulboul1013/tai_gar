@@ -13,12 +13,28 @@ Node.prototype.addEventListener = function (type, listener) {
 
 function Event(type) {
     this.type = type;
+
+    //default execute browser default action
     this.do_default = true;
+
+
+    //default make for ancestor bubbling
+    this.propagation_stopped = false;
+
+    //first have event's element
+    this.target = null;
+
+    //current executing listener's element
+    this.currentTarget = null;
 }
 
 Event.prototype.preventDefault = function () {
     this.do_default = false;
 }
+
+Event.prototype.stopPropagation = function () {
+    this.propagation_stopped = true;
+};
 
 Node.prototype.dispatchEvent = function (event) {
     var type = event.type;
@@ -48,7 +64,7 @@ window.foo = new Node(handle);
 */
 var ID_GLOBALS = {};
 
-function sync_id_globals() {
+function sync_id_globals(entries) {
     //first remove last time build ID global variable from browser
 
     for (var name in ID_GLOBALS) {
