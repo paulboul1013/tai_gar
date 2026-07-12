@@ -2653,19 +2653,32 @@ class Tab:
             self.render()
             return
 
-        elt = obj.node
+        target = obj.node
 
-        button = self.button_ancestor(elt) # find button object
+        # when click text,obj.node maybe just a text
+        # click event should be from target's parent element start
+        while target is not None and not isinstance(target,Element):
+            target = target.parent
+
+        if target is None:
+            self.render()
+            return
+
+        # from real target start dispatch event and bubble up ancestor
+        if self.js.dispatch_event("click",target):
+            # preventDefault() is called
+            return
+
+        button = self.button_ancestor(target) # find button object
         if button:
-            if self.js.dispatch_event("click",button):
-                return
-
 
             if self.submit_button(button): # find form and action attribution
                 return
 
             self.render()
             return
+
+        elt=target
         
         while elt:
             if isinstance(elt,Element) and elt.tag == "input":
