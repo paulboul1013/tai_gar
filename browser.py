@@ -2669,8 +2669,6 @@ class Tab:
         
         while elt:
             if isinstance(elt,Element) and elt.tag == "input":
-                if self.js.dispatch_event("click",elt):
-                    return
 
                 # checkbox input section
                 if is_checkbox_input(elt):
@@ -2686,8 +2684,7 @@ class Tab:
                 return
 
             if isinstance(elt,Element) and elt.tag == "a" and "href" in elt.attributes:
-                if self.js.dispatch_event("click",elt):
-                    return
+
 
                 href = elt.attributes["href"]
 
