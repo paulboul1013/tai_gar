@@ -1701,6 +1701,21 @@ class JSContext:
             + closing_tag
         )
 
+    def innerHTML_get(self,handle):
+        node = self.handle_to_node[handle]
+        
+        # innerHTML only serialize children
+        return "".join(
+            self.serialize_node(child)
+            for child in node.children
+        )
+
+    def outerHTML_get(self,handle):
+        node = self.handle_to_node[handle]
+
+        # outerHTML serialize children node and itself
+        return self.serialize_node(node)
+
     def children(self,handle):
         node = self.handle_to_node[handle]
         
