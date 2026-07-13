@@ -193,8 +193,19 @@ Object.defineProperty(Node.prototype, "children", {
 });
 
 Object.defineProperty(Node.prototype, "innerHTML", {
+    get: function () {
+        return call_python(
+            "innerHTML_get",
+            this.handle
+        );
+    },
+
     set: function (s) {
-        call_python("innerHTML_set", this.handle, s.toString());
+        call_python(
+            "innerHTML_set",
+            this.handle,
+            s.toString()
+        );
     }
 });
 
