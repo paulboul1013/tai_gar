@@ -155,6 +155,16 @@ Node.prototype.setAttribute = function (name, value) {
     );
 };
 
+Object.defineProperty(Node.prototype, "id", {
+    get: function () {
+        return this.getAttribute("id");
+    },
+
+    set: function (value) {
+        this.setAttribute("id", value.toString());
+    }
+});
+
 Node.prototype.appendChild = function (child) {
     call_python(
         "appendChild",
