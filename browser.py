@@ -1693,7 +1693,7 @@ class JSContext:
             for child in node.children
         )
 
-        closing_tag = "</{}".format(node.tag)
+        closing_tag = "</{}>".format(node.tag)
         
         return (
             opening_tag
