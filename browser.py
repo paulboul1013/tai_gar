@@ -1645,6 +1645,62 @@ class JSContext:
 
         self.tab.render()
 
+    def serialize_attributes(self,element):
+        output = []
+        
+        for name,value in element.attributes.items():
+            if value is None:
+                value = ""
+
+            escaped_value = escape(
+                str(value),
+                quote=True
+            )
+
+            output.append(
+                ' {}={}'.format(
+                    name,
+                    escaped_value
+                )
+            )
+
+        return "".join(output)
+
+    def serialize_node(self,node):
+        # text node only output text,but must escape HTML speical characters
+        if isinstance(node,Text):
+            return escape(
+                node.text,
+                quote=False
+            )
+
+        if not isinstance(node,Element):
+            return ""
+
+        attributes = self.serialize_attributes(node)
+
+        opening_tag = "<{}{}>".format(
+            node.tag,
+            attributes
+        )
+
+        # void element don't have closing tag
+        if node.tag in VOID_ELEMENTS:
+            return opening_tag
+
+        children_html = "".join(
+            self.serialize_node(child)
+            for child in node.children
+        )
+
+        closing_tag = "</{}".format(node.tag)
+        
+        return (
+            opening_tag
+            + children_html
+            + closing_tag
+        )
+
     def children(self,handle):
         node = self.handle_to_node[handle]
         
