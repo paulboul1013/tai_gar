@@ -146,6 +146,15 @@ Node.prototype.getAttribute = function (attr) {
     return call_python("getAttribute", this.handle, attr)
 }
 
+Node.prototype.setAttribute = function (name, value) {
+    call_python(
+        "setAttribute",
+        this.handle,
+        name.toString(),
+        value.toString()
+    );
+};
+
 Node.prototype.appendChild = function (child) {
     call_python(
         "appendChild",
