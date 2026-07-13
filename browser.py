@@ -1565,7 +1565,7 @@ class JSContext:
         self.interp.export_function("innerHTML_set",self.innerHTML_set)
         self.interp.export_function("outerHTML_get",self.outerHTML_get)
 
-        
+
         self.interp.evaljs(RUNTIME_JS)
 
         self.update_id_globals()
@@ -1625,6 +1625,25 @@ class JSContext:
         elt = self.handle_to_node[handle]
         value = elt.attributes.get(name,None)
         return value if value else ""
+
+    def setAttribute(self,handle,name,value):
+        elt = self.handle_to_node[handle]
+        
+        if not isinstance(elt,Element):
+            raise Exception(
+                "setAttribute can only be used on an Element"
+            )
+
+        name=str(name).casefold()
+        value=str(value)
+
+        elt.attributes[name]=value
+
+        # after changed id，js global id variable must sync
+        if name=="id":
+            self.update_id_globals()
+
+        self.tab.render()
 
     def children(self,handle):
         node = self.handle_to_node[handle]
