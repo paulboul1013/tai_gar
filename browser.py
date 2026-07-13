@@ -1553,6 +1553,7 @@ class JSContext:
         self.interp.export_function("log",print)
         self.interp.export_function("querySelectorAll",self.querySelectorAll)
         self.interp.export_function("getAttribute",self.getAttribute)
+        self.interp.export_function("setAttribute",self.setAttribute)
         self.interp.export_function("children",self.children)
 
         self.interp.export_function("createElement",self.createElement)
@@ -1560,7 +1561,11 @@ class JSContext:
         self.interp.export_function("insertBefore",self.insertBefore)
         self.interp.export_function("removeChild",self.removeChild)
 
+        self.interp.export_function("innerHTML_get",self.innerHTML_get)
         self.interp.export_function("innerHTML_set",self.innerHTML_set)
+        self.interp.export_function("outerHTML_get",self.outerHTML_get)
+
+        
         self.interp.evaljs(RUNTIME_JS)
 
         self.update_id_globals()
