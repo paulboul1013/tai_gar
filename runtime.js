@@ -209,6 +209,15 @@ Object.defineProperty(Node.prototype, "innerHTML", {
     }
 });
 
+Object.defineProperty(Node.prototype, "outerHTML", {
+    get: function () {
+        return call_python(
+            "outerHTML_get",
+            this.handle
+        );
+    }
+});
+
 document = {
     querySelectorAll: function (s) {
         var handles = call_python("querySelectorAll", s);
