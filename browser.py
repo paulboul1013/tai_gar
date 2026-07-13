@@ -1658,7 +1658,7 @@ class JSContext:
             )
 
             output.append(
-                ' {}={}'.format(
+                ' {}="{}"'.format(
                     name,
                     escaped_value
                 )
