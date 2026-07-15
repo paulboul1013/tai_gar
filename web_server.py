@@ -75,6 +75,44 @@ def save_topics():
 
     os.replace(temp_file,DATA_FILE)
 
+def parse_cookies(cookie_header):
+    cookies = {}
+
+    if not cookie_header:
+        return cookies
+
+    # Cookie: token=abc; theme=dark
+    for part in cookie_header.split(";"):
+        part = part.strip()
+
+        if "=" not in part:
+            continue
+
+        name, value = part.split("=",1)
+        
+        name = name.strip()
+        value = value.strip()
+
+        if name:
+            cookies[name] = value
+
+    return cookies
+
+
+def valid_token(token):
+    if not isinstance(token,str):
+        return False
+
+    # secrets.token_hex(32) -> 64 hex chars
+    if len(token) != 64:
+        return False
+
+    try:
+        int(token,16)
+    except ValueError:
+        return False
+
+    return True
 
 def handle_connection(conx):
     req = conx.makefile("b")
