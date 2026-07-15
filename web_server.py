@@ -3,8 +3,14 @@ import urllib.parse
 from html import escape
 import os
 import json
+import secrets
 
 DATA_FILE = "message_board.json"
+
+COOKIE_NAME = "token"
+
+# token -> for user session dictionary
+SESSIONS = {}
 
 DEFAULT_TOPICS = {
     "cooking" :[
