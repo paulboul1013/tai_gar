@@ -117,14 +117,25 @@ def valid_token(token):
 def handle_connection(conx):
     req = conx.makefile("b")
     reqline = req.readline().decode('utf8')
+
+    if not reqline:
+        conx.close()
+        return
+    
+    
     method, url, version = reqline.split(" ", 2)
     assert method in ["GET", "POST"]
 
     headers = {}
+
     while True:
         line = req.readline().decode('utf8')
-        if line == '\r\n': break
+
+        if line == '\r\n': 
+            break
+
         header, value = line.split(":", 1)
+
         headers[header.casefold()] = value.strip()
 
     if 'content-length' in headers:
@@ -133,14 +144,46 @@ def handle_connection(conx):
     else:
         body = None
 
-    status, body = do_request(method, url, headers, body)
+    # read cookie
+    cookie_header = headers.get("cookie","")
+    cookies = parse_cookies(cookie_header)
+
+    token = cookies.get(COOKIE_NAME)
+
+    new_cookie = False
+
+    # first visit，or get invalid token
+    if not valid_token(token):
+        token = secrets.token_hex(32)
+        new_cookie = True
+
+    # get user server-side session
+    session = SESSIONS.setdefault(token,{})
+
+    # let session pass into request
+    status, body = do_request(session,
+        method,
+        url, 
+        headers, 
+        body
+    )
+
+    body_bytes = body.encode("utf8")
 
     response = "HTTP/1.0 {}\r\n".format(status)
-    response += "Content-Length: {}\r\n".format(
-    len(body.encode("utf8")))
-    response += "\r\n" + body
+    response += "Content-Type: text/html; charset=utf-8\r\n"
+    response += "Content-Length: {}\r\n".format(len(body_bytes))
 
-    conx.send(response.encode('utf8'))
+    # when first visit，request broswer must save token
+    if new_cookie:
+        response += "Set-Cookie: {}={}\r\n".format(
+            COOKIE_NAME,
+            token
+        )
+
+    response += "\r\n"
+
+    conx.send(response.encode('utf8')+body_bytes)
     conx.close()
 
 
@@ -193,7 +236,7 @@ def normalize_topic_name(topic):
     topic = "".join(out).strip("-")
     return topic
 
-def show_home():
+def show_home(session):
     out = "<!doctype html>"
     out += "<html>"
     out += "<body>"
@@ -229,7 +272,7 @@ def show_home():
 
     return out
 
-def show_topic(topic):
+def show_topic(session,topic):
     messages = TOPICS[topic]
 
     out = "<!doctype html>"
@@ -264,23 +307,23 @@ def show_topic(topic):
 
     return out
 
-def add_topic(params):
+def add_topic(session,params):
     if "topic" not in params:
-        return show_home()
+        return show_home(session)
 
     topic = normalize_topic_name(params["topic"])
     
 
     if topic=="":
-        return show_home()
+        return show_home(session)
 
     if topic not in TOPICS:
         TOPICS[topic] = []
         save_topics()
 
-    return show_home()
+    return show_home(session)
 
-def add_message(topic,params):
+def add_message(session,topic,params):
     if topic not in TOPICS:
         return not_found("/add/"+topic,"POST")
 
@@ -291,7 +334,7 @@ def add_message(topic,params):
             TOPICS[topic].append(message)
             save_topics()
 
-    return show_topic(topic)
+    return show_topic(session,topic)
 
 def query_decode(url):
     if "?" not in url:
@@ -345,28 +388,28 @@ def not_found(url,method):
     out += "</html>"
     return out
 
-def do_request(method, url, headers, body):
+def do_request(session,method, url, headers, body):
     path = path_only(url)
 
     if method == "GET" and path =="/":
-        return "200 OK", show_home()
+        return "200 OK", show_home(session)
 
     elif method=="POST" and path=="/add-topic":
         params = form_decode(body)
-        return "200 OK" ,add_topic(params)
+        return "200 OK" ,add_topic(session,params)
 
     elif method=="GET" and path.startswith("/") and len(path) > 1:
         topic = urllib.parse.unquote(path[1:])
 
         if topic in TOPICS:
-            return "200 OK", show_topic(topic)
+            return "200 OK", show_topic(session,topic)
         else:
             return "404 Not Found",not_found(url,method)
 
     elif method == "POST" and path.startswith("/add/"):
         topic = urllib.parse.unquote(path[len("/add/"):])
         params = form_decode(body)
-        return "200 OK", add_message(topic,params)
+        return "200 OK", add_message(session,topic,params)
     else:
         return "404 Not Found", not_found(url,method)
 
