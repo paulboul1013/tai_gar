@@ -254,3 +254,36 @@ document = {
         return new Node(handle);
     }
 };
+
+function XMLHttpRequest() {
+    this.method = null;
+    this.url = null;
+    this.responseText = null;
+}
+
+XMLHttpRequest.prototype.open = function (method, url, is_async) {
+    if (is_async) {
+        throw Error(
+            "Asynchronous XHR is not supported"
+        );
+    }
+
+    this.method = method;
+    this.url = url;
+};
+
+XMLHttpRequest.prototype.send = function (body) {
+    //x.send() with no parameters
+    // let js undefined turn into python None
+    if (body == undefined) {
+        body = null;
+    }
+
+    this.responseText = call_python(
+        "XMLHttpRequest_send",
+        this.method,
+        this.url,
+        body
+    );
+};
+
