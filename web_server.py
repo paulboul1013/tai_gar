@@ -551,13 +551,32 @@ def not_found(url,method):
 def do_request(session,method, url, headers, body):
     path = path_only(url)
 
+    # home page
     if method == "GET" and path =="/":
         return "200 OK", show_home(session)
 
+    # login page
+    elif method == "GET" and path =="/login":
+        return "200 OK" ,login_form(session)
+
+    # deal with login
+    elif method == "POST" and path == "/":
+        params = form_decode(body)
+
+        return do_login(
+            session,
+            params
+        )
+    
+    # add topic
     elif method=="POST" and path=="/add-topic":
+        if "uesr" not in session:
+            return "403 Forbidden",login_required()
+
         params = form_decode(body)
         return "200 OK" ,add_topic(session,params)
 
+    # show topic
     elif method=="GET" and path.startswith("/") and len(path) > 1:
         topic = urllib.parse.unquote(path[1:])
 
@@ -566,10 +585,16 @@ def do_request(session,method, url, headers, body):
         else:
             return "404 Not Found",not_found(url,method)
 
+    # add message
     elif method == "POST" and path.startswith("/add/"):
+        if "user" not in session:
+            return "403 Forbidden",login_required()
+
         topic = urllib.parse.unquote(path[len("/add/"):])
         params = form_decode(body)
         return "200 OK", add_message(session,topic,params)
+    
+    # other
     else:
         return "404 Not Found", not_found(url,method)
 
