@@ -4,6 +4,7 @@ from html import escape
 import os
 import json
 import secrets
+import hmac
 
 DATA_FILE = "message_board.json"
 
@@ -12,12 +13,23 @@ COOKIE_NAME = "token"
 # token -> for user session dictionary
 SESSIONS = {}
 
+LOGINS = {
+    "paul":"123cool",
+    "admin":"password"
+}
+
 DEFAULT_TOPICS = {
     "cooking" :[
-        "Pavel made soup",
+        {
+            "text":"pavel made soup",
+            "author":"paul",
+        },
     ],
     "cars" :[
-        "Toyota is reliable",
+        {
+            "text":"Toyota is reliable",
+            "author":"admin",
+        },
     ],
 }
 
