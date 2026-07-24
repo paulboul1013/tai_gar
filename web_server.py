@@ -303,6 +303,42 @@ def login_form(session):
 
     return out
     
+def do_login(session,params):
+    username = params.get("username","")
+    password = params.get("password","")
+
+    expected_password = LOGINS.get(username)
+
+    valid_login =(
+        expected_password is not None
+        and hmac.compare_digest(
+            expected_password,
+            password
+        )
+    )
+
+    if valid_login:
+        session["user"] = username
+
+        return "200 OK",show_home(session)
+
+    out = "<!doctype html>"
+    out += "<html>"
+    out += "<body>"
+
+    out += "<h1>Invalid username or password</h1>"
+
+    if username:
+        out+="<p>Username:"
+        out+=escape(username)
+        out+="</p>"
+
+    out += "<p><a href=/login>Try again</a></p>"
+
+    out += "</body>"
+    out += "</html>"
+
+    return "401 Unauthorized",out
 
 def show_home(session):
     out = "<!doctype html>"
