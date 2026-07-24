@@ -402,12 +402,25 @@ def show_topic(session,topic):
     out += escape(topic)
     out += "</h1>"
 
-    out += "<form action={} method=post>".format(
-        escape(add_topic_url(topic), quote=True)
-    )
-    out +=   "<p><input name=message></p>"
-    out +=   "<p><button>Post message</button></p>"
-    out += "</form>"
+    if "user" in session:
+        out += "<p>Hello,"
+        out += escape(session["user"])
+        out += "</p>"
+
+        out += "<form action={} method=post>".format(
+            escape(add_topic_url(topic), quote=True)
+        )
+        out +=   "<p><input name=message></p>"
+        out +=   "<p><button>Post message</button></p>"
+        out += "</form>"
+
+    else:
+        out += "<p>"
+        out += "<a href=/login>"
+        out += "Sign in to post a message"
+        out += "</a>"
+        out += "</p>"
+
 
     out += "<h2>Messages</h2>"
 
@@ -415,8 +428,15 @@ def show_topic(session,topic):
         out += "<p>No messages yet.</p>"
     else:
         for message in messages:
+            text = message["text"]
+            author = message["author"]
+
             out += "<p>"
-            out += escape(message)
+            out += escape(text)
+            out += "<br>"
+            out += "<i>by "
+            out += escape(author)
+            out += "</i>"
             out += "</p>"
 
     out += "</body>"
