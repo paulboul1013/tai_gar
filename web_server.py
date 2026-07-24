@@ -44,26 +44,17 @@ def default_topics_copy():
 
 def load_topics():
     if not os.path.exists(DATA_FILE):
-        return {
-            topic:message[:]
-            for topic,message in DEFAULT_TOPICS.items()
-        }
+        return default_topics_copy()
 
     try:
         with open(DATA_FILE,"r",encoding="utf8") as f:
             data = json.load(f)
     except Exception as e:
         print("Failed to load data file:",e)
-        return {
-            topic:message[:]
-            for topic,message in DEFAULT_TOPICS.items()
-        }
+        return default_topics_copy()
 
     if not isinstance(data,dict):
-        return{
-            topic:message[:]
-            for topic,message in DEFAULT_TOPICS.items()
-        }
+        return default_topics_copy()
 
     topics ={}
 
@@ -77,9 +68,32 @@ def load_topics():
         clean_messages = []
 
         for message in messages:
+            # old format
+            # "Hello"
             if isinstance(message,str):
-                clean_messages.append(message)
+                clean_messages.append({
+                    "text":message,
+                    "author":"anonymous"
+                })
+                continue
 
+            # new format
+            # {"text":"hello","author":"paul"}
+            if isinstance(message,dict):
+                text = message.get("text")
+                author = message.get("author")
+                
+                if not isinstance(text,str):
+                    continue
+
+                if not isinstance(author,str):
+                    continue
+
+                clean_messages.append({
+                    "text":text,
+                    "author":author
+                })
+                
         topics[topic] = clean_messages
 
 
