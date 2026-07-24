@@ -33,6 +33,15 @@ DEFAULT_TOPICS = {
     ],
 }
 
+def default_topics_copy():
+    return {
+        topic: [
+            message.copy()
+            for message in messages
+        ]
+        for topic,messages in DEFAULT_TOPICS.items()
+    }
+
 def load_topics():
     if not os.path.exists(DATA_FILE):
         return {
