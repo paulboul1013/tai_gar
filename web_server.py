@@ -149,6 +149,23 @@ def valid_token(token):
 
     return True
 
+def create_nonce(session):
+    nonce = secrets.token_hex(32) #create nonce value
+    session["nonce"] = nonce
+    return nonce
+
+def valid_nonce(sesson,params):
+    if "nonce" not in sesson:
+        return False
+
+    if "nonce" not in params:
+        return False
+
+    return hmac.compare_digest( # compare nonce value
+        sesson["nonce"],
+        params["nonce"]
+    )
+
 def handle_connection(conx):
     req = conx.makefile("b")
     reqline = req.readline().decode('utf8')
@@ -378,10 +395,20 @@ def show_home(session):
 
     # only login user can add new topic
     if "user" in session:
+
+        nonce = create_nonce(session)
+
         out += "<h2>Add new topic</h2>"
         out += "<form action=/add-topic method=post>"
-        out +=   "<p><input name=topic></p>"
-        out +=   "<p><button>Add topic</button></p>"
+        # add nonce to form
+        out += "<input "
+        out += "name=nonce " # nonce field
+        out += "type=hidden " # hidden field
+        out += "value={}>".format(nonce) # nonce value
+
+        out += "<p><input name=topic></p>"
+        out += "<p><button>Add topic</button></p>"
+
         out += "</form>"
 
     out += "</body>"
@@ -403,6 +430,8 @@ def show_topic(session,topic):
     out += "</h1>"
 
     if "user" in session:
+        nonce = create_nonce(session)
+
         out += "<p>Hello,"
         out += escape(session["user"])
         out += "</p>"
@@ -410,6 +439,12 @@ def show_topic(session,topic):
         out += "<form action={} method=post>".format(
             escape(add_topic_url(topic), quote=True)
         )
+
+        out += "<input "
+        out += "name=nonce "
+        out += "type=hidden "
+        out += "value={}>".format(nonce)
+
         out +=   "<p><input name=message></p>"
         out +=   "<p><button>Post message</button></p>"
         out += "</form>"
@@ -521,6 +556,20 @@ def show_submit_result(url):
 
     return out
 
+def csrf_rejected():# when nonce is incorrect return error page
+    out = "<!doctype html>"
+    out += "<html>"
+    out += "<body>"
+
+    out += "<h1>Invalid form submission</h1>"
+    out += "<p>The CSRF nonce is missing or invalid.</p>"
+    out += "<p><a href=/>Back to topics</a></p>"
+
+    out += "</body>"
+    out += "</html>"
+
+    return out
+
 def login_required():
     out = "<!doctype html>"
     out += "<html>"
@@ -570,10 +619,14 @@ def do_request(session,method, url, headers, body):
     
     # add topic
     elif method=="POST" and path=="/add-topic":
-        if "uesr" not in session:
+        if "user" not in session:
             return "403 Forbidden",login_required()
 
         params = form_decode(body)
+
+        if not valid_nonce(session,params):
+            return "403 Forbidden",csrf_rejected()
+
         return "200 OK" ,add_topic(session,params)
 
     # show topic
@@ -590,8 +643,13 @@ def do_request(session,method, url, headers, body):
         if "user" not in session:
             return "403 Forbidden",login_required()
 
-        topic = urllib.parse.unquote(path[len("/add/"):])
         params = form_decode(body)
+
+        if not valid_nonce(session,params):
+            return "403 Forbidden", csrf_rejected()
+
+        topic = urllib.parse.unquote(path[len("/add/"):])
+
         return "200 OK", add_message(session,topic,params)
     
     # other
