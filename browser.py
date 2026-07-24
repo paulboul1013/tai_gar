@@ -1565,6 +1565,8 @@ class JSContext:
         self.interp.export_function("innerHTML_set",self.innerHTML_set)
         self.interp.export_function("outerHTML_get",self.outerHTML_get)
 
+        self.interp.export_function("XMLHttpRequest_send",self.XMLHttpRequest_send)
+
 
         self.interp.evaljs(RUNTIME_JS)
 
@@ -1610,6 +1612,10 @@ class JSContext:
             "sync_id_globals(dukpy.entries)",
             entries=entries
         )
+
+    def XMLHttpRequest_send(self,method,url,body):
+        full_url = self.tab.url.resolve(url)
+        return full_url.request(body)
 
     def querySelectorAll(self,selector_text):
         selector = CSSParser(selector_text).selector()
