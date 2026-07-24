@@ -347,6 +347,17 @@ def show_home(session):
 
     out += "<h1>Message Board</h1>"
 
+    if "user" in session:
+        out += "<p>Hello, "
+        out += escape(session["user"])
+        out += "</p>"
+    else:
+        out += "<p>"
+        out += "<a href=/login>"
+        out += "sign in to post messages"
+        out += "</a>"
+        out += "</p>"
+    
     out += "<h2>Topics</h2>"
 
     if not TOPICS:
@@ -365,11 +376,13 @@ def show_home(session):
 
         out+="</ul>"
 
-    out += "<h2>Add new topic</h2>"
-    out += "<form action=/add-topic method=post>"
-    out +=   "<p><input name=topic></p>"
-    out +=   "<p><button>Add topic</button></p>"
-    out += "</form>"
+    # only login user can add new topic
+    if "user" in session:
+        out += "<h2>Add new topic</h2>"
+        out += "<form action=/add-topic method=post>"
+        out +=   "<p><input name=topic></p>"
+        out +=   "<p><button>Add topic</button></p>"
+        out += "</form>"
 
     out += "</body>"
     out += "</html>"
