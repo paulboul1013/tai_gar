@@ -445,6 +445,9 @@ def show_topic(session,topic):
     return out
 
 def add_topic(session,params):
+    if "user" not in session:
+        return show_home(session)
+
     if "topic" not in params:
         return show_home(session)
 
