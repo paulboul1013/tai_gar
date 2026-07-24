@@ -218,7 +218,7 @@ def handle_connection(conx):
 
     response += "\r\n"
 
-    conx.send(response.encode('utf8')+body_bytes)
+    conx.sendall(response.encode('utf8')+body_bytes)
     conx.close()
 
 
