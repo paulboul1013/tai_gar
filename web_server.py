@@ -93,7 +93,7 @@ def load_topics():
                     "text":text,
                     "author":author
                 })
-                
+
         topics[topic] = clean_messages
 
 
@@ -270,6 +270,39 @@ def normalize_topic_name(topic):
 
     topic = "".join(out).strip("-")
     return topic
+
+def login_form(session):
+    out = "<!doctype html>"
+    out += "<html>"
+    out += "<body>"
+
+    out += "<h1>Log in</h1>"
+
+    out += "<form action=/ method=post>"
+
+    out += "<p>"
+    out += "Username: "
+    out += "<input name=username>"
+    out += "</p>"
+
+    out += "<p>"
+    out += "Password: "
+    out += "<input name=password type=password>"
+    out += "</p>"
+
+    out += "<p>"
+    out += "<button>Log in</button>"
+    out += "</p>"
+
+    out += "</form>"
+
+    out += "<p><a href=/>Back to topics</a></p>"
+
+    out += "</body>"
+    out += "</html>"
+
+    return out
+    
 
 def show_home(session):
     out = "<!doctype html>"
