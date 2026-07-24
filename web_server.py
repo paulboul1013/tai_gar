@@ -464,14 +464,21 @@ def add_topic(session,params):
     return show_home(session)
 
 def add_message(session,topic,params):
+    if "user" not in session:
+        return show_topic(session,topic)
+
     if topic not in TOPICS:
         return not_found("/add/"+topic,"POST")
 
     if "message" in params:
         message = params["message"].strip()
 
-        if message:
-            TOPICS[topic].append(message)
+        if message and len(message) <= 100:
+            TOPICS[topic].append({
+                "text":message,
+                "author":session["user"],
+            })
+
             save_topics()
 
     return show_topic(session,topic)
