@@ -521,6 +521,19 @@ def show_submit_result(url):
 
     return out
 
+def login_required():
+    out = "<!doctype html>"
+    out += "<html>"
+    out += "<body>"
+
+    out += "<h1>Login required</h1>"
+    out += "<p>You must log in before posting.</p>"
+    out += "<p><a href=/login>Log in</a></p>"
+
+    out += "</body>"
+    out += "</html>"
+
+    return out
 
 def not_found(url,method):
     out = "<!doctype html>"
