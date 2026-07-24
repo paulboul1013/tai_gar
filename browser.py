@@ -3232,6 +3232,15 @@ class URL:
             self.path="blank"
             self.url_string="about:blank"
 
+    def origin(self):
+        return (
+            self.scheme
+            +"://"
+            +self.host
+            +":"
+            +str(self.port)
+        )
+
     def request(self,payload=None):
 
         if self.scheme=="about":
