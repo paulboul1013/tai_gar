@@ -22,7 +22,7 @@ socket_cache={}
 
 # http cache
 # key:url string
-# value:(body_bytes,expires_at_timestamp)
+# value:(response_headers,body_bytes,expires_at_timestamp)
 http_cache={}
 
 # cookie jar
@@ -3300,12 +3300,12 @@ class URL:
         while redirect_limit>0:
             
             if payload is None and current_url.url_string in http_cache:
-                cached_body,expires_at=http_cache[current_url.url_string]
+                cached_headers,cached_body,expires_at=http_cache[current_url.url_string]
 
                 if time.time() < expires_at:
                     
                     print(f"Cache Hit! (Expires in {int(expires_at - time.time())}s)")
-                    return cached_body.decode("utf-8",errors="replace")
+                    return cached_headers,cached_body.decode("utf-8",errors="replace")
 
                 else:
                     print("Cache Expired! Re-downloading...")
