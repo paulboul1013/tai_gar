@@ -2398,8 +2398,16 @@ class Tab:
             if script_url is None:
                 continue
 
+            if not self.allowed_request(script_url):
+                print(
+                    "Blocked script",
+                    script,
+                    "du to CSP"
+                )
+                continue
+
             try:
-                body = script_url.request(url)
+                headers, body = script_url.request(url)
             except Exception:
                 continue
 
