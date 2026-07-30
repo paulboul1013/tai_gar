@@ -228,7 +228,7 @@ def handle_connection(conx):
 
     # when first visit，request broswer must save token
     if new_cookie:
-        response += "Set-Cookie: {}={}\r\n".format(
+        response += "Set-Cookie: {}={}; SameSite=Lax\r\n".format(
             COOKIE_NAME,
             token
         )

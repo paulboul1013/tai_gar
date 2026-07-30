@@ -25,6 +25,11 @@ socket_cache={}
 # value:(body_bytes,expires_at_timestamp)
 http_cache={}
 
+# cookie jar
+# key: host
+# value: (cookie,params)
+COOKIE_JAR={}
+
 #global FONT cache
 FONTS={}
 
@@ -1615,7 +1620,12 @@ class JSContext:
 
     def XMLHttpRequest_send(self,method,url,body):
         full_url = self.tab.url.resolve(url)
-        return full_url.request(body)
+
+        # compare with current url origin
+        if full_url.origin()!=self.tab.url.origin():
+            raise Exception("Cross-origin XHR request not allowed")
+
+        return full_url.request(self.tab.url,body)
 
     def querySelectorAll(self,selector_text):
         selector = CSSParser(selector_text).selector()
@@ -2319,7 +2329,8 @@ class Tab:
         return "\n".join(out)
 
     def load(self, url,payload=None,add_to_history=True):
-        self.url=url
+        referrer=self.url
+        self.url=url # new url to come
         self.scroll=0
 
         self.visited_urls.add(str(url))
@@ -2342,7 +2353,8 @@ class Tab:
             self.nodes=HTMLParser(body).parse()
         
         else:
-            body = url.request(payload)
+            # self.url : current url
+            body = url.request(referrer,payload)
 
             if url.view_source:
                 # execute syntax highlight: make raw html turn into highlighted html
@@ -2369,7 +2381,7 @@ class Tab:
                 continue
 
             try:
-                body = script_url.request()
+                body = script_url.request(url)
             except Exception:
                 continue
 
@@ -3241,7 +3253,8 @@ class URL:
             +str(self.port)
         )
 
-    def request(self,payload=None):
+    # referrer: reference browser lauch request current page
+    def request(self,referrer,payload=None):
 
         if self.scheme=="about":
             return ""
@@ -3336,6 +3349,19 @@ class URL:
                 headers["Content-Length"] = str(len(payload.encode("utf-8")))
 
             method = "POST" if payload is not None else "GET"
+
+            
+            if current_url.host in COOKIE_JAR:
+                cookie,params =COOKIE_JAR[current_url.host]
+
+                allow_cookie=True
+
+                if referrer and params.get("samesite","none")=="lax":
+                    if method != "GET":
+                        allow_cookie=(current_url.host==referrer.host)
+
+                if allow_cookie:
+                    headers["Cookie"] = cookie
         
             request = "{} {} HTTP/1.1\r\n".format(method,current_url.path)
 
@@ -3380,6 +3406,24 @@ class URL:
                 if line == "\r\n": break  # 遇到空行表示標頭結束
                 header, value = line.split(":", 1)
                 response_headers[header.casefold()] = value.strip()
+
+            # if server send back like set-cookie: token=abc123; SameSite=Lax
+            if "set-cookie" in response_headers:
+                cookie = response_headers["set-cookie"]
+                params = {}
+
+                if ";" in cookie:
+                    cookie, rest=cookie.split(";",1) # cookie=token=abc123, rest=SameSite=Lax
+
+                    for param in rest.split(";",1):
+                        if "=" in param: # SameSite=Lax
+                            param, value = param.split("=",1)
+                        else:
+                            value = "true"
+
+                        params[param.strip().casefold()] = value.casefold()
+
+                COOKIE_JAR[current_url.host]=(cookie.strip(),params)
 
 
             content_bytes=b""
@@ -4332,14 +4376,6 @@ def show(body):
     
     print(text_buffer)
 
-def load(url):
-    # 載入流程：發送請求 -> 取得內容 -> 顯示
-    body = url.request()
-
-    if url.view_source:
-        print(body)
-    else:
-        show(body)
 
 if __name__ == "__main__":
 
