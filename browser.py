@@ -2429,8 +2429,16 @@ class Tab:
             if style_url is None:
                 continue
 
+            if not self.allowed_request(style_url):
+                print(
+                    "Blocked style",
+                    link,
+                    "due to SCP"
+                )
+                continue
+
             try:
-                body=style_url.request()
+                headers, body = style_url.request(url)
             except Exception:
                 continue
                 
