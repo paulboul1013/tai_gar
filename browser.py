@@ -3528,7 +3528,7 @@ class URL:
                 s.close()
 
             # 如果不是轉址 (200 OK 或其他錯誤)，直接回傳結果
-            return content_bytes.decode("utf-8",errors="replace")
+            return response_headers, content_bytes.decode("utf-8",errors="replace")
 
 
         raise Exception("Redirect loop detected!")
