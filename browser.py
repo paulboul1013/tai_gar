@@ -3460,7 +3460,7 @@ class URL:
                 if ";" in cookie:
                     cookie, rest=cookie.split(";",1) # cookie=token=abc123, rest=SameSite=Lax
 
-                    for param in rest.split(";",1):
+                    for param in rest.split(";"):
                         if "=" in param: # SameSite=Lax
                             param, value = param.split("=",1)
                         else:
