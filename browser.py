@@ -3552,8 +3552,7 @@ class URL:
                                     max_age=int(seconds)
                                     expires_at=time.time()+max_age
 
-                                    http_cache[current_url.url_string]=
-                                    (
+                                    http_cache[current_url.url_string]=(
                                         response_headers.copy(),
                                         content_bytes,
                                         expires_at
