@@ -2455,6 +2455,12 @@ class Tab:
         # paint_tree(self.document,self.display_list)
         # self.draw()
 
+    def allowed_request(self,url):
+        return (
+            self.allowed_origins is None
+            or url.origin() in self.allowed_origins
+        )
+
     def can_go_back(self):
         return self.history_index > 0
 
