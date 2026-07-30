@@ -226,6 +226,9 @@ def handle_connection(conx):
     response += "Content-Type: text/html; charset=utf-8\r\n"
     response += "Content-Length: {}\r\n".format(len(body_bytes))
 
+    csp = "default-src http://localhost:8000"
+    response += "Content-Security-Policy: {}\r\n".format(csp)
+
     # when first visit，request broswer must save token
     if new_cookie:
         response += "Set-Cookie: {}={}; SameSite=Lax\r\n".format(
