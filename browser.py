@@ -3257,18 +3257,18 @@ class URL:
     def request(self,referrer,payload=None):
 
         if self.scheme=="about":
-            return ""
+            return {},""
 
         if self.scheme=="data":   
             #example: text/html,Hello World!
             if "," in self.path:
                 media_type,body=self.path.split(",",1)
-                return unquote(body)
+                return {},unquote(body)
             else:
-                return ""
+                return {},""
 
         if self.scheme=="mailto":
-            return """
+            return {},"""
             <html>
             <body>
                 <h1>External mail link</h1>
@@ -3281,10 +3281,10 @@ class URL:
         if self.scheme=="file":
             try:
                 with open(self.path,"r",encoding="utf-8") as f:
-                    return f.read()
+                    return {},f.read()
             except Exception as e:
                 print(f"File read error: {e}")
-                return f"""
+                return {},f"""
                 <html>
                 <body>
                     <h1>File not found</h1>
