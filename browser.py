@@ -1621,11 +1621,16 @@ class JSContext:
     def XMLHttpRequest_send(self,method,url,body):
         full_url = self.tab.url.resolve(url)
 
+        if not self.tab.allowed_request(full_url):
+            raise Exception("Cross-origin XHR blocked by CSP")
+
         # compare with current url origin
         if full_url.origin()!=self.tab.url.origin():
             raise Exception("Cross-origin XHR request not allowed")
 
-        return full_url.request(self.tab.url,body)
+        headers, out = full_url.request(self.tab.url,body)
+
+        return out
 
     def querySelectorAll(self,selector_text):
         selector = CSSParser(selector_text).selector()
