@@ -3506,7 +3506,14 @@ class URL:
                                 if seconds.isdigit():
                                     max_age=int(seconds)
                                     expires_at=time.time()+max_age
-                                    http_cache[current_url.url_string]=(content_bytes,expires_at)
+
+                                    http_cache[current_url.url_string]=
+                                    (
+                                        response_headers.copy(),
+                                        content_bytes,
+                                        expires_at
+                                    )
+                                    
                                     print(f"Cached! (max-age={max_age})")
 
                                 break
