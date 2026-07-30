@@ -2349,12 +2349,13 @@ class Tab:
         
 
         if self.is_internal_page(url):
+            headers = {}
             body = self.request_internal_page(url)
             self.nodes=HTMLParser(body).parse()
         
         else:
             # self.url : current url
-            body = url.request(referrer,payload)
+            headers,body = url.request(referrer,payload)
 
             if url.view_source:
                 # execute syntax highlight: make raw html turn into highlighted html
@@ -2364,6 +2365,23 @@ class Tab:
             else:
                 self.nodes=HTMLParser(body).parse()
 
+
+        #CSP(content-security-policy)
+        self.allowed_origins = None
+
+        if "content-security-policy" in headers:
+            csp = headers[
+                "content-security-policy"
+            ].split()
+
+            if len(csp) > 0 and csp[0]=="default-src":
+                self.allowed_origins = []
+
+                for origin in csp[1:]:
+                    self.allowed_origins.append(
+                        URL(origin).origin()
+                    )
+            
         scripts = [
             node.attributes["src"]
             for node in tree_to_list(self.nodes,[])
