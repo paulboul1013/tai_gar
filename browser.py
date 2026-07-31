@@ -2299,6 +2299,26 @@ class Chrome:
         self.document = BlockLayout([self.nodes],parent,None)
         self.document.layout()
 
+        # security icon
+        self.security_icon = None
+
+        if (self.browser.active_tab and self.browser.active_tab.secure and address_node):
+            address_layout = self.find_address_layout(address_node)
+
+            if address_layout:
+                icon_x=address_layout.x
+                icon_y=address_layout.y
+
+                # reserve the icon slot before address input
+                address_layout.x+=SECURITY_ICON_SLOT
+
+                self.security_icon = SecurityIconLayout(
+                    icon_x,
+                    icon_y,
+                    address_layout.height,
+                    True
+                )
+
         self.display_list = []
         paint_tree(self.document,self.display_list)
 
