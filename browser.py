@@ -2328,6 +2328,36 @@ class Tab:
             return self.bookmarks_page()
         
         return ""
+
+    def certificate_error_page(self,url,error):
+        out = []
+        
+        out.append("<!doctype html>")
+        out.append("<html>")
+        out.append("<head><title>Certificate Error</title></head>")
+        out.append("<body>")
+
+        out.append("<h1>Certificate Error</h1>")
+        out.append(
+            "<p>Warning: this HTTPS page has an invalid certificate.</p>"
+        )
+
+        out.append(
+            "<p>URL: {}</p>".format(
+                escape(str(url))
+            )
+        )
+
+        out.append(
+            "<pre>{}</pre>".format(
+                escape(str(error))
+            )
+        )
+
+        out.append("</body>")
+        out.append("</html>")
+
+        return "\n".join(out)
         
     def bookmarks_page(self):
         out=[]
