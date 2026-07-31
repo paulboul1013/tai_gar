@@ -620,6 +620,11 @@ class InputLayout:
 
         if self.node.tag=="input":
             text=self.node.attributes.get("value","")
+            
+            # if type=password, the value will show all '*'
+            if self.node.attributes.get("type","text").casefold()=="password":
+                text="*" * len(text)
+                
         else:
             text = ""
 
