@@ -2319,8 +2319,16 @@ class Chrome:
                     True
                 )
 
+
+        # paint chrome DOM
         self.display_list = []
         paint_tree(self.document,self.display_list)
+
+        # paint browser security UI
+        if self.security_icon:
+            for cmd in self.security_icon.paint():
+                cmd.layout_object=self.security_icon
+                self.display_list.append(cmd)
 
         self.bottom = self.document.height + 2
         
