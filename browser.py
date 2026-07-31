@@ -2005,6 +2005,8 @@ class Chrome:
         self.document = None
         self.display_list = []
 
+        self.security_icon = None
+
         # init height，new_tab build a Tab will use it
         self.bottom = 80
 
