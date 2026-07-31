@@ -624,7 +624,7 @@ class InputLayout:
             # if type=password, the value will show all '*'
             if self.node.attributes.get("type","text").casefold()=="password":
                 text="*" * len(text)
-                
+
         else:
             text = ""
 
@@ -2309,6 +2309,7 @@ class Tab:
         self.url=None
         self.nodes=None
         self.document=None
+        self.secure = False
 
         self.focus=None
 
