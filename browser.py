@@ -44,7 +44,7 @@ INPUT_WIDTH_PX = 200
 CHECKBOX_SIZE = 13
 BUTTON_PADDING = 4
 
-SECURITY_ICON_SLOT=22
+SECURITY_ICON_SLOT=30
 
 USE_RTL=False
 
@@ -107,7 +107,7 @@ def get_emoji(char):
                 #loading pic
                 img=tkinter.PhotoImage(file=file_path)
 
-                target_size=16
+                target_size=22
                 w=img.width()
 
                 # opemoji pic is very big
@@ -1981,8 +1981,10 @@ class SecurityIconLayout:
         if self.img is None:
             return []
 
+        LOCK_Y_OFFSET = -5
+        
         #vertically center the lock in the address bar
-        icon_y =(self.y+max(0,(self.height-self.img.height())/2))
+        icon_y =(self.y+max(0,(self.height-self.img.height())/2)+LOCK_Y_OFFSET)
 
         return [DrawImage(self.x,icon_y,self.img)]
 
