@@ -1176,6 +1176,10 @@ class BlockLayout: # layout for block level elements
                 self.new_line()
                 return
 
+            # hidden inpu exists in DOM,but not render this node
+            if is_hidden_input(tree):
+                return
+
             if tree.tag == "input" or tree.tag == "button":
                 self.input(tree)
                 return
