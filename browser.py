@@ -1979,7 +1979,13 @@ class Chrome:
             return self.address_bar
         
         if self.browser.active_tab and self.browser.active_tab.url:
-            return str(self.browser.active_tab.url)
+            tab = browser.active_tab
+            url = str(tab.url)
+
+            if tab.secure: # draw lock in the head of url
+                return "\N{lock}" + url 
+
+            return url
         
         return ""
 
