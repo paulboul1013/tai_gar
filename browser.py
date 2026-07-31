@@ -2222,8 +2222,12 @@ class Chrome:
             bookmark_bg="yellow"
         else:
             bookmark_bg="white"
+
+        secure = (self.browser.active_tab is not None and self.browser.active_tab.secure)
         
-        address_width = max(100,WIDTH-150)
+        icon_space = (SECURITY_ICON_SLOT if secure else 0)
+
+        address_width = max(100,WIDTH-150-icon_space)
 
         out = "<!doctype html>"
         out += "<html>"
