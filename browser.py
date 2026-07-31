@@ -2251,6 +2251,16 @@ class Chrome:
 
         return out
 
+    def find_address_layout(self,address_node):
+        if self.document is None:
+            return None
+
+        for obj in tree_to_list(self.document,[]):
+            if (isinstance(obj,InputLayout) and obj.node is address_node):
+                return obj
+
+        return None
+
     def find_address_node(self):
         if not self.nodes:
             return None
