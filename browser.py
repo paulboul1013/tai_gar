@@ -3444,9 +3444,12 @@ class URL:
 
                 if current_url.scheme == "https":
                     ctx = ssl.create_default_context()
-                    s = ctx.wrap_socket(s, server_hostname=current_url.host)
 
-
+                    try:
+                        s = ctx.wrap_socket(s, server_hostname=current_url.host)
+                    except ssl.SSLCertVerificationError as e:
+                        s.close()
+                        raise
 
             # 定義要發送的headers
             headers = {
