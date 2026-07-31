@@ -2387,6 +2387,9 @@ class Tab:
         self.url=url # new url to come
         self.scroll=0
 
+        # every navigation starts as unverified
+        self.secure = False
+
         self.visited_urls.add(str(url))
 
         if add_to_history:
@@ -2402,20 +2405,34 @@ class Tab:
 
         
 
-        if self.is_internal_page(url):
+        if self.is_internal_page(url): # bookmarks page
             headers = {}
             body = self.request_internal_page(url)
             self.nodes=HTMLParser(body).parse()
         
-        else:
-            # self.url : current url
-            headers,body = url.request(referrer,payload)
+        else: # normal web page
+            try:
+                headers,body = url.request(referrer,payload)
+
+                # request finished without certificate error
+                self.secure=(url.scheme=="https")
+
+            except ssl.SSLCertVerificationError as e:
+                headers = {}
+
+                body = self.certificate_error_page(
+                    url,
+                    e
+                )
+
+                self.secure = False
 
             if url.view_source:
                 # execute syntax highlight: make raw html turn into highlighted html
                 highlighted_body=ViewSourceParser(body).handle_view_source()
                 # after highlight html feed standard Parser make DOM tree
                 self.nodes=HTMLParser(highlighted_body).parse()
+            
             else:
                 self.nodes=HTMLParser(body).parse()
 
