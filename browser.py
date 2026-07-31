@@ -2031,21 +2031,7 @@ class Chrome:
             return self.address_bar
         
         if self.browser.active_tab and self.browser.active_tab.url:
-            tab = self.browser.active_tab
-            url = str(tab.url)
-
-            print(
-                "DEBUG address:",
-                "secure =", tab.secure,
-                "url =", repr(url)
-            )
-
-            if tab.secure: # draw lock in the head of url
-                text = "\N{lock} " + url
-                print("DEBUG display:", repr(text))
-                return text
-
-            return url
+            return str(self.browser.active_tab.url)
         
         return ""
 
