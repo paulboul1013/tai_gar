@@ -1959,6 +1959,30 @@ class JSContext:
         return body
             
     
+class SecurityIconLayout:
+    def __init__(self,x,y,height,secure):
+        self.node=None
+        self.children=[]
+
+        self.x=x
+        self.y=y
+        self.height=height
+        self.secure=secure
+
+        if self.secure:
+            self.img=get_emoji("\N{lock}")
+
+    def paint(self):
+        if not self.secure:
+            return []
+
+        if self.img is None:
+            return []
+
+        #vertically center the lock in the address bar
+        icon_y =(self.y+max(0,(self.height-self.img.height())/2))
+
+        return [DrawImage(self.x,icon_y,self.img)]
 
 class ChromeLayoutParent:
     def __init__(self):
