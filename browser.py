@@ -308,6 +308,32 @@ class DrawOutline:
             outline=self.color
         )
 
+class DrawImage:
+    def __init__(self,x,y,img):
+        self.x=x
+        self.y=y
+        self.img=img
+
+        self.left=x
+        self.top=y
+        self.right=x+img.width()
+        self.bottom=y+img.height()
+
+        self.rect=Rect(
+            self.left,
+            self.top,
+            self.right,
+            self.bottom
+        )
+
+    def execute(self,scroll,canvas):
+        canvas.create_image(
+            self.x,
+            self.y-scroll,
+            image=self.img,
+            anchor="nw"
+        )
+
 class DocumentLayout:
     def __init__(self,node):#build root of layout tree
         self.node=node
@@ -1979,11 +2005,19 @@ class Chrome:
             return self.address_bar
         
         if self.browser.active_tab and self.browser.active_tab.url:
-            tab = browser.active_tab
+            tab = self.browser.active_tab
             url = str(tab.url)
 
+            print(
+                "DEBUG address:",
+                "secure =", tab.secure,
+                "url =", repr(url)
+            )
+
             if tab.secure: # draw lock in the head of url
-                return "\N{lock}" + url 
+                text = "\N{lock} " + url
+                print("DEBUG display:", repr(text))
+                return text
 
             return url
         
