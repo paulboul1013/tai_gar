@@ -1728,6 +1728,53 @@ class JSContext:
             entries=entries
         )
 
+    def document_cookie_get(self):
+        host = getattr(self.tab.url,"host",None)
+
+        if not host:
+            return ""
+
+        if host not in COOKIE_JAR:
+            return ""
+
+        cookie,params = COOKIE_JAR[host]
+
+        # HttpOnly cookie is invisible to JS
+        if "httponly" in params:
+            return ""
+
+        return serialize_cookie_pair(cookie,params)
+
+    def document_cookie_set(self,cookie_string):
+        host = getattr(self.tab.url,"host",None)
+
+        if not host:
+            return
+
+        # JS can't overwrite an existing HttpOnly cookie
+        if host in COOKIE_JAR:
+            old_cookie,old_params = COOKIE_JAR[host]
+
+            if "httponly" in old_params:
+                return None
+
+        cookie,params = parse_cookie_string(cookie_string)
+
+        #ignore malformed cookie strings
+        if not cookie or "=" not in cookie:
+            return None
+
+        # JS cannot create an HttpOnly cookie
+        if "httponly" in params:
+            return None
+
+        COOKE_JAR[host]=(
+            cookie,
+            params
+        )
+
+        return None
+
     def XMLHttpRequest_send(self,method,url,body):
         full_url = self.tab.url.resolve(url)
 
