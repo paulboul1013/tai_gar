@@ -1743,7 +1743,7 @@ class JSContext:
         if "httponly" in params:
             return ""
 
-        return serialize_cookie_pair(cookie,params)
+        return serialize_cookie(cookie,params)
 
     def document_cookie_set(self,cookie_string):
         host = getattr(self.tab.url,"host",None)
@@ -1768,7 +1768,7 @@ class JSContext:
         if "httponly" in params:
             return None
 
-        COOKE_JAR[host]=(
+        COOKIE_JAR[host]=(
             cookie,
             params
         )
