@@ -255,6 +255,21 @@ document = {
     }
 };
 
+Object.defineProperty(document, "cookie", {
+    get: function () {
+        return call_python(
+            "document_cookie_get"
+        );
+    },
+
+    set: function (value) {
+        call_python(
+            "document_cookie_set",
+            value.toString()
+        );
+    }
+});
+
 function XMLHttpRequest() {
     this.method = null;
     this.url = null;
