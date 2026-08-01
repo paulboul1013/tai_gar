@@ -30,6 +30,67 @@ http_cache={}
 # value: (cookie,params)
 COOKIE_JAR={}
 
+# cookie string example
+# token=abc123; SameSite=Lax; HttpOnly
+"""
+cookie = "token=abc123"
+
+params = {
+    "samesite": "lax",
+    "httponly": "true"
+}
+"""
+def parse_cookie_string(cookie_string):
+    cookie_string = str(cookie_string).strip()
+    params={}
+
+    if ";" in cookie_string:
+        cookie,rest=cookie_string.split(";",1)
+
+        for param in rest.split(";"):
+            param=param.strip()
+
+            if not param:
+                continue
+
+            if "=" in param:
+                name, value=param.split("=",1)
+                value=value.strip().casefold()
+
+            else:
+                name = param
+                value = "true"
+
+            params[name.strip().casefold()]=value
+
+    else:
+        cookie = cookie_string
+        
+    return cookie.strip(),params
+
+# cookie serialize example
+# token=abc123; SameSite=Lax; HttpOnly
+"""
+serialize_cookie(
+    "theme=dark",
+    {
+        "samesite": "lax"
+    }
+)
+"""
+def serialize_cookie(cookie,params):
+    parts = [cookie]
+
+    for name,value in params.items():
+        if value=="true":
+            parts.append(name)
+        else:
+            parts.append(
+                "{}={}".format(name,value)
+            )
+
+    return "; ".join(parts)
+
 #global FONT cache
 FONTS={}
 
