@@ -1677,6 +1677,9 @@ class JSContext:
         self.interp.export_function("innerHTML_set",self.innerHTML_set)
         self.interp.export_function("outerHTML_get",self.outerHTML_get)
 
+        self.interp.export_function("document_cookie_get",self.document_cookie_get)
+        self.interp.export_function("document_cookie_set",self.document_cookie_set)
+
         self.interp.export_function("XMLHttpRequest_send",self.XMLHttpRequest_send)
 
 
