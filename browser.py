@@ -3682,21 +3682,11 @@ class URL:
 
             # if server send back like set-cookie: token=abc123; SameSite=Lax
             if "set-cookie" in response_headers:
-                cookie = response_headers["set-cookie"]
-                params = {}
+                cookie,params=parse_cookie_string(
+                    response_headers["set-cookie"]
+                )
 
-                if ";" in cookie:
-                    cookie, rest=cookie.split(";",1) # cookie=token=abc123, rest=SameSite=Lax
-
-                    for param in rest.split(";"):
-                        if "=" in param: # SameSite=Lax
-                            param, value = param.split("=",1)
-                        else:
-                            value = "true"
-
-                        params[param.strip().casefold()] = value.casefold()
-
-                COOKIE_JAR[current_url.host]=(cookie.strip(),params)
+                COOKIE_JAR[current_url.host]=(cookie,params)
 
 
             content_bytes=b""
