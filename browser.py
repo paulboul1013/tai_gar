@@ -10,6 +10,9 @@ import webbrowser
 import os
 import tkinter.font
 import dukpy
+from datetime import datetime, timezone
+from email.utils import format_datetime
+
 # emolji cache
 # key: character (e.g. "😀")
 # value: tkinter.PhotoImage object
@@ -55,13 +58,20 @@ def parse_cookie_string(cookie_string):
 
             if "=" in param:
                 name, value=param.split("=",1)
-                value=value.strip().casefold()
+
+                name = name.strip().casefold()
+                value= value.strip()
+
+                # SameSite use lower case compare
+                if name=="samesite":
+                    value = value.casefold()
 
             else:
-                name = param
+                # HttpOnly,etc
+                name = param.strip().casefold()
                 value = "true"
 
-            params[name.strip().casefold()]=value
+            params[name]=value
 
     else:
         cookie = cookie_string
