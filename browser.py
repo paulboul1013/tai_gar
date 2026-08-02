@@ -11,7 +11,7 @@ import os
 import tkinter.font
 import dukpy
 from datetime import datetime, timezone
-from email.utils import format_datetime
+from email.utils import format_datetime,parsedate_to_datetime
 
 # emolji cache
 # key: character (e.g. "😀")
