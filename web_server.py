@@ -278,12 +278,22 @@ def handle_connection(conx):
     csp = "default-src http://localhost:8000"
     response += "Content-Security-Policy: {}\r\n".format(csp)
 
-    # when first visit，request broswer must save token
-    if new_cookie:
-        response += "Set-Cookie: {}={}; SameSite=Lax\r\n".format(
-            COOKIE_NAME,
-            token
-        )
+
+    cookie_expires = format_datetime(
+        session_record["expires"],
+        usegmt=True
+    )
+
+    response += (
+        "Set-Cookie: {}={}; "
+        "Expires={}; "
+        "SameSite=Lax\r\n"
+    ).format(
+        COOKIE_NAME,
+        token,
+        cookie_expires
+    )
+
 
     response += "\r\n"
 
