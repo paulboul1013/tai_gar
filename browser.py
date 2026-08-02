@@ -1791,10 +1791,12 @@ class JSContext:
         if not host:
             return ""
 
-        if host not in COOKIE_JAR:
+        cookie_entry = get_valid_cookie(host)
+
+        if cookie_entry is None:
             return ""
 
-        cookie,params = COOKIE_JAR[host]
+        cookie,params = cookie_entry
 
         # HttpOnly cookie is invisible to JS
         if "httponly" in params:
