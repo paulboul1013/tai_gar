@@ -242,7 +242,7 @@ def handle_connection(conx):
     # first visit,invalid token,unkown token
     # or previously expired token
     if session_record is None:
-        token = secret.token_hex(32)
+        token = secrets.token_hex(32)
 
         session_record = {
             "data":{},
