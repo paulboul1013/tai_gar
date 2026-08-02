@@ -13,7 +13,7 @@ DATA_FILE = "message_board.json"
 COOKIE_NAME = "token"
 
 # every time get valid request,extend session time 
-SESSION_DURATION = timedelta(seconds=5)
+SESSION_DURATION = timedelta(seconds=30)
 
 # token -> {
 #   "data": session data,
