@@ -1810,14 +1810,16 @@ class JSContext:
         if not host:
             return
 
-        # JS can't overwrite an existing HttpOnly cookie
-        if host in COOKIE_JAR:
-            old_cookie,old_params = COOKIE_JAR[host]
+        old_cookie_entry = get_valid_cookie(host)
 
+        if old_cookie_entry is None:
+            old_cookie,old_params=old_cookie_entry
+        
             if "httponly" in old_params:
                 return None
 
         cookie,params = parse_cookie_string(cookie_string)
+
 
         #ignore malformed cookie strings
         if not cookie or "=" not in cookie:
@@ -1825,6 +1827,10 @@ class JSContext:
 
         # JS cannot create an HttpOnly cookie
         if "httponly" in params:
+            return None
+
+        if cookie_is_expired(params):
+            COOKIE_JAR.pop(host,None)
             return None
 
         COOKIE_JAR[host]=(
