@@ -78,6 +78,53 @@ def parse_cookie_string(cookie_string):
         
     return cookie.strip(),params
 
+def cookie_expiration(params):
+    expires = params.get("expires")
+    
+    if not expires:
+        return None
+
+    try:
+        expiration = parsedate_to_datetime(expires)
+
+    except (TypeError,ValueError,OverflowError):
+        return None
+
+    # some date format no timezone，default become UTC
+    if expiration.tzinfo is None:
+        expiration = expiration.replace(
+            tzinfo = timezone.utc
+        )
+
+    return expiration.astimezone(timezone.utc)
+
+
+def cookie_is_expired(params,now=None):
+    expiration = cookie_expiration(params)
+
+    # no expires,represent current is session cookie
+    if expiration is None:
+        return False
+
+    if now is None:
+        now = datetime.now(timezone.utc)
+
+    return expiration <= now
+
+def get_valid_cookie(host):
+    entry = COOKIE_JAR.get(host)
+
+    if entry is None:
+        return None
+
+    cookie,params=entry
+
+    if cookie_is_expired(params):
+        del COOKIE_JAR[host]
+        return None
+
+    return cookie,params
+
 # cookie serialize example
 # token=abc123; SameSite=Lax; HttpOnly
 """
