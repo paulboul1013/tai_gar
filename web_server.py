@@ -12,8 +12,29 @@ DATA_FILE = "message_board.json"
 
 COOKIE_NAME = "token"
 
-# token -> for user session dictionary
+# every time get valid request,extend session time 
+SESSION_DURATION = timedelta(seconds=5)
+
+# token -> {
+#   "data": session data,
+#   "expires": expiration datetime
+# }
 SESSIONS = {}
+
+def cleanup_expired_sessions(now):
+    expired_tokens = [
+        token
+        for token,session_record in SESSIONS.items()
+        if session_record["expires"] <= now
+    ]
+
+    for token in expired_tokens:
+        del SESSIONS[token]
+
+    if expired_tokens:
+        print("Deleted {} expired session(s)".format(len(expired_tokens)))
+
+    
 
 LOGINS = {
     "paul":"123cool",
