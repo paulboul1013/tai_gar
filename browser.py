@@ -3794,7 +3794,13 @@ class URL:
                     response_headers["set-cookie"]
                 )
 
-                COOKIE_JAR[current_url.host]=(cookie,params)
+                # delete expire cookie
+                if cookie_is_expired(params):
+                    COOKIE_JAR.pop(current_url.host,None)
+
+                else:
+                    # update new expire cookie info
+                    COOKIE_JAR[current_url.host]=(cookie,params)
 
 
             content_bytes=b""
