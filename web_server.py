@@ -37,7 +37,7 @@ def cleanup_expired_sessions(now):
     
 
 LOGINS = {
-    "paul":"123cool",
+    "paul":"123",
     "admin":"password"
 }
 
@@ -219,21 +219,47 @@ def handle_connection(conx):
     else:
         body = None
 
+    # current utc time for expiration check
+    now = datetime.now(timezone.utc)
+
+    # remove expired sessions before looking up token
+    cleanup_expired_sessions(now)
+
+
     # read cookie
     cookie_header = headers.get("cookie","")
     cookies = parse_cookies(cookie_header)
 
     token = cookies.get(COOKIE_NAME)
 
-    new_cookie = False
+    session_record = None
 
-    # first visit，or get invalid token
-    if not valid_token(token):
-        token = secrets.token_hex(32)
-        new_cookie = True
+    # token is valid,get session record
+    if valid_token(token):
+        session_record = SESSIONS.get(token)
 
+
+    # first visit,invalid token,unkown token
+    # or previously expired token
+    if session_record is None:
+        token = secret.token_hex(32)
+
+        session_record = {
+            "data":{},
+            "expires" : now+SESSION_DURATION,
+        }
+
+        SESSIONS[token] = session_record
+
+    else:
+        # refresh same session with new expires time
+        new_expiration = now + SESSION_DURATION
+        
+        if new_expiration > session_record["expires"]:
+            session_record["expires"] = new_expiration
+        
     # get user server-side session
-    session = SESSIONS.setdefault(token,{})
+    session = session_record["data"]
 
     # let session pass into request
     status, body = do_request(session,
