@@ -3730,9 +3730,10 @@ class URL:
 
             method = "POST" if payload is not None else "GET"
 
-            
-            if current_url.host in COOKIE_JAR:
-                cookie,params =COOKIE_JAR[current_url.host]
+            cookie_entry=get_valid_cookie(current_url.host)
+
+            if cookie_entry is not None:
+                cookie,params = cookie_entry
 
                 allow_cookie=True
 
