@@ -3729,9 +3729,12 @@ class URL:
             headers = {
                     "Host": current_url.host, # 注意：轉址後 Host 也要變，所以用 current_url.host
                     "Connection":"close" if payload is not None else "keep-alive", # 關閉連線
-                    "User-Agent":"MyToyBrowser/1.0", # 自定義 User-Agent
+                    "User-Agent":"Tai_Gar/1.0", # 自定義 User-Agent
                     "Accept-Encoding":"gzip" # support gzip
             }
+
+            if origin is not None:
+                headers["Origin"] = origin
 
             if payload is not None:
                 headers["Content-Length"] = str(len(payload.encode("utf-8")))
