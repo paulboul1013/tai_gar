@@ -3684,7 +3684,7 @@ class URL:
 
         while redirect_limit>0:
             
-            if payload is None and current_url.url_string in http_cache:
+            if payload is None and origin is None and  current_url.url_string in http_cache:
                 cached_headers,cached_body,expires_at=http_cache[current_url.url_string]
 
                 if time.time() < expires_at:
@@ -3870,7 +3870,7 @@ class URL:
                     continue
 
             # 檢查 Cache-Control
-            if payload is None and status==200 and "cache-control" in response_headers:
+            if payload is None and  origin is None and status==200 and "cache-control" in response_headers:
                 cache_control=response_headers["cache-control"]
 
                 cache_control = cache_control.lower()
