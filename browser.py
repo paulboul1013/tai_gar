@@ -1812,7 +1812,7 @@ class JSContext:
 
         old_cookie_entry = get_valid_cookie(host)
 
-        if old_cookie_entry is None:
+        if old_cookie_entry is not None:
             old_cookie,old_params=old_cookie_entry
         
             if "httponly" in old_params:
