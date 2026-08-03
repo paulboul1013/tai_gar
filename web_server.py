@@ -302,6 +302,12 @@ def handle_connection(conx):
     csp = "default-src http://localhost:8000"
     response += "Content-Security-Policy: {}\r\n".format(csp)
 
+    # CORS response header
+    cors_origin = cors_allow_origin(headers)
+
+    if cors_origin is not None:
+        response+=("Access-Control-Allow-Origin: {}\r\n").format(cors_origin)
+
 
     cookie_expires = format_datetime(
         session_record["expires"],
