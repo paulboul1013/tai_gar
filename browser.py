@@ -3639,7 +3639,7 @@ class URL:
         )
 
     # referrer: reference browser lauch request current page
-    def request(self,referrer,payload=None):
+    def request(self,referrer,payload=None,origin=None):
 
         if self.scheme=="about":
             return {},""
