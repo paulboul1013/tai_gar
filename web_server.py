@@ -42,6 +42,23 @@ def cleanup_expired_sessions(now):
         print("Deleted {} expired session(s)".format(len(expired_tokens)))
 
     
+def cors_allow_origin(headers):
+    origin = headers.get("origin")
+
+    # normal surf or same origin request may not have origin header
+    if origin is None:
+        return None
+
+    # specified value '*' can allow all origins
+    if "*" in CORS_ALLOWED_ORIGINS:
+        return "*"
+
+    # allow origin from list
+    if origin in CORS_ALLOWED_ORIGINS:
+        return origin
+
+    # not allow origin
+    return None
 
 LOGINS = {
     "paul":"123",
