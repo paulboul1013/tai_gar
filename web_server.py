@@ -12,6 +12,13 @@ DATA_FILE = "message_board.json"
 
 COOKIE_NAME = "token"
 
+# origins allowed to read response through CORS
+# this web server port is 8000
+CORS_ALLOWED_ORIGINS = {
+    "http://localhost:8001",
+    "http://127.0.0.1:8001"
+}
+
 # every time get valid request,extend session time 
 SESSION_DURATION = timedelta(seconds=30)
 
