@@ -2842,7 +2842,7 @@ class Tab:
                 continue
 
             try:
-                headers, body = style_url.request(url)
+                headers, body = style_url.request(url,referrer_policy=self.referrer_policy)
             except Exception:
                 continue
                 
