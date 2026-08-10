@@ -2741,7 +2741,8 @@ class Tab:
         
         else: # normal web page
             try:
-                headers,body = url.request(referrer,payload)
+                # request with referrer and referrer policy
+                headers,body = url.request(referrer,payload,referrer_policy=referrer_policy)
 
                 # request finished without certificate error
                 self.secure=(url.scheme=="https")
