@@ -3834,6 +3834,9 @@ class URL:
             if payload is not None:
                 request += payload
 
+            print("\n===== REQUEST =====")
+            print(request)
+
             # 發送編碼後的請求
             s.send(request.encode("utf-8"))
 
@@ -3867,6 +3870,15 @@ class URL:
                 if line == "\r\n": break  # 遇到空行表示標頭結束
                 header, value = line.split(":", 1)
                 response_headers[header.casefold()] = value.strip()
+
+            print("\n===== RESPONSE =====")
+
+            for header, value in \
+                    response_headers.items():
+                print("{}: {}".format(
+                    header,
+                    value
+                ))
 
             # if server send back like set-cookie: token=abc123; SameSite=Lax
             if "set-cookie" in response_headers:
@@ -3977,7 +3989,7 @@ class URL:
                     except ValueError:
                         pass
                     
-            print(f"Debug - Headers: {response_headers.keys()}")
+            # print(f"Debug - Headers: {response_headers.keys()}")
             if "cache-control" in response_headers:
                 print(f"Debug - Cache-Control value: {response_headers['cache-control']}")
 
