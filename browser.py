@@ -164,6 +164,10 @@ def should_send_referrer(referrer,target_url,referrer_policy):
 
     return True
 
+def referer_value(referrer):
+    # url fragment not put into referrer header
+    return str(referrer).split("#",1)[0]
+
 # cookie serialize example
 # token=abc123; SameSite=Lax; HttpOnly
 """
