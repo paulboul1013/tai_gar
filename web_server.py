@@ -300,6 +300,10 @@ def handle_connection(conx):
     response += "Content-Type: text/html; charset=utf-8\r\n"
     response += "Content-Length: {}\r\n".format(len(body_bytes))
 
+    response += (
+        "Referrer-Policy: same-origin\r\n"
+    )
+
     csp = "default-src http://localhost:8000"
     response += "Content-Security-Policy: {}\r\n".format(csp)
 
