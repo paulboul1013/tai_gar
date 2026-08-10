@@ -1892,7 +1892,7 @@ class JSContext:
         # only cross-origin request need to add origin header
         request_origin = (page_origin if is_cross_origin else None)
 
-        response_headers,out = full_url.request(self.tab.url,body,origin=request_origin)
+        response_headers,out = full_url.request(self.tab.url,body,origin=request_origin,referrer_policy=self.tab.referrer_policy)
 
         # decide js can access response
         if is_cross_origin:
