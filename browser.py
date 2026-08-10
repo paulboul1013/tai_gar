@@ -2767,6 +2767,9 @@ class Tab:
                 self.nodes=HTMLParser(body).parse()
 
 
+        # read new page referrer-policy
+        self.referrer_policy = normalize_referrer_policy(headers)
+
         #CSP(content-security-policy)
         self.allowed_origins = None
 
