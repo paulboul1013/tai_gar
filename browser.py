@@ -2635,6 +2635,9 @@ class Tab:
         self.document=None
         self.secure = False
 
+        #current page Referrer-Policy
+        self.referrer_policy = None
+
         self.focus=None
 
         self.visited_urls = visited_urls
