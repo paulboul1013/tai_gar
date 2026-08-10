@@ -125,6 +125,45 @@ def get_valid_cookie(host):
 
     return cookie,params
 
+# parse server Referrer-Policy
+def normalize_referrer_policy(response_headers):
+    policy = response_headers.get("referrer-policy")
+
+    if policy is None:
+        return None
+
+        
+    policy = policy.strip().casefold()
+
+    if policy in [
+        "no-referrer",
+        "same-origin"
+    ]:
+        return policy
+
+    return None
+
+# decide whether to send referrer
+def should_send_referrer(referrer,target_url,referrer_policy):
+    # first page no source
+    if referrer is None:
+        return False
+
+    # only HTTP/HTTPS can request with Referer
+    if referrer.scheme not in ["http","https"]:
+        return False
+
+    if target_url.scheme not in ["http","https"]:
+        return False
+
+    if referrer_policy == "no-referrer":
+        return False
+
+    if referrer_policy=="same-origin":
+        return (referrer.origin()==target_url.origin())
+
+    return True
+
 # cookie serialize example
 # token=abc123; SameSite=Lax; HttpOnly
 """
@@ -1860,7 +1899,7 @@ class JSContext:
             allowed_origin = response_headers.get("access-control-allow-origin")
 
             if allowed_origin not in [page_origin,"*"]:
-                raise Exception("Cross-origin XHR request not allowed")
+                raise Exception("Cross-origin XHR blocked by CORS")
 
 
         return out
