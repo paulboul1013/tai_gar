@@ -2710,7 +2710,9 @@ class Tab:
         return "\n".join(out)
 
     def load(self, url,payload=None,add_to_history=True):
-        referrer=self.url
+        referrer=self.url #old url
+        referrer_policy=self.referrer_policy #old url referrer policy
+        
         self.url=url # new url to come
         self.scroll=0
 
