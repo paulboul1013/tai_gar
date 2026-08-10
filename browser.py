@@ -3698,7 +3698,7 @@ class URL:
         )
 
     # referrer: reference browser lauch request current page
-    def request(self,referrer,payload=None,origin=None):
+    def request(self,referrer,payload=None,origin=None,referrer_policy=None):
 
         if self.scheme=="about":
             return {},""
@@ -3792,8 +3792,14 @@ class URL:
                     "Accept-Encoding":"gzip" # support gzip
             }
 
+
+            # CORS Origin
             if origin is not None:
                 headers["Origin"] = origin
+
+            # Referrer
+            if should_send_referrer(referrer,current_url,referrer_policy):
+                headers["Referer"] = referer_value(referrer)
 
             if payload is not None:
                 headers["Content-Length"] = str(len(payload.encode("utf-8")))
