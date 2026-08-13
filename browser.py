@@ -3,19 +3,20 @@ import ssl
 import sys
 import time 
 import gzip
-import tkinter
 from urllib.parse import unquote, quote_plus, quote
 from html import unescape,escape
 import webbrowser
 import os
-import tkinter.font
 import dukpy
 from datetime import datetime, timezone
 from email.utils import format_datetime,parsedate_to_datetime
+import sdl2
+import skia
+import ctypes
 
 # emolji cache
 # key: character (e.g. "😀")
-# value: tkinter.PhotoImage object
+# value: SkiaImageAsset object
 emoji_cache={}
 
 # socket cache
@@ -215,78 +216,277 @@ VOID_ELEMENTS = {
     "param", "source", "track", "wbr",
 }
 
-def normalize_tk_weight(weight):
-    if weight in ["normal","bold"]:
+def normalize_font_weight(weight):
+    if weight in ["normal", "bold"]:
         return weight
-    
+
     try:
-        weight_num=int(weight)
-    except ValueError:
+        weight_num = int(weight)
+    except (TypeError, ValueError):
         return "normal"
 
     return "bold" if weight_num >= 600 else "normal"
 
-def normalize_tk_slant(style):
-    if style in ["italic","oblique"]:
+
+def normalize_font_slant(style):
+    if style in ["italic", "oblique"]:
         return "italic"
-    return "roman"
+    return "normal"
 
-def get_font(size,weight,style,family=None):
-    if not family:
-        family="Times"
 
-    weight=normalize_tk_weight(weight)
-    style=normalize_tk_slant(style)
+class SkiaFontAdapter:
+    """Expose the small Tk-font API the existing layout engine expects."""
+    def __init__(self, font):
+        self.font = font
 
-    key=(size,weight,style,family)
+    def measure(self, text):
+        return self.font.measureText(str(text))
 
+    def metrics(self, name):
+        metrics = self.font.getMetrics()
+
+        if name == "ascent":
+            return -metrics.fAscent
+        if name == "descent":
+            return metrics.fDescent
+        if name == "linespace":
+            return metrics.fDescent - metrics.fAscent
+
+        raise KeyError("Unknown font metric: {}".format(name))
+
+
+def get_font(size, weight, style, family=None):
+    family = family or "Times New Roman"
+    family = str(family).split(",", 1)[0].strip().strip("'\"")
+
+    family_aliases = {
+        "serif": "Times New Roman",
+        "sans-serif": "Arial",
+        "monospace": "Courier New",
+    }
+    family = family_aliases.get(family.casefold(), family)
+
+    weight = normalize_font_weight(weight)
+    style = normalize_font_slant(style)
+    size = max(1, int(size))
+
+    key = (size, weight, style, family)
     if key not in FONTS:
-        font=tkinter.font.Font(family=family,size=size,weight=weight,slant=style)
-        # create a Label and associate this font can raise up metrics performance
-        label=tkinter.Label(font=font)
-        FONTS[key]=(font,label)
+        skia_weight = (
+            skia.FontStyle.kBold_Weight
+            if weight == "bold"
+            else skia.FontStyle.kNormal_Weight
+        )
+        skia_slant = (
+            skia.FontStyle.kItalic_Slant
+            if style == "italic"
+            else skia.FontStyle.kUpright_Slant
+        )
+        style_info = skia.FontStyle(
+            skia_weight,
+            skia.FontStyle.kNormal_Width,
+            skia_slant,
+        )
 
-    return FONTS[key][0]
+        try:
+            typeface = skia.Typeface(family, style_info)
+        except Exception:
+            typeface = skia.Typeface("Arial", style_info)
+
+        FONTS[key] = SkiaFontAdapter(
+            skia.Font(typeface, size)
+        )
+
+    return FONTS[key]
+
+
+class SkiaImageAsset:
+    def __init__(self, image, width, height):
+        self.image = image
+        self._width = int(width)
+        self._height = int(height)
+
+    def width(self):
+        return self._width
+
+    def height(self):
+        return self._height
+
 
 def get_emoji(char):
-
     if char in emoji_cache:
         return emoji_cache[char]
 
-    # convert char to unicode hex strings (e.g. "😀" -> "U+1F600")
-    code_point="{:X}".format(ord(char))
-
-    # pic in the openmoji dir
-    possible_filenames=[
+    code_point = "{:X}".format(ord(char))
+    possible_filenames = [
         f"openmoji/{code_point}_color.png",
-        f"openmoji/{code_point}.png"
+        f"openmoji/{code_point}.png",
     ]
-    
+
     for file_path in possible_filenames:
-        if os.path.exists(file_path):
-            try:
-                #loading pic
-                img=tkinter.PhotoImage(file=file_path)
+        if not os.path.exists(file_path):
+            continue
 
-                target_size=22
-                w=img.width()
+        try:
+            image = skia.Image.open(file_path)
+            if image is None:
+                continue
 
-                # opemoji pic is very big
-                # need to shrink it 16x16
-                # subsample(x) represent to shrink x times
-                # 72x72 shrink 4 times-> 18x18 close to VSTEP(18)
-                scale_factor=max(1,round(w/target_size))
+            target_width = 22
+            source_width = max(1, image.width())
+            source_height = max(1, image.height())
+            target_height = max(
+                1,
+                round(source_height * target_width / source_width),
+            )
 
-                img=img.subsample(scale_factor,scale_factor)
-
-                #save into cache
-                emoji_cache[char]=img
-                return img
-            except Exception as e:
-                print(f"Error loading emoji {char}: {e}")
-                return None
+            asset = SkiaImageAsset(
+                image,
+                target_width,
+                target_height,
+            )
+            emoji_cache[char] = asset
+            return asset
+        except Exception as e:
+            print(f"Error loading emoji {char}: {e}")
+            return None
 
     return None
+
+
+NAMED_SKIA_COLORS = {
+    "black": (0, 0, 0, 255),
+    "white": (255, 255, 255, 255),
+    "red": (255, 0, 0, 255),
+    "green": (0, 128, 0, 255),
+    "blue": (0, 0, 255, 255),
+    "yellow": (255, 255, 0, 255),
+    "gray": (128, 128, 128, 255),
+    "grey": (128, 128, 128, 255),
+    "lightgray": (211, 211, 211, 255),
+    "lightgrey": (211, 211, 211, 255),
+    "lightblue": (173, 216, 230, 255),
+    "transparent": (0, 0, 0, 0),
+}
+
+
+def parse_skia_color(color):
+    value = str(color or "black").strip().casefold()
+
+    if value in NAMED_SKIA_COLORS:
+        r, g, b, a = NAMED_SKIA_COLORS[value]
+        return skia.ColorSetARGB(a, r, g, b)
+
+    if value.startswith("#"):
+        raw = value[1:]
+        try:
+            if len(raw) == 3:
+                r = int(raw[0] * 2, 16)
+                g = int(raw[1] * 2, 16)
+                b = int(raw[2] * 2, 16)
+                return skia.ColorSetARGB(255, r, g, b)
+            if len(raw) == 6:
+                r = int(raw[0:2], 16)
+                g = int(raw[2:4], 16)
+                b = int(raw[4:6], 16)
+                return skia.ColorSetARGB(255, r, g, b)
+        except ValueError:
+            pass
+
+    # Keep unsupported CSS colors visible instead of crashing the renderer.
+    return skia.ColorBLACK
+
+
+class SkiaCanvasAdapter:
+    """
+    Compatibility layer for the existing display-list commands.
+
+    The layout/paint code can keep calling create_text/create_rectangle/etc.,
+    but the actual rasterization is now performed by Skia.
+    """
+    def __init__(self, canvas):
+        self.canvas = canvas
+
+    def create_text(self, x, y, text, font, anchor="nw", fill="black"):
+        paint = skia.Paint(
+            AntiAlias=True,
+            Color=parse_skia_color(fill),
+        )
+        metrics = font.font.getMetrics()
+        baseline = float(y - metrics.fAscent)
+        self.canvas.drawString(
+            str(text),
+            float(x),
+            baseline,
+            font.font,
+            paint,
+        )
+
+    def create_rectangle(
+        self,
+        x1,
+        y1,
+        x2,
+        y2,
+        width=1,
+        fill=None,
+        outline=None,
+    ):
+        rect = skia.Rect.MakeLTRB(
+            float(x1), float(y1), float(x2), float(y2)
+        )
+
+        if fill not in [None, ""]:
+            paint = skia.Paint(
+                Color=parse_skia_color(fill),
+                Style=skia.Paint.kFill_Style,
+            )
+            self.canvas.drawRect(rect, paint)
+
+        if outline not in [None, ""] and width > 0:
+            paint = skia.Paint(
+                AntiAlias=True,
+                Color=parse_skia_color(outline),
+                StrokeWidth=float(width),
+                Style=skia.Paint.kStroke_Style,
+            )
+            self.canvas.drawRect(rect, paint)
+
+    def create_line(self, x1, y1, x2, y2, fill="black", width=1):
+        paint = skia.Paint(
+            AntiAlias=True,
+            Color=parse_skia_color(fill),
+            StrokeWidth=float(width),
+            Style=skia.Paint.kStroke_Style,
+        )
+        self.canvas.drawLine(
+            float(x1), float(y1), float(x2), float(y2), paint
+        )
+
+    def create_image(self, x, y, image, anchor="nw"):
+        if image is None:
+            return
+
+        destination = skia.Rect.MakeXYWH(
+            float(x),
+            float(y),
+            float(image.width()),
+            float(image.height()),
+        )
+        self.canvas.drawImageRect(image.image, destination)
+
+
+def make_skia_surface(width, height):
+    width = max(1, int(width))
+    height = max(1, int(height))
+    info = skia.ImageInfo.Make(
+        width,
+        height,
+        ct=skia.kRGBA_8888_ColorType,
+        at=skia.kUnpremul_AlphaType,
+    )
+    return skia.Surface.MakeRaster(info)
+
 
 def paint_tree(layout_object,display_list):
     should_paint =getattr(layout_object,"should_paint",lambda:True)
@@ -338,28 +538,155 @@ def is_checkbox_input(node):
     )
 
 class BrowserApp:
+    """Own SDL itself and route SDL events to the correct BrowserWindow."""
     def __init__(self):
-        self.root=tkinter.Tk()
-        self.windows = []
-        self.visited_urls = set() 
-        self.bookmarks = set()
+        init_flags = sdl2.SDL_INIT_VIDEO | sdl2.SDL_INIT_EVENTS
+        if sdl2.SDL_Init(init_flags) != 0:
+            error = sdl2.SDL_GetError()
+            if isinstance(error, bytes):
+                error = error.decode("utf8", errors="replace")
+            raise RuntimeError("SDL_Init failed: {}".format(error))
 
-    def new_window(self,url=None):
+        self.windows = []
+        self.windows_by_id = {}
+        self.visited_urls = set()
+        self.bookmarks = set()
+        self.running = False
+
+        sdl2.SDL_StartTextInput()
+
+    def new_window(self, url=None):
         if url is None:
             url = URL("https://browser.engineering/")
 
-        if not self.windows: 
-            window = self.root #create first window 
-        else:
-            window = tkinter.Toplevel(self.root) # create others windows
-
-        browser_window = BrowserWindow(self,window)
+        browser_window = BrowserWindow(self)
         self.windows.append(browser_window)
+        self.windows_by_id[browser_window.window_id] = browser_window
         browser_window.new_tab(url)
         return browser_window
 
+    def unregister_window(self, browser_window):
+        self.windows_by_id.pop(browser_window.window_id, None)
+        if browser_window in self.windows:
+            self.windows.remove(browser_window)
+
+        if not self.windows:
+            self.running = False
+
+    def window_for_id(self, window_id):
+        return self.windows_by_id.get(int(window_id))
+
+    def _decode_text_input(self, event):
+        raw = bytes(event.text.text)
+        raw = raw.split(b"\x00", 1)[0]
+        return raw.decode("utf8", errors="ignore")
+
+    def dispatch_event(self, event):
+        event_type = event.type
+
+        if event_type == sdl2.SDL_QUIT:
+            self.running = False
+            return
+
+        if event_type == sdl2.SDL_WINDOWEVENT:
+            browser_window = self.window_for_id(event.window.windowID)
+            if browser_window is None:
+                return
+
+            if event.window.event == sdl2.SDL_WINDOWEVENT_CLOSE:
+                browser_window.close()
+            elif event.window.event in [
+                sdl2.SDL_WINDOWEVENT_SIZE_CHANGED,
+                sdl2.SDL_WINDOWEVENT_RESIZED,
+            ]:
+                browser_window.resize(
+                    int(event.window.data1),
+                    int(event.window.data2),
+                )
+            return
+
+        if event_type == sdl2.SDL_MOUSEBUTTONUP:
+            browser_window = self.window_for_id(event.button.windowID)
+            if browser_window is None:
+                return
+
+            x = int(event.button.x)
+            y = int(event.button.y)
+
+            if event.button.button == sdl2.SDL_BUTTON_LEFT:
+                browser_window.handle_click(x, y)
+            elif event.button.button == sdl2.SDL_BUTTON_MIDDLE:
+                browser_window.handle_middle_click(x, y)
+            return
+
+        if event_type == sdl2.SDL_MOUSEWHEEL:
+            browser_window = self.window_for_id(event.wheel.windowID)
+            if browser_window is None:
+                return
+
+            delta = int(event.wheel.y)
+            if getattr(event.wheel, "direction", 0) == getattr(
+                sdl2, "SDL_MOUSEWHEEL_FLIPPED", -1
+            ):
+                delta = -delta
+            browser_window.handle_mousewheel(delta)
+            return
+
+        if event_type == sdl2.SDL_KEYDOWN:
+            browser_window = self.window_for_id(event.key.windowID)
+            if browser_window is None:
+                return
+
+            sym = event.key.keysym.sym
+            mod = event.key.keysym.mod
+
+            if (mod & sdl2.KMOD_CTRL) and sym in [
+                sdl2.SDLK_n,
+                getattr(sdl2, "SDLK_N", sdl2.SDLK_n),
+            ]:
+                browser_window.handle_new_window()
+            elif sym == sdl2.SDLK_RETURN:
+                browser_window.handle_enter()
+            elif sym == sdl2.SDLK_DOWN:
+                browser_window.handle_down()
+            elif sym == sdl2.SDLK_UP:
+                browser_window.handle_up()
+            elif sym == sdl2.SDLK_BACKSPACE:
+                browser_window.handle_backspace()
+            elif sym == sdl2.SDLK_LEFT:
+                browser_window.handle_left()
+            elif sym == sdl2.SDLK_RIGHT:
+                browser_window.handle_right()
+            return
+
+        if event_type == sdl2.SDL_TEXTINPUT:
+            browser_window = self.window_for_id(event.text.windowID)
+            if browser_window is None:
+                return
+
+            text = self._decode_text_input(event)
+            if text:
+                browser_window.handle_key(text)
+
     def run(self):
-        self.root.mainloop()
+        self.running = True
+        event = sdl2.SDL_Event()
+
+        try:
+            while self.running and self.windows:
+                # Wait briefly when idle so the loop does not consume a CPU core.
+                if sdl2.SDL_WaitEventTimeout(ctypes.byref(event), 16) != 0:
+                    self.dispatch_event(event)
+
+                while sdl2.SDL_PollEvent(ctypes.byref(event)) != 0:
+                    self.dispatch_event(event)
+        finally:
+            for browser_window in list(self.windows):
+                browser_window.close()
+
+            sdl2.SDL_StopTextInput()
+            sdl2.SDL_Quit()
+
 
 class Rect:
     def __init__(self,left,top,right,bottom):
@@ -498,8 +825,9 @@ class DrawImage:
         )
 
 class DocumentLayout:
-    def __init__(self,node):#build root of layout tree
+    def __init__(self,node,viewport_width=None):#build root of layout tree
         self.node=node
+        self.viewport_width = viewport_width if viewport_width is not None else WIDTH
         self.parent=None
         self.previous=None
         self.children=[]
@@ -512,7 +840,7 @@ class DocumentLayout:
     def layout(self): # build child layout objects
         self.x=HSTEP
         self.y=VSTEP
-        self.width=WIDTH-HSTEP*2
+        self.width=self.viewport_width-HSTEP*2
         
         
         child=BlockLayout([self.node],self,None)
@@ -1299,7 +1627,7 @@ class BlockLayout: # layout for block level elements
 
         return self.parse_px(self.node.style.get("height","auto"))
 
-    # convert CSS style into Tkinter font
+    # convert CSS style into Skia font
     # font-size: 16px       -> 12pt
     # font-style: normal    -> roman
     # font-style: italic    -> italic
@@ -2219,10 +2547,10 @@ class SecurityIconLayout:
         return [DrawImage(self.x,icon_y,self.img)]
 
 class ChromeLayoutParent:
-    def __init__(self):
+    def __init__(self,width):
         self.x=0
         self.y=0
-        self.width = WIDTH
+        self.width = width
 
 class Chrome:
     def __init__(self,browser):
@@ -2459,12 +2787,12 @@ class Chrome:
         
         icon_space = (SECURITY_ICON_SLOT if secure else 0)
 
-        address_width = max(100,WIDTH-150-icon_space)
+        address_width = max(100,self.browser.width-150-icon_space)
 
         out = "<!doctype html>"
         out += "<html>"
         out += "<body>"
-        out += "<div style='background-color:lightgray;width:{}px'>".format(WIDTH)
+        out += "<div style='background-color:lightgray;width:{}px'>".format(self.browser.width)
 
         # first layer: new tab button + tab links 
         out += "<button id=new-tab style='width:30px'>+</button> "
@@ -2526,7 +2854,7 @@ class Chrome:
             else:
                 address_node.is_focused = False
 
-        parent = ChromeLayoutParent()
+        parent = ChromeLayoutParent(self.browser.width)
 
         self.document = BlockLayout([self.nodes],parent,None)
         self.document.layout()
@@ -2627,9 +2955,9 @@ class Chrome:
         
 
 class Tab:
-    def __init__(self,tab_height,visited_urls,bookmarks):
-        self.width=WIDTH
-        self.height=HEIGHT
+    def __init__(self,width,tab_height,visited_urls,bookmarks):
+        self.width=width
+        self.height=tab_height
         self.tab_height=tab_height
 
         self.display_list = []
@@ -2962,7 +3290,7 @@ class Tab:
         self.relayout()
 
     def relayout(self):
-        self.document=DocumentLayout(self.nodes)
+        self.document=DocumentLayout(self.nodes,self.width)
         self.document.layout()
 
         self.display_list=[]
@@ -3061,9 +3389,9 @@ class Tab:
             #pos:(right edge - width bound, top edge,right edge,down edge)
             canvas.create_rectangle(
                 self.width-SCROLLBAR_WIDTH,
-                bar_y,
+                offset+bar_y,
                 self.width,
-                bar_y+bar_h,
+                offset+bar_y+bar_h,
                 fill="blue",outline=""
             )
 
@@ -3078,11 +3406,11 @@ class Tab:
         if self.scroll<0:
             self.scroll=0
 
-    def mousewheel(self,e):
-        if e.delta>0:
-            self.scrollup(e)
-        else:
-            self.scrolldown(e)
+    def mousewheel(self,delta):
+        if delta > 0:
+            self.scrollup()
+        elif delta < 0:
+            self.scrolldown()
 
 
     def layout_object_at(self,x,y):
@@ -3305,139 +3633,174 @@ class Tab:
 
             elt=elt.parent
 
-    def resize(self,e):
-        if e.width <=10 or e.height <=10:
+    def resize(self,width,tab_height):
+        if width <= 10 or tab_height <= 10:
             return
 
-        if self.width == e.width and self.height == e.height:
+        if self.width == width and self.tab_height == tab_height:
             return
 
-        
-        # read new window size
-        self.width=e.width
-        self.height=e.height
-        
-        #recalculate layout
-        if hasattr(self,"nodes") and self.nodes:
-            global WIDTH,HEIGHT
-            WIDTH=self.width
-            HEIGHT=self.height
+        self.width = width
+        self.height = tab_height
+        self.tab_height = tab_height
 
-            self.document=DocumentLayout(self.nodes)
-            self.document.layout()
+        if self.nodes:
+            self.restyle()
+            self.relayout()
 
-            self.display_list=[]
-            paint_tree(self.document,self.display_list)
-            self.draw()
 
 
 class BrowserWindow:
-    def __init__(self,app,window):
-        self.app=app
-        self.window=window
+    """One native SDL window containing many browser tabs."""
+    def __init__(self, app, width=WIDTH, height=HEIGHT):
+        self.app = app
+        self.width = int(width)
+        self.height = int(height)
 
-        self.tabs=[]
-        self.active_tab=None
+        self.tabs = []
+        self.active_tab = None
         self.focus = None
+        self._closed = False
 
-        self.window.title("Tai Gar")
-
-        self.canvas = tkinter.Canvas(
-            self.window,
-            width=WIDTH,
-            height=HEIGHT,
-            bg="white"
+        flags = sdl2.SDL_WINDOW_SHOWN | sdl2.SDL_WINDOW_RESIZABLE
+        self.sdl_window = sdl2.SDL_CreateWindow(
+            b"Tai Gar",
+            sdl2.SDL_WINDOWPOS_CENTERED,
+            sdl2.SDL_WINDOWPOS_CENTERED,
+            self.width,
+            self.height,
+            flags,
         )
+        if not self.sdl_window:
+            error = sdl2.SDL_GetError()
+            if isinstance(error, bytes):
+                error = error.decode("utf8", errors="replace")
+            raise RuntimeError("SDL_CreateWindow failed: {}".format(error))
 
-        self.canvas.pack(fill=tkinter.BOTH,expand=True)
+        self.window_id = int(sdl2.SDL_GetWindowID(self.sdl_window))
+        self.root_surface = make_skia_surface(self.width, self.height)
 
-        self.chrome=Chrome(self)
+        if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
+            self.RED_MASK = 0xff000000
+            self.GREEN_MASK = 0x00ff0000
+            self.BLUE_MASK = 0x0000ff00
+            self.ALPHA_MASK = 0x000000ff
+        else:
+            self.RED_MASK = 0x000000ff
+            self.GREEN_MASK = 0x0000ff00
+            self.BLUE_MASK = 0x00ff0000
+            self.ALPHA_MASK = 0xff000000
 
-        self.canvas.bind("<Configure>",self.resize)
-
-        self.window.bind("<Down>",self.handle_down)
-        self.window.bind("<Up>",self.handle_up)
-
-        self.window.bind("<MouseWheel>",self.handle_mousewheel)
-        self.window.bind("<Button-4>",self.handle_up)
-        self.window.bind("<Button-5>",self.handle_down)
-
-        self.window.bind("<Button-1>",self.handle_click)
-        self.window.bind("<Button-2>",self.handle_middle_click)
-
-        self.window.bind("<Key>",self.handle_key)
-        self.window.bind("<Return>",self.handle_enter)
-        self.window.bind("<BackSpace>",self.handle_backspace)
-        self.window.bind("<Left>",self.handle_left)
-        self.window.bind("<Right>",self.handle_right)
-
-        self.window.bind("<Control-n>",self.handle_new_window)
-        self.window.bind("<Control-N>",self.handle_new_window)
-
-        self.window.protocol("WM_DELETE_WINDOW",self.close)
+        self.chrome = Chrome(self)
 
     def close(self):
-        is_root_window  = self.window == self.app.root
-
-        if self in self.app.windows:
-            self.app.windows.remove(self) # remove closed window
-
-        # still have other browser windows
-        # if this window is root,not destroy it，withdraw window
-        if self.app.windows:
-            if is_root_window:
-                self.window.withdraw()
-            else:
-                self.window.destroy()
-
+        if self._closed:
             return
 
-        # last window is root，can destroy
-        self.app.root.destroy()
+        self._closed = True
+        self.app.unregister_window(self)
 
-    def new_tab(self,url):
-        new_tab=Tab(HEIGHT-self.chrome.bottom,self.app.visited_urls,self.app.bookmarks)
-        
+        if self.sdl_window:
+            sdl2.SDL_DestroyWindow(self.sdl_window)
+            self.sdl_window = None
+
+    def handle_quit(self):
+        self.close()
+
+    def new_tab(self, url):
+        new_tab = Tab(
+            self.width,
+            max(1, self.height - self.chrome.bottom),
+            self.app.visited_urls,
+            self.app.bookmarks,
+        )
         new_tab.load(url)
 
         self.tabs.append(new_tab)
-        self.active_tab=new_tab
-
+        self.active_tab = new_tab
         self.draw()
 
+    def _present_surface(self):
+        skia_image = self.root_surface.makeImageSnapshot()
+        skia_bytes = skia_image.tobytes()
+
+        depth = 32
+        pitch = 4 * self.width
+        sdl_surface = sdl2.SDL_CreateRGBSurfaceFrom(
+            skia_bytes,
+            self.width,
+            self.height,
+            depth,
+            pitch,
+            self.RED_MASK,
+            self.GREEN_MASK,
+            self.BLUE_MASK,
+            self.ALPHA_MASK,
+        )
+        if not sdl_surface:
+            raise RuntimeError("SDL_CreateRGBSurfaceFrom failed")
+
+        try:
+            window_surface = sdl2.SDL_GetWindowSurface(self.sdl_window)
+            rect = sdl2.SDL_Rect(0, 0, self.width, self.height)
+            sdl2.SDL_BlitSurface(
+                sdl_surface,
+                ctypes.byref(rect),
+                window_surface,
+                ctypes.byref(rect),
+            )
+            sdl2.SDL_UpdateWindowSurface(self.sdl_window)
+        finally:
+            sdl2.SDL_FreeSurface(sdl_surface)
+
     def draw(self):
-        self.canvas.delete("all")
+        if self._closed or not self.sdl_window:
+            return
 
         self.update_title()
-
         self.chrome.render()
 
         if self.active_tab:
-            self.active_tab.tab_height = HEIGHT - self.chrome.bottom
-            self.active_tab.draw(self.canvas,self.chrome.bottom)
+            tab_height = max(1, self.height - self.chrome.bottom)
+            if (
+                self.active_tab.width != self.width
+                or self.active_tab.tab_height != tab_height
+            ):
+                self.active_tab.resize(self.width, tab_height)
+
+        canvas = self.root_surface.getCanvas()
+        canvas.clear(skia.ColorWHITE)
+        canvas_adapter = SkiaCanvasAdapter(canvas)
+
+        if self.active_tab:
+            self.active_tab.draw(
+                canvas_adapter,
+                self.chrome.bottom,
+            )
 
         for cmd in self.chrome.paint():
-            cmd.execute(0,self.canvas)
+            cmd.execute(0, canvas_adapter)
+
+        self._present_surface()
 
     def update_title(self):
         if self.active_tab:
-            self.window.title(self.active_tab.get_title())
+            title = self.active_tab.get_title()
         else:
-            self.window.title("Tai Gar")
+            title = "Tai Gar"
+
+        sdl2.SDL_SetWindowTitle(
+            self.sdl_window,
+            title.encode("utf8", errors="replace"),
+        )
 
     def current_url_string(self):
-        if not self.active_tab:
-            return None
-
-        if not self.active_tab.url:
+        if not self.active_tab or not self.active_tab.url:
             return None
 
         url = str(self.active_tab.url)
-
-        # first not allow bookmark internal page,avoid about:bookmarks marks self
-        if url in ["about:blank","about:bookmarks"]:
+        if url in ["about:blank", "about:bookmarks"]:
             return None
-        
         return url
 
     def is_current_page_bookmarked(self):
@@ -3446,90 +3809,83 @@ class BrowserWindow:
 
     def toggle_bookmark(self):
         url = self.current_url_string()
-
         if url is None:
-            return 
+            return
 
         if url in self.app.bookmarks:
             self.app.bookmarks.remove(url)
         else:
             self.app.bookmarks.add(url)
 
-    def handle_down(self,e):
+    def handle_down(self):
         if not self.active_tab:
             return
-
         self.active_tab.scrolldown()
         self.draw()
 
-    def handle_up(self,e):
+    def handle_up(self):
         if not self.active_tab:
             return
-
         self.active_tab.scrollup()
         self.draw()
 
-    def handle_mousewheel(self,e):
-        if not self.active_tab:
+    def handle_mousewheel(self, delta):
+        if not self.active_tab or delta == 0:
             return
 
-        if e.delta > 0:
+        if delta > 0:
             self.active_tab.scrollup()
         else:
             self.active_tab.scrolldown()
-
         self.draw()
 
-    def handle_click(self,e):
-        if e.y < self.chrome.bottom:
+    def handle_click(self, x, y):
+        if y < self.chrome.bottom:
             self.focus = None
 
-            # click chrome address bar，clear the page content focus
             if self.active_tab:
                 self.active_tab.blur()
 
-            self.chrome.click(e.x,e.y)
+            self.chrome.click(x, y)
         else:
             self.focus = "content"
-
-            # click web page content:
-            # blur address bar, keep url draft
             self.chrome.blur_address_bar()
 
             if not self.active_tab:
                 return
 
-            old_url = str(self.active_tab.url) if self.active_tab and self.active_tab.url else None
+            old_url = (
+                str(self.active_tab.url)
+                if self.active_tab.url
+                else None
+            )
 
-            tab_y=e.y-self.chrome.bottom
-            self.active_tab.click(e.x,tab_y)
+            tab_y = y - self.chrome.bottom
+            self.active_tab.click(x, tab_y)
 
-            new_url = str(self.active_tab.url) if self.active_tab and self.active_tab.url else None
+            new_url = (
+                str(self.active_tab.url)
+                if self.active_tab.url
+                else None
+            )
 
-            # If the page click actually navigated somewhere, discard the old draft
             if old_url != new_url:
                 self.chrome.discard_address_bar_edit()
 
         self.draw()
 
-    def handle_middle_click(self,e):
+    def handle_middle_click(self, x, y):
         if not self.active_tab:
             return
 
-        # middle click on the chrome，do nothing
-        if e.y < self.chrome.bottom:
+        if y < self.chrome.bottom:
             self.active_tab.blur()
             self.draw()
             return
 
-
-        # click web page content，clear address bar focus
         self.chrome.blur_address_bar()
-        
-        # window coordinate -> tab coordinate
-        tab_y=e.y-self.chrome.bottom
-
-        url = self.active_tab.link_at(e.x,tab_y)
+        tab_y = y - self.chrome.bottom
+        url = self.active_tab.link_at(x, tab_y)
 
         if url:
             if url.is_external():
@@ -3540,65 +3896,65 @@ class BrowserWindow:
         else:
             self.draw()
 
-    def handle_key(self,e):
-        if len(e.char)==0:
+    def handle_key(self, text):
+        if not text:
             return
 
-        if not (0x20 <= ord(e.char) < 0x7f): #skip non ASCII characters
+        # SDL_TEXTINPUT already gives decoded user text. Keep control
+        # characters out, but allow Unicode and IME-produced text.
+        text = "".join(ch for ch in text if ord(ch) >= 0x20)
+        if not text:
             return
 
-        if self.chrome.keypress(e.char):
+        if self.chrome.keypress(text):
             self.draw()
-
         elif self.focus == "content" and self.active_tab:
-            self.active_tab.keypress(e.char)
+            self.active_tab.keypress(text)
             self.draw()
 
-    def handle_enter(self,e):
-        if self.chrome.focus=="address bar":
+    def handle_enter(self):
+        if self.chrome.focus == "address bar":
             self.chrome.enter()
-
         elif self.focus == "content" and self.active_tab:
             self.active_tab.enter()
-        
         self.draw()
 
-    def handle_backspace(self,e):
+    def handle_backspace(self):
         self.chrome.backspace()
         self.draw()
 
-    def handle_left(self,e):
+    def handle_left(self):
         self.chrome.left()
         self.draw()
 
-    def handle_right(self,e):
+    def handle_right(self):
         self.chrome.right()
         self.draw()
 
-    def handle_new_window(self,e):
-        self.app.new_window(URL("https://browser.engineering/"))
+    def handle_new_window(self):
+        self.app.new_window(
+            URL("https://browser.engineering/")
+        )
 
-    def resize(self,e):
-        if e.width <=10 or e.height<=10:
+    def resize(self, width, height):
+        width = int(width)
+        height = int(height)
+
+        if width <= 10 or height <= 10:
+            return
+        if self.width == width and self.height == height:
             return
 
-        global WIDTH,HEIGHT
+        self.width = width
+        self.height = height
+        self.root_surface = make_skia_surface(width, height)
 
-        if WIDTH==e.width and HEIGHT == e.height:
-            return
-
-        WIDTH=e.width
-        HEIGHT=e.height
-
-        #rebuild chrome，let address bar with also change
-        self.chrome=Chrome(self)
+        # Preserve Chrome state (address-bar edit/focus), just relayout it.
+        self.chrome.render()
+        tab_height = max(1, height - self.chrome.bottom)
 
         for tab in self.tabs:
-            tab.tab_height=HEIGHT-self.chrome.bottom
-
-            if tab.nodes:
-                tab.restyle()
-                tab.relayout()
+            tab.resize(width, tab_height)
 
         self.draw()
 
@@ -3834,8 +4190,8 @@ class URL:
             if payload is not None:
                 request += payload
 
-            print("\n===== REQUEST =====")
-            print(request)
+            # print("\n===== REQUEST =====")
+            # print(request)
 
             # 發送編碼後的請求
             s.send(request.encode("utf-8"))
@@ -3871,14 +4227,14 @@ class URL:
                 header, value = line.split(":", 1)
                 response_headers[header.casefold()] = value.strip()
 
-            print("\n===== RESPONSE =====")
+            # print("\n===== RESPONSE =====")
 
-            for header, value in \
-                    response_headers.items():
-                print("{}: {}".format(
-                    header,
-                    value
-                ))
+            # for header, value in \
+            #         response_headers.items():
+            #     print("{}: {}".format(
+            #         header,
+            #         value
+            #     ))
 
             # if server send back like set-cookie: token=abc123; SameSite=Lax
             if "set-cookie" in response_headers:
@@ -4853,22 +5209,20 @@ def show(body):
 
 
 if __name__ == "__main__":
+    args = sys.argv[1:]
 
-    if "--rtl" in sys.argv:
-        USE_RTL=True
-        sys.argv.remove("--rtl")
+    if "--rtl" in args:
+        USE_RTL = True
+        args.remove("--rtl")
         print("RTL mode enabled")
 
-    
-    if len(sys.argv) >= 2:
-        url = URL(sys.argv[1])
+    if args:
+        url = URL(args[0])
     else:
         url = URL("https://browser.engineering/")
 
-
     app = BrowserApp()
-    main_window=app.new_window(url)
-    
+    main_window = app.new_window(url)
 
     print("--- DOM Tree ---")
     print_tree(main_window.active_tab.nodes)
