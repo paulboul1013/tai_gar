@@ -411,11 +411,19 @@ def parse_color(color):
                 g = int(raw[1] * 2, 16)
                 b = int(raw[2] * 2, 16)
                 return skia.ColorSetARGB(255, r, g, b)
-            if len(raw) == 6:
+            elif len(raw) == 6:
                 r = int(raw[0:2], 16)
                 g = int(raw[2:4], 16)
                 b = int(raw[4:6], 16)
                 return skia.ColorSetARGB(255, r, g, b)
+
+            elif color.startswith("#") and len(color) == 9:
+                r = int(color[1:3], 16)
+                g = int(color[3:5], 16)
+                b = int(color[5:7], 16)
+                a = int(color[7:9], 16)
+                return skia.Color(r, g, b, a)
+
         except ValueError:
             pass
 
