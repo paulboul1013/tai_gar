@@ -771,12 +771,12 @@ class DrawText:
             float(y1 + height),
         )
 
-    def execute(self, scroll, canvas):
+    def execute(self, canvas):
         paint = skia.Paint(
             AntiAlias=True,
             Color=parse_color(self.color),
         )
-        baseline = self.rect.top() - scroll - self.font.getMetrics().fAscent
+        baseline = self.rect.top() - self.font.getMetrics().fAscent
         canvas.drawString(
             str(self.text),
             float(self.rect.left()),
@@ -791,9 +791,9 @@ class DrawRect:
         self.rect = rect
         self.color = color
 
-    def execute(self, scroll, canvas):
+    def execute(self, canvas):
         paint = skia.Paint(Color=parse_color(self.color))
-        canvas.drawRect(self.rect.makeOffset(0, -scroll), paint)
+        canvas.drawRect(self.rect, paint)
 
 
 class DrawRRect:
@@ -802,10 +802,9 @@ class DrawRRect:
         self.radius = max(0.0, float(radius))
         self.color = color
 
-    def execute(self, scroll, canvas):
+    def execute(self, canvas):
         paint = skia.Paint(Color=parse_color(self.color))
-        shifted = self.rect.makeOffset(0, -scroll)
-        rrect = skia.RRect.MakeRectXY(shifted, self.radius, self.radius)
+        rrect = skia.RRect.MakeRectXY(self.rect, self.radius, self.radius)
         canvas.drawRRect(rrect, paint)
 
 
@@ -826,11 +825,11 @@ class DrawLine:
             max(self.y1, self.y2),
         )
 
-    def execute(self, scroll, canvas):
+    def execute(self, canvas):
         path = (
             skia.Path()
-            .moveTo(self.x1, self.y1 - scroll)
-            .lineTo(self.x2, self.y2 - scroll)
+            .moveTo(self.x1, self.y1)
+            .lineTo(self.x2, self.y2)
         )
         paint = skia.Paint(
             AntiAlias=True,
@@ -847,14 +846,14 @@ class DrawOutline:
         self.color = color
         self.thickness = thickness
 
-    def execute(self, scroll, canvas):
+    def execute(self, canvas):
         paint = skia.Paint(
             AntiAlias=True,
             Color=parse_color(self.color),
             StrokeWidth=float(self.thickness),
             Style=skia.Paint.kStroke_Style,
         )
-        canvas.drawRect(self.rect.makeOffset(0, -scroll), paint)
+        canvas.drawRect(self.rect, paint)
 
 
 class DrawRRectOutline:
@@ -864,15 +863,14 @@ class DrawRRectOutline:
         self.color = color
         self.thickness = thickness
 
-    def execute(self, scroll, canvas):
+    def execute(self, canvas):
         paint = skia.Paint(
             AntiAlias=True,
             Color=parse_color(self.color),
             StrokeWidth=float(self.thickness),
             Style=skia.Paint.kStroke_Style,
         )
-        shifted = self.rect.makeOffset(0, -scroll)
-        rrect = skia.RRect.MakeRectXY(shifted, self.radius, self.radius)
+        rrect = skia.RRect.MakeRectXY(self.rect, self.radius, self.radius)
         canvas.drawRRect(rrect, paint)
 
 
@@ -892,9 +890,8 @@ class DrawVectorIcon:
         self.stroke_width = float(stroke_width)
         self.fill = bool(fill)
 
-    def execute(self, scroll, canvas):
-        shifted = self.rect.makeOffset(0, -scroll)
-        path = build_icon_path(self.icon_name, shifted)
+    def execute(self, canvas):
+        path = build_icon_path(self.icon_name, self.rect)
         if path is None:
             return
 
@@ -921,9 +918,8 @@ class DrawImage:
             float(img.height()),
         )
 
-    def execute(self, scroll, canvas):
-        destination = self.rect.makeOffset(0, -scroll)
-        canvas.drawImageRect(self.img.image, destination)
+    def execute(self, canvas):
+        canvas.drawImageRect(self.img.image, self.rect)
 
 class DocumentLayout:
     def __init__(self,node,viewport_width=None):#build root of layout tree
@@ -3546,44 +3542,14 @@ class Tab:
         self.scroll_to_fragment(fragment)
 
 
-    def draw(self, canvas, offset):
+    def raster(self, canvas):
+        """Raster the entire page into tab_surface in page coordinates.
+
+        Scroll is deliberately not applied here. BrowserWindow.draw() performs
+        scrolling later by translating the already-rastered tab surface.
+        """
         for item in self.display_list:
-            if item.rect.top() > self.scroll + self.tab_height:
-                continue
-            if item.rect.bottom() < self.scroll:
-                continue
-
-            item.execute(self.scroll - offset, canvas)
-
-  
-        #scrollbar section: put the loop outside, only draw once
-            
-        #calculate web total height
-        document_height=self.document.height+2*VSTEP
-
-        # only web longer than window height need scrollbar
-        if document_height>self.height:
-            # calculate ratio
-            ratio_visible=self.height/document_height
-            ratio_scroll=self.scroll/document_height
-
-            # calculate scrollbar size and position
-            bar_h=self.height*ratio_visible
-            bar_y=self.height*ratio_scroll
-
-            # Draw the browser-owned scrollbar directly with Skia.
-            scrollbar = skia.Rect.MakeLTRB(
-                self.width - SCROLLBAR_WIDTH,
-                offset + bar_y,
-                self.width,
-                offset + bar_y + bar_h,
-            )
-            canvas.drawRect(
-                scrollbar,
-                skia.Paint(Color=parse_color("blue")),
-            )
-
-            
+            item.execute(canvas)
 
     def scrolldown(self):
         max_y=max(self.document.height+2*VSTEP-self.tab_height,0)
@@ -3946,6 +3912,11 @@ class BrowserWindow:
         self.window_id = int(sdl2.SDL_GetWindowID(self.sdl_window))
         self.root_surface = make_skia_surface(self.width, self.height)
 
+        # Browser compositing surfaces. Chrome has a small fixed-height surface;
+        # tab_surface is allocated lazily after layout tells us page height.
+        self.chrome_surface = None
+        self.tab_surface = None
+
         if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
             self.RED_MASK = 0xff000000
             self.GREEN_MASK = 0x00ff0000
@@ -3958,6 +3929,7 @@ class BrowserWindow:
             self.ALPHA_MASK = 0xff000000
 
         self.chrome = Chrome(self)
+        self.raster_chrome()
 
     def close(self):
         if self._closed:
@@ -3984,6 +3956,9 @@ class BrowserWindow:
 
         self.tabs.append(new_tab)
         self.active_tab = new_tab
+
+        self.raster_chrome()
+        self.raster_tab()
         self.draw()
 
     def _present_surface(self):
@@ -4019,32 +3994,124 @@ class BrowserWindow:
         finally:
             sdl2.SDL_FreeSurface(sdl_surface)
 
+    def raster_chrome(self):
+        """Raster browser chrome only when Chrome state/layout changes."""
+        self.chrome.render()
+        chrome_height = max(1, math.ceil(self.chrome.bottom))
+
+        if (
+            self.chrome_surface is None
+            or self.chrome_surface.width() != self.width
+            or self.chrome_surface.height() != chrome_height
+        ):
+            self.chrome_surface = make_skia_surface(self.width, chrome_height)
+
+        canvas = self.chrome_surface.getCanvas()
+        canvas.clear(skia.ColorWHITE)
+        for cmd in self.chrome.paint():
+            cmd.execute(canvas)
+
+    def raster_tab(self):
+        """Raster the full active page only when page pixels actually change."""
+        if not self.active_tab or not self.active_tab.document:
+            self.tab_surface = None
+            return
+
+        tab_view_height = max(1, self.height - self.chrome.bottom)
+        if (
+            self.active_tab.width != self.width
+            or self.active_tab.tab_height != tab_view_height
+        ):
+            self.active_tab.resize(self.width, tab_view_height)
+
+        tab_height = max(
+            1,
+            math.ceil(self.active_tab.document.height + 2 * VSTEP),
+        )
+
+        if (
+            self.tab_surface is None
+            or self.tab_surface.width() != self.width
+            or self.tab_surface.height() != tab_height
+        ):
+            self.tab_surface = make_skia_surface(self.width, tab_height)
+
+        canvas = self.tab_surface.getCanvas()
+        canvas.clear(skia.ColorWHITE)
+        self.active_tab.raster(canvas)
+
+    def _draw_scrollbar(self, canvas):
+        """Draw the viewport scrollbar during compositing, not page raster."""
+        if not self.active_tab or not self.active_tab.document:
+            return
+
+        viewport_height = max(1, self.height - self.chrome.bottom)
+        document_height = max(
+            1,
+            self.active_tab.document.height + 2 * VSTEP,
+        )
+        if document_height <= viewport_height:
+            return
+
+        bar_height = viewport_height * viewport_height / document_height
+        bar_height = max(20.0, min(float(viewport_height), bar_height))
+
+        max_scroll = max(document_height - viewport_height, 1)
+        max_bar_y = max(viewport_height - bar_height, 0.0)
+        bar_y = max_bar_y * self.active_tab.scroll / max_scroll
+
+        scrollbar = skia.Rect.MakeLTRB(
+            self.width - SCROLLBAR_WIDTH,
+            self.chrome.bottom + bar_y,
+            self.width,
+            self.chrome.bottom + bar_y + bar_height,
+        )
+        canvas.drawRect(
+            scrollbar,
+            skia.Paint(Color=parse_color("blue")),
+        )
+
     def draw(self):
+        """Composite cached tab/chrome surfaces and present them through SDL."""
         if self._closed or not self.sdl_window:
             return
 
         self.update_title()
-        self.chrome.render()
-
-        if self.active_tab:
-            tab_height = max(1, self.height - self.chrome.bottom)
-            if (
-                self.active_tab.width != self.width
-                or self.active_tab.tab_height != tab_height
-            ):
-                self.active_tab.resize(self.width, tab_height)
 
         canvas = self.root_surface.getCanvas()
         canvas.clear(skia.ColorWHITE)
 
-        if self.active_tab:
-            self.active_tab.draw(
-                canvas,
+        # Page surface: clip to the content viewport and translate by scroll.
+        if self.active_tab and self.tab_surface is not None:
+            tab_rect = skia.Rect.MakeLTRB(
+                0,
+                self.chrome.bottom,
+                self.width,
+                self.height,
+            )
+            tab_offset = self.chrome.bottom - self.active_tab.scroll
+
+            canvas.save()
+            canvas.clipRect(tab_rect)
+            canvas.translate(0, tab_offset)
+            self.tab_surface.draw(canvas, 0, 0)
+            canvas.restore()
+
+            # The scrollbar is viewport-relative, so it is cheap to redraw here.
+            self._draw_scrollbar(canvas)
+
+        # Chrome surface is composited last so page pixels never cover it.
+        if self.chrome_surface is not None:
+            chrome_rect = skia.Rect.MakeLTRB(
+                0,
+                0,
+                self.width,
                 self.chrome.bottom,
             )
-
-        for cmd in self.chrome.paint():
-            cmd.execute(0, canvas)
+            canvas.save()
+            canvas.clipRect(chrome_rect)
+            self.chrome_surface.draw(canvas, 0, 0)
+            canvas.restore()
 
         self._present_surface()
 
@@ -4086,12 +4153,14 @@ class BrowserWindow:
         if not self.active_tab:
             return
         self.active_tab.scrolldown()
+        # Scrolling only changes which cached pixels are copied to the window.
         self.draw()
 
     def handle_up(self):
         if not self.active_tab:
             return
         self.active_tab.scrollup()
+        # No raster_tab() here: composited scrolling reuses tab_surface.
         self.draw()
 
     def handle_mousewheel(self, delta):
@@ -4102,40 +4171,54 @@ class BrowserWindow:
             self.active_tab.scrollup()
         else:
             self.active_tab.scrolldown()
+        # No raster_tab() here either.
         self.draw()
 
     def handle_click(self, x, y):
         if y < self.chrome.bottom:
             self.focus = None
 
-            if self.active_tab:
-                self.active_tab.blur()
+            old_tab = self.active_tab
+            old_url = str(old_tab.url) if old_tab and old_tab.url else None
+            tab_was_focused = bool(old_tab and old_tab.focus)
+
+            if old_tab:
+                old_tab.blur()
 
             self.chrome.click(x, y)
+
+            new_tab = self.active_tab
+            new_url = str(new_tab.url) if new_tab and new_tab.url else None
+
+            # Chrome always changed (focus/caret/button/tab state).
+            self.raster_chrome()
+
+            # Only reraster page pixels when Chrome action changed the page,
+            # switched tabs, navigated, or removed an in-page focus caret.
+            if tab_was_focused or new_tab is not old_tab or new_url != old_url:
+                self.raster_tab()
         else:
             self.focus = "content"
+            chrome_was_focused = self.chrome.focus == "address bar"
             self.chrome.blur_address_bar()
 
             if not self.active_tab:
                 return
 
-            old_url = (
-                str(self.active_tab.url)
-                if self.active_tab.url
-                else None
-            )
-
+            old_url = str(self.active_tab.url) if self.active_tab.url else None
             tab_y = y - self.chrome.bottom
             self.active_tab.click(x, tab_y)
+            new_url = str(self.active_tab.url) if self.active_tab.url else None
 
-            new_url = (
-                str(self.active_tab.url)
-                if self.active_tab.url
-                else None
-            )
+            # A page click can change form focus, controls, DOM, or navigation.
+            self.raster_tab()
 
             if old_url != new_url:
                 self.chrome.discard_address_bar_edit()
+
+            # URL/security/history or address-bar focus affects Chrome pixels.
+            if chrome_was_focused or old_url != new_url:
+                self.raster_chrome()
 
         self.draw()
 
@@ -4144,13 +4227,21 @@ class BrowserWindow:
             return
 
         if y < self.chrome.bottom:
+            tab_was_focused = bool(self.active_tab.focus)
             self.active_tab.blur()
+            if tab_was_focused:
+                self.raster_tab()
+            self.raster_chrome()
             self.draw()
             return
 
+        chrome_was_focused = self.chrome.focus == "address bar"
         self.chrome.blur_address_bar()
         tab_y = y - self.chrome.bottom
         url = self.active_tab.link_at(x, tab_y)
+
+        if chrome_was_focused:
+            self.raster_chrome()
 
         if url:
             if url.is_external():
@@ -4172,37 +4263,53 @@ class BrowserWindow:
             return
 
         if self.chrome.keypress(text):
+            self.raster_chrome()
             self.draw()
         elif self.focus == "content" and self.active_tab:
             self.active_tab.keypress(text)
+            self.raster_tab()
             self.draw()
 
     def handle_enter(self):
         if self.chrome.focus == "address bar":
             self.chrome.enter()
+            # Enter in the address bar may navigate or create the first tab.
+            self.raster_chrome()
+            self.raster_tab()
         elif self.focus == "content" and self.active_tab:
+            old_url = str(self.active_tab.url) if self.active_tab.url else None
             self.active_tab.enter()
+            new_url = str(self.active_tab.url) if self.active_tab.url else None
+            self.raster_tab()
+            if old_url != new_url:
+                self.raster_chrome()
         self.draw()
 
     def handle_backspace(self):
         if self.chrome.focus == "address bar":
             self.chrome.backspace()
+            self.raster_chrome()
         elif self.focus == "content" and self.active_tab:
             self.active_tab.backspace()
+            self.raster_tab()
         self.draw()
 
     def handle_left(self):
         if self.chrome.focus == "address bar":
             self.chrome.left()
+            self.raster_chrome()
         elif self.focus == "content" and self.active_tab:
             self.active_tab.left()
+            self.raster_tab()
         self.draw()
 
     def handle_right(self):
         if self.chrome.focus == "address bar":
             self.chrome.right()
+            self.raster_chrome()
         elif self.focus == "content" and self.active_tab:
             self.active_tab.right()
+            self.raster_tab()
         self.draw()
 
     def handle_new_window(self):
@@ -4222,14 +4329,17 @@ class BrowserWindow:
         self.width = width
         self.height = height
         self.root_surface = make_skia_surface(width, height)
+        self.chrome_surface = None
+        self.tab_surface = None
 
-        # Preserve Chrome state (address-bar edit/focus), just relayout it.
-        self.chrome.render()
+        # Chrome width changes first; its resulting height defines tab viewport.
+        self.raster_chrome()
         tab_height = max(1, height - self.chrome.bottom)
 
         for tab in self.tabs:
             tab.resize(width, tab_height)
 
+        self.raster_tab()
         self.draw()
 
 
