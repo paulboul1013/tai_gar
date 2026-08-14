@@ -200,6 +200,14 @@ WIDTH,HEIGHT=800,600
 HSTEP, VSTEP = 13, 18
 SCROLL_STEP = 100
 
+# CSS font-size -> Skia font-size conversion.
+#
+# The old Tkinter-era code multiplied CSS px by 0.75 (16px -> 12pt).
+# Skia font sizes can use the CSS pixel value directly for this browser,
+# so 1.0 keeps 16px as Skia size 16.
+FONT_SCALE = 1.0
+DEFAULT_FONT_SIZE_PX = 16.0
+
 SCROLLBAR_WIDTH=12
 
 INPUT_WIDTH_PX = 200
@@ -237,6 +245,28 @@ def normalize_font_slant(style):
 def linespace(font):
     metrics = font.getMetrics()
     return metrics.fDescent - metrics.fAscent
+
+
+def css_font_size_to_skia(css_value):
+    """Convert a CSS font-size value such as '16px' to a Skia font size.
+
+    FONT_SCALE is the single global control for page font scaling.
+    This toy browser currently supports pixel font sizes here.
+    """
+    if isinstance(css_value, (int, float)):
+        css_px = float(css_value)
+    else:
+        value = str(css_value or "").strip().casefold()
+
+        if value.endswith("px"):
+            value = value[:-2].strip()
+
+        try:
+            css_px = float(value)
+        except ValueError:
+            css_px = DEFAULT_FONT_SIZE_PX
+
+    return max(1, int(round(css_px * FONT_SCALE)))
 
 
 def get_font(size, weight, style, family=None):
@@ -883,7 +913,7 @@ class TextLayout:
         if style=="normal":
             style="roman"
 
-        size = int(float(self.node.style["font-size"][:-2])*0.75)
+        size = css_font_size_to_skia(self.node.style.get("font-size", "16px"))
         
         if self.is_sup:
             size=max(1,int(size/2))
@@ -963,7 +993,7 @@ class InputLayout:
         if style == "normal":
             style = "roman"
 
-        size = int(float(self.node.style["font-size"][:-2])*0.75)
+        size = css_font_size_to_skia(self.node.style.get("font-size", "16px"))
         family = self.node.style["font-family"]
 
         self.font=get_font(size,weight,style,family=family)
@@ -1136,7 +1166,7 @@ class ButtonLayout:
         if style=="normal":
             style="roman"
 
-        size = int(float(self.node.style["font-size"][:-2])*0.75)
+        size = css_font_size_to_skia(self.node.style.get("font-size", "16px"))
         family = self.node.style["font-family"]
         
         self.font = get_font(size,weight,style,family=family)
@@ -1553,8 +1583,8 @@ class BlockLayout: # layout for block level elements
 
         return self.parse_px(self.node.style.get("height","auto"))
 
-    # convert CSS style into Skia font
-    # font-size: 16px       -> 12pt
+    # Convert CSS style into a Skia font.
+    # CSS font-size conversion is centralized in css_font_size_to_skia().
     # font-style: normal    -> roman
     # font-style: italic    -> italic
     # font-weight: bold     -> bold
@@ -1565,7 +1595,7 @@ class BlockLayout: # layout for block level elements
         if style=="normal":
             style="roman"
 
-        size=int(float(node.style["font-size"][:-2])*0.75)
+        size=css_font_size_to_skia(node.style.get("font-size", "16px"))
 
         if self.is_sup:
             size=max(1,int(size/2))
@@ -1706,7 +1736,7 @@ class BlockLayout: # layout for block level elements
                 if style=="normal":
                     style="roman"
 
-                size=int(float(node.style["font-size"][:-2])*0.75)
+                size=css_font_size_to_skia(node.style.get("font-size", "16px"))
 
                 if self.is_sup:
                     size=max(1,int(size/2))
@@ -1830,7 +1860,7 @@ class BlockLayout: # layout for block level elements
         if style=="normal":
             style="roman"
 
-        size=int(float(node.style["font-size"][:-2])*0.75)
+        size=css_font_size_to_skia(node.style.get("font-size", "16px"))
         family =node.style["font-family"]
 
         font = get_font(size,weight,style,family=family)
