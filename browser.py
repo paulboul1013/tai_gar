@@ -192,8 +192,8 @@ def serialize_cookie(cookie,params):
 
     return "; ".join(parts)
 
-#global FONT cache
-FONTS={}
+# global Typeface cache
+TYPEFACES={}
 
 
 WIDTH,HEIGHT=800,600
@@ -234,25 +234,9 @@ def normalize_font_slant(style):
     return "normal"
 
 
-class SkiaFontAdapter:
-    """Expose the small Tk-font API the existing layout engine expects."""
-    def __init__(self, font):
-        self.font = font
-
-    def measure(self, text):
-        return self.font.measureText(str(text))
-
-    def metrics(self, name):
-        metrics = self.font.getMetrics()
-
-        if name == "ascent":
-            return -metrics.fAscent
-        if name == "descent":
-            return metrics.fDescent
-        if name == "linespace":
-            return metrics.fDescent - metrics.fAscent
-
-        raise KeyError("Unknown font metric: {}".format(name))
+def linespace(font):
+    metrics = font.getMetrics()
+    return metrics.fDescent - metrics.fAscent
 
 
 def get_font(size, weight, style, family=None):
@@ -270,8 +254,10 @@ def get_font(size, weight, style, family=None):
     style = normalize_font_slant(style)
     size = max(1, int(size))
 
-    key = (size, weight, style, family)
-    if key not in FONTS:
+    # Typeface owns the reusable font-family/style data. Size belongs to Font,
+    # so the cache intentionally does not include size.
+    key = (family, weight, style)
+    if key not in TYPEFACES:
         skia_weight = (
             skia.FontStyle.kBold_Weight
             if weight == "bold"
@@ -293,11 +279,9 @@ def get_font(size, weight, style, family=None):
         except Exception:
             typeface = skia.Typeface("Arial", style_info)
 
-        FONTS[key] = SkiaFontAdapter(
-            skia.Font(typeface, size)
-        )
+        TYPEFACES[key] = typeface
 
-    return FONTS[key]
+    return skia.Font(TYPEFACES[key], size)
 
 
 class SkiaImageAsset:
@@ -354,7 +338,7 @@ def get_emoji(char):
     return None
 
 
-NAMED_SKIA_COLORS = {
+NAMED_COLORS = {
     "black": (0, 0, 0, 255),
     "white": (255, 255, 255, 255),
     "red": (255, 0, 0, 255),
@@ -366,15 +350,18 @@ NAMED_SKIA_COLORS = {
     "lightgray": (211, 211, 211, 255),
     "lightgrey": (211, 211, 211, 255),
     "lightblue": (173, 216, 230, 255),
+    "lightgreen": (144, 238, 144, 255),
+    "orange": (255, 165, 0, 255),
+    "orangered": (255, 69, 0, 255),
     "transparent": (0, 0, 0, 0),
 }
 
 
-def parse_skia_color(color):
+def parse_color(color):
     value = str(color or "black").strip().casefold()
 
-    if value in NAMED_SKIA_COLORS:
-        r, g, b, a = NAMED_SKIA_COLORS[value]
+    if value in NAMED_COLORS:
+        r, g, b, a = NAMED_COLORS[value]
         return skia.ColorSetARGB(a, r, g, b)
 
     if value.startswith("#"):
@@ -395,85 +382,6 @@ def parse_skia_color(color):
 
     # Keep unsupported CSS colors visible instead of crashing the renderer.
     return skia.ColorBLACK
-
-
-class SkiaCanvasAdapter:
-    """
-    Compatibility layer for the existing display-list commands.
-
-    The layout/paint code can keep calling create_text/create_rectangle/etc.,
-    but the actual rasterization is now performed by Skia.
-    """
-    def __init__(self, canvas):
-        self.canvas = canvas
-
-    def create_text(self, x, y, text, font, anchor="nw", fill="black"):
-        paint = skia.Paint(
-            AntiAlias=True,
-            Color=parse_skia_color(fill),
-        )
-        metrics = font.font.getMetrics()
-        baseline = float(y - metrics.fAscent)
-        self.canvas.drawString(
-            str(text),
-            float(x),
-            baseline,
-            font.font,
-            paint,
-        )
-
-    def create_rectangle(
-        self,
-        x1,
-        y1,
-        x2,
-        y2,
-        width=1,
-        fill=None,
-        outline=None,
-    ):
-        rect = skia.Rect.MakeLTRB(
-            float(x1), float(y1), float(x2), float(y2)
-        )
-
-        if fill not in [None, ""]:
-            paint = skia.Paint(
-                Color=parse_skia_color(fill),
-                Style=skia.Paint.kFill_Style,
-            )
-            self.canvas.drawRect(rect, paint)
-
-        if outline not in [None, ""] and width > 0:
-            paint = skia.Paint(
-                AntiAlias=True,
-                Color=parse_skia_color(outline),
-                StrokeWidth=float(width),
-                Style=skia.Paint.kStroke_Style,
-            )
-            self.canvas.drawRect(rect, paint)
-
-    def create_line(self, x1, y1, x2, y2, fill="black", width=1):
-        paint = skia.Paint(
-            AntiAlias=True,
-            Color=parse_skia_color(fill),
-            StrokeWidth=float(width),
-            Style=skia.Paint.kStroke_Style,
-        )
-        self.canvas.drawLine(
-            float(x1), float(y1), float(x2), float(y2), paint
-        )
-
-    def create_image(self, x, y, image, anchor="nw"):
-        if image is None:
-            return
-
-        destination = skia.Rect.MakeXYWH(
-            float(x),
-            float(y),
-            float(image.width()),
-            float(image.height()),
-        )
-        self.canvas.drawImageRect(image.image, destination)
 
 
 def make_skia_surface(width, height):
@@ -688,141 +596,140 @@ class BrowserApp:
             sdl2.SDL_Quit()
 
 
-class Rect:
-    def __init__(self,left,top,right,bottom):
-        self.left=left
-        self.top=top
-        self.right=right
-        self.bottom=bottom
-
-    def contains_point(self,x,y):
-        return (
-            x >= self.left and x < self.right and
-            y >= self.top and y < self.bottom
-        )
-
 class DrawText:
-    def __init__(self,x1,y1,text,font,color):
-        self.left=x1
-        self.top=y1
-        self.text=text
-        self.font=font
-        self.color=color
+    def __init__(self, x1, y1, text, font, color):
+        self.text = text
+        self.font = font
+        self.color = color
 
-        self.width=font.measure(text)
-        self.bottom=y1+font.metrics("linespace")
-
-        self.rect=Rect(
-            self.left,
-            self.top,
-            self.left+self.width,
-            self.bottom
+        metrics = font.getMetrics()
+        width = font.measureText(str(text))
+        height = metrics.fDescent - metrics.fAscent
+        self.rect = skia.Rect.MakeLTRB(
+            float(x1),
+            float(y1),
+            float(x1 + width),
+            float(y1 + height),
         )
 
-    def execute(self,scroll,canvas):
-        canvas.create_text(
-            self.left,
-            self.top-scroll,
-            text=self.text,
-            font=self.font,
-            anchor="nw",
-            fill=self.color,
+    def execute(self, scroll, canvas):
+        paint = skia.Paint(
+            AntiAlias=True,
+            Color=parse_color(self.color),
         )
+        baseline = self.rect.top() - scroll - self.font.getMetrics().fAscent
+        canvas.drawString(
+            str(self.text),
+            float(self.rect.left()),
+            float(baseline),
+            self.font,
+            paint,
+        )
+
 
 class DrawRect:
-    def __init__(self,*args):
-        if len(args)==2 and isinstance(args[0],Rect):
-            rect,color=args
-            self.rect=rect
-            self.color=color
-        else:
-            x1,y1,x2,y2,color=args
-            self.rect=Rect(x1,y1,x2,y2)
-            self.color=color
+    def __init__(self, rect, color):
+        self.rect = rect
+        self.color = color
 
-        self.left=self.rect.left
-        self.top=self.rect.top
-        self.right=self.rect.right
-        self.bottom=self.rect.bottom
-        self.color=color
+    def execute(self, scroll, canvas):
+        paint = skia.Paint(Color=parse_color(self.color))
+        canvas.drawRect(self.rect.makeOffset(0, -scroll), paint)
 
-    def execute(self,scroll,canvas):
-        canvas.create_rectangle(
-            self.left,
-            self.top-scroll,
-            self.right,
-            self.bottom-scroll,
-            width=0,
-            fill=self.color,
-        )
+
+class DrawRRect:
+    def __init__(self, rect, radius, color):
+        self.rect = rect
+        self.radius = max(0.0, float(radius))
+        self.color = color
+
+    def execute(self, scroll, canvas):
+        paint = skia.Paint(Color=parse_color(self.color))
+        shifted = self.rect.makeOffset(0, -scroll)
+        rrect = skia.RRect.MakeRectXY(shifted, self.radius, self.radius)
+        canvas.drawRRect(rrect, paint)
+
 
 class DrawLine:
-    def __init__(self,x1,y1,x2,y2,color,thickness):
-        self.rect=Rect(x1,y1,x2,y2)
-        self.color=color
-        self.thickness=thickness
-
-        self.left=min(x1,x2)
-        self.right=max(x1,x2)
-        self.top=min(y1,y2)
-        self.bottom=max(y1,y2)
-
-    def execute(self,scroll,canvas):
-        canvas.create_line(
-            self.rect.left,
-            self.rect.top-scroll,
-            self.rect.right,
-            self.rect.bottom-scroll,
-            fill=self.color,
-            width=self.thickness
+    def __init__(self, x1, y1, x2, y2, color, thickness):
+        # Keep the real endpoints because a line may slope upward. The rect is
+        # only its bounding box for clipping and hit testing.
+        self.x1 = float(x1)
+        self.y1 = float(y1)
+        self.x2 = float(x2)
+        self.y2 = float(y2)
+        self.color = color
+        self.thickness = thickness
+        self.rect = skia.Rect.MakeLTRB(
+            min(self.x1, self.x2),
+            min(self.y1, self.y2),
+            max(self.x1, self.x2),
+            max(self.y1, self.y2),
         )
+
+    def execute(self, scroll, canvas):
+        path = (
+            skia.Path()
+            .moveTo(self.x1, self.y1 - scroll)
+            .lineTo(self.x2, self.y2 - scroll)
+        )
+        paint = skia.Paint(
+            AntiAlias=True,
+            Color=parse_color(self.color),
+            StrokeWidth=float(self.thickness),
+            Style=skia.Paint.kStroke_Style,
+        )
+        canvas.drawPath(path, paint)
+
 
 class DrawOutline:
-    def __init__(self,rect,color,thickness):
-        self.rect=rect
-        self.color=color
-        self.thickness=thickness
+    def __init__(self, rect, color, thickness):
+        self.rect = rect
+        self.color = color
+        self.thickness = thickness
 
-        self.left=rect.left
-        self.top=rect.top
-        self.right=rect.right
-        self.bottom=rect.bottom
-
-    def execute(self,scroll,canvas):
-        canvas.create_rectangle(
-            self.rect.left,
-            self.rect.top-scroll,
-            self.rect.right,
-            self.rect.bottom-scroll,
-            width=self.thickness,
-            outline=self.color
+    def execute(self, scroll, canvas):
+        paint = skia.Paint(
+            AntiAlias=True,
+            Color=parse_color(self.color),
+            StrokeWidth=float(self.thickness),
+            Style=skia.Paint.kStroke_Style,
         )
+        canvas.drawRect(self.rect.makeOffset(0, -scroll), paint)
+
+
+class DrawRRectOutline:
+    def __init__(self, rect, radius, color, thickness):
+        self.rect = rect
+        self.radius = max(0.0, float(radius))
+        self.color = color
+        self.thickness = thickness
+
+    def execute(self, scroll, canvas):
+        paint = skia.Paint(
+            AntiAlias=True,
+            Color=parse_color(self.color),
+            StrokeWidth=float(self.thickness),
+            Style=skia.Paint.kStroke_Style,
+        )
+        shifted = self.rect.makeOffset(0, -scroll)
+        rrect = skia.RRect.MakeRectXY(shifted, self.radius, self.radius)
+        canvas.drawRRect(rrect, paint)
+
 
 class DrawImage:
-    def __init__(self,x,y,img):
-        self.x=x
-        self.y=y
-        self.img=img
-
-        self.left=x
-        self.top=y
-        self.right=x+img.width()
-        self.bottom=y+img.height()
-
-        self.rect=Rect(
-            self.left,
-            self.top,
-            self.right,
-            self.bottom
+    def __init__(self, x, y, img):
+        self.img = img
+        self.rect = skia.Rect.MakeXYWH(
+            float(x),
+            float(y),
+            float(img.width()),
+            float(img.height()),
         )
 
-    def execute(self,scroll,canvas):
-        canvas.create_image(
-            self.x,
-            self.y-scroll,
-            image=self.img,
-            anchor="nw"
-        )
+    def execute(self, scroll, canvas):
+        destination = self.rect.makeOffset(0, -scroll)
+        canvas.drawImageRect(self.img.image, destination)
 
 class DocumentLayout:
     def __init__(self,node,viewport_width=None):#build root of layout tree
@@ -992,14 +899,14 @@ class TextLayout:
 
         self.font=get_font(size,weight,style,family=family)
 
-        self.width=self.font.measure(self.word)
-        self.height=self.font.metrics("linespace")
+        self.width=self.font.measureText(self.word)
+        self.height=linespace(self.font)
 
-        self.ascent=self.font.metrics("ascent")
-        self.descent=self.font.metrics("descent")
+        self.ascent=-self.font.getMetrics().fAscent
+        self.descent=self.font.getMetrics().fDescent
         
         if self.space_after_override is None:
-            self.space_after=self.font.measure(" ")
+            self.space_after=self.font.measureText(" ")
         else:
             self.space_after=self.space_after_override
             
@@ -1074,16 +981,16 @@ class InputLayout:
             else:
                 self.width = INPUT_WIDTH_PX
 
-            self.height = self.font.metrics("linespace")
-            self.ascent=self.font.metrics("ascent")
-            self.descent=self.font.metrics("descent")
+            self.height = linespace(self.font)
+            self.ascent=-self.font.getMetrics().fAscent
+            self.descent=self.font.getMetrics().fDescent
 
 
-        self.space_after=self.font.measure(" ")
+        self.space_after=self.font.measureText(" ")
         self.x=None
 
     def self_rect(self):
-        return Rect(
+        return skia.Rect.MakeLTRB(
             self.x,
             self.y,
             self.x+self.width,
@@ -1095,10 +1002,12 @@ class InputLayout:
 
         bgcolor=self.node.style.get("background-color","transparent")
         if bgcolor!="transparent" and not is_checkbox_input(self.node):
-            cmds.append(DrawRect(
-                self.self_rect(),
-                bgcolor
-            ))
+            radius = self.parse_px(self.node.style.get("border-radius", "0px")) or 0
+            rect = self.self_rect()
+            if radius > 0:
+                cmds.append(DrawRRect(rect, radius, bgcolor))
+            else:
+                cmds.append(DrawRect(rect, bgcolor))
 
         if is_checkbox_input(self.node):
             rect = self.self_rect()
@@ -1116,19 +1025,19 @@ class InputLayout:
 
             if getattr(self.node,"is_checked",False):
                 cmds.append(DrawLine(
-                    rect.left+3,
-                    rect.top+CHECKBOX_SIZE//2,
-                    rect.left+CHECKBOX_SIZE//2,
-                    rect.bottom-3,
+                    rect.left()+3,
+                    rect.top()+CHECKBOX_SIZE//2,
+                    rect.left()+CHECKBOX_SIZE//2,
+                    rect.bottom()-3,
                     "black",
                     2
                 ))
 
                 cmds.append(DrawLine(
-                    rect.left+CHECKBOX_SIZE//2,
-                    rect.bottom-3,
-                    rect.right-3,
-                    rect.top+3,
+                    rect.left()+CHECKBOX_SIZE//2,
+                    rect.bottom()-3,
+                    rect.right()-3,
+                    rect.top()+3,
                     "black",
                     2
                 ))
@@ -1158,7 +1067,7 @@ class InputLayout:
             cursor_index = getattr(self.node,"cursor_index",len(text))
             cursor_index = max(0,min(cursor_index,len(text)))
 
-            cx = self.x + self.font.measure(text[:cursor_index])
+            cx = self.x + self.font.measureText(text[:cursor_index])
 
             cmds.append(DrawLine(
                 cx,
@@ -1255,19 +1164,19 @@ class ButtonLayout:
             content_height = child.height
 
         else:
-            content_height = self.font.metrics("linespace")
+            content_height = linespace(self.font)
             self.children=[]
 
         self.height = max(
             content_height + 2 * BUTTON_PADDING,
-            self.font.metrics("linespace") + 2*BUTTON_PADDING
+            linespace(self.font) + 2*BUTTON_PADDING
         )
 
         # make full of the button to a very high inline object
         self.ascent = self.height
         self.descent = 0
 
-        self.space_after = self.font.measure(" ")
+        self.space_after = self.font.measureText(" ")
         self.x = None
 
     def layout_final(self):
@@ -1288,7 +1197,7 @@ class ButtonLayout:
         child.layout()
         
     def self_rect(self):
-        return Rect(
+        return skia.Rect.MakeLTRB(
             self.x,
             self.y,
             self.x+self.width,
@@ -1302,9 +1211,16 @@ class ButtonLayout:
         if bgcolor=="transparent":
             bgcolor="lightgray"
 
+        radius = self.parse_px(self.node.style.get("border-radius", "0px")) or 0
+        if radius > 0:
+            return [
+                DrawRRect(rect, radius, bgcolor),
+                DrawRRectOutline(rect, radius, "black", 1),
+            ]
+
         return [
-            DrawRect(rect,bgcolor),
-            DrawOutline(rect,"black",1)
+            DrawRect(rect, bgcolor),
+            DrawOutline(rect, "black", 1),
         ]
 
 class EmojiLayout:
@@ -1344,7 +1260,7 @@ class EmojiLayout:
 
 
     def paint(self):
-        return [(self.x,self.y,self.img)]
+        return [DrawImage(self.x, self.y, self.img)]
     
 
 class BlockLayout: # layout for block level elements
@@ -1378,16 +1294,24 @@ class BlockLayout: # layout for block level elements
         bgcolor=self.node.style.get("background-color","transparent")
 
         if bgcolor!="transparent":
-            x2,y2=self.x+self.width,self.y+self.height
-            rect=DrawRect(self.x,self.y,x2,y2,bgcolor)
-            cmds.append(rect)
+            rect = skia.Rect.MakeLTRB(
+                self.x,
+                self.y,
+                self.x + self.width,
+                self.y + self.height,
+            )
+            radius = self.parse_px(self.node.style.get("border-radius", "0px")) or 0
+            if radius > 0:
+                cmds.append(DrawRRect(rect, radius, bgcolor))
+            else:
+                cmds.append(DrawRect(rect, bgcolor))
 
         if isinstance(self.node,Element):
 
             if self.node.tag=="nav" and self.node.attributes.get("class") =="links":
                 x2=self.x+self.width
                 y2=self.y+self.height
-                cmds.append(DrawRect(self.x,self.y,x2,y2,"lightgray"))
+                cmds.append(DrawRect(skia.Rect.MakeLTRB(self.x, self.y, x2, y2), "lightgray"))
 
             elif self.node.tag=="nav" and self.node.attributes.get("id")=="toc":
                 header_h=VSTEP+4
@@ -1395,7 +1319,7 @@ class BlockLayout: # layout for block level elements
                 y2=self.y+header_h
 
                 #gray background behind the heading
-                cmds.append(DrawRect(self.x,self.y,x2,y2,"gray"))
+                cmds.append(DrawRect(skia.Rect.MakeLTRB(self.x, self.y, x2, y2), "gray"))
 
                 #heading text
                 font=get_font(12,"bold","roman")
@@ -1408,11 +1332,13 @@ class BlockLayout: # layout for block level elements
                 bullet_y=self.y+8
                 cmds.append(
                     DrawRect(
-                        bullet_x,
-                        bullet_y,
-                        bullet_x+bullet_size,
-                        bullet_y+bullet_size,
-                        "black"
+                        skia.Rect.MakeLTRB(
+                            bullet_x,
+                            bullet_y,
+                            bullet_x + bullet_size,
+                            bullet_y + bullet_size,
+                        ),
+                        "black",
                     )
                 )
 
@@ -1731,7 +1657,7 @@ class BlockLayout: # layout for block level elements
         line.children.append(text_layout)
 
         font=self.font_helper(node,family="Courier New")
-        self.cursor_x+=font.measure(text)
+        self.cursor_x+=font.measureText(text)
 
     def pre_word(self,node,text):
         lines=text.split("\n")
@@ -1764,7 +1690,7 @@ class BlockLayout: # layout for block level elements
             return
 
         normal_font=self.font_helper(node)
-        space_w=normal_font.measure(" ")
+        space_w=normal_font.measureText(" ")
 
         pieces=[]
         total_width=0
@@ -1795,7 +1721,7 @@ class BlockLayout: # layout for block level elements
                 is_small_caps=False
                 font=self.font_helper(node)
 
-            w=font.measure(display_char)
+            w=font.measureText(display_char)
             pieces.append((display_char,is_small_caps,w))
             total_width+=w
 
@@ -1834,8 +1760,8 @@ class BlockLayout: # layout for block level elements
         font=self.font_helper(node)
         clean_word=word.replace("\xad","")
 
-        w=font.measure(clean_word)
-        space_w=font.measure(" ")
+        w=font.measureText(clean_word)
+        space_w=font.measureText(" ")
 
         img=None
         if len(word)==1:
@@ -1909,7 +1835,7 @@ class BlockLayout: # layout for block level elements
 
         font = get_font(size,weight,style,family=family)
 
-        self.cursor_x+=w+font.measure(" ")
+        self.cursor_x+=w+font.measureText(" ")
         
 
 def lex(body):
@@ -2609,8 +2535,8 @@ class Chrome:
         font = input_layout.font
 
         for i in range(len(self.address_bar)):
-            left=font.measure(self.address_bar[:i])
-            right=font.measure(self.address_bar[:i+1])
+            left=font.measureText(self.address_bar[:i])
+            right=font.measureText(self.address_bar[:i+1])
             mid=(left+right)/2
 
             if local_x < mid:
@@ -2635,7 +2561,7 @@ class Chrome:
             if not hasattr(cmd,"rect"):
                 continue
 
-            if not cmd.rect.contains_point(x,y):
+            if not cmd.rect.contains(float(x), float(y)):
                 continue
 
             if not hasattr(cmd,"layout_object"):
@@ -3297,28 +3223,54 @@ class Tab:
         paint_tree(self.document,self.display_list)
 
     def scroll_to_fragment(self,fragment):
-        if not fragment:
-            return
-        
-        if not self.document:
+        if not fragment or not self.document or not self.nodes:
             return
 
-        for obj in tree_to_list(self.document,[]):
-            node=getattr(obj,"node",None)
+        target = None
+        for node in tree_to_list(self.nodes, []):
+            if (
+                isinstance(node, Element)
+                and node.attributes.get("id") == fragment
+            ):
+                target = node
+                break
 
-            if not isinstance(node,Element):
-                continue
-
-            if node.attributes.get("id") != fragment:
-                continue
-
-            if obj.y is None:
-                continue
-
-            max_y=max(self.document.height+2*VSTEP-self.tab_height,0)
-            self.scroll=min(obj.y,max_y)
-
+        if target is None:
             return
+
+        candidate_y = []
+
+        for obj in tree_to_list(self.document, []):
+            if getattr(obj, "y", None) is None:
+                continue
+
+            node = getattr(obj, "node", None)
+
+            if node is target:
+                candidate_y.append(obj.y)
+                continue
+
+            nodes = getattr(obj, "nodes", None)
+            if nodes and target in nodes:
+                candidate_y.append(obj.y)
+                continue
+
+            ancestor = node
+            while ancestor is not None:
+                if ancestor is target:
+                    candidate_y.append(obj.y)
+                    break
+                ancestor = getattr(ancestor, "parent", None)
+
+        if not candidate_y:
+            return
+
+        target_y = min(candidate_y)
+        max_y = max(
+            self.document.height + 2 * VSTEP - self.tab_height,
+            0,
+        )
+        self.scroll = max(0, min(target_y, max_y))
 
     def navigate_to_fragment(self,fragment,add_to_history=True):
         url=self.url.with_fragment(fragment)
@@ -3340,34 +3292,14 @@ class Tab:
         self.scroll_to_fragment(fragment)
 
 
-    def draw(self,canvas,offset):
-        # self.canvas.delete("all")
+    def draw(self, canvas, offset):
         for item in self.display_list:
+            if item.rect.top() > self.scroll + self.tab_height:
+                continue
+            if item.rect.bottom() < self.scroll:
+                continue
 
-            # DrawText/DrawRect architecture
-            if hasattr(item,"execute"):
-                if item.top > self.scroll + self.tab_height:
-                    continue
-
-                if item.bottom < self.scroll:
-                    continue
-
-                item.execute(self.scroll-offset,canvas)
-
-
-            elif isinstance(item,tuple) and len(item)==3:
-
-                x,y,img=item
-
-                if y> self.scroll +self.tab_height :continue
-                if y+img.height() < self.scroll: continue
-
-                canvas.create_image(
-                    x,
-                    y-self.scroll+offset,
-                    image=img,
-                    anchor="nw"
-                )
+            item.execute(self.scroll - offset, canvas)
 
   
         #scrollbar section: put the loop outside, only draw once
@@ -3385,14 +3317,16 @@ class Tab:
             bar_h=self.height*ratio_visible
             bar_y=self.height*ratio_scroll
 
-            #draw blue rectangle
-            #pos:(right edge - width bound, top edge,right edge,down edge)
-            canvas.create_rectangle(
-                self.width-SCROLLBAR_WIDTH,
-                offset+bar_y,
+            # Draw the browser-owned scrollbar directly with Skia.
+            scrollbar = skia.Rect.MakeLTRB(
+                self.width - SCROLLBAR_WIDTH,
+                offset + bar_y,
                 self.width,
-                offset+bar_y+bar_h,
-                fill="blue",outline=""
+                offset + bar_y + bar_h,
+            )
+            canvas.drawRect(
+                scrollbar,
+                skia.Paint(Color=parse_color("blue")),
             )
 
             
@@ -3422,7 +3356,7 @@ class Tab:
             if not hasattr(cmd,"rect"):
                 continue
 
-            if not cmd.rect.contains_point(x,y):
+            if not cmd.rect.contains(float(x), float(y)):
                 continue
 
             if not hasattr(cmd,"layout_object"):
@@ -3530,6 +3464,25 @@ class Tab:
             get_url = URL(str(url)+separator+body)
             self.load(get_url)
 
+    def input_cursor_index_from_x(self, x, input_layout, display_text):
+        """Map a click x-coordinate to a text-input caret index."""
+        local_x = x - input_layout.x
+
+        if local_x <= 0:
+            return 0
+
+        font = input_layout.font
+
+        for i in range(len(display_text)):
+            left = font.measureText(display_text[:i])
+            right = font.measureText(display_text[:i + 1])
+            midpoint = (left + right) / 2
+
+            if local_x < midpoint:
+                return i
+
+        return len(display_text)
+
     def click(self,x,y):
         self.blur()
 
@@ -3569,16 +3522,30 @@ class Tab:
         while elt:
             if isinstance(elt,Element) and elt.tag == "input":
 
-                # checkbox input section
                 if is_checkbox_input(elt):
-                    # reverse is_checked status and then re-render
                     elt.is_checked = not elt.is_checked
                     self.render()
                     return
-                
-                elt.attributes["value"] = ""
+
+                # Match the address bar editing model: clicking focuses the
+                # input without clearing it and places the caret at the click.
                 self.focus = elt
                 elt.is_focused = True
+
+                value = elt.attributes.get("value", "")
+                display_text = value
+                if elt.attributes.get("type", "text").casefold() == "password":
+                    display_text = "*" * len(value)
+
+                if isinstance(obj, InputLayout) and obj.node is elt:
+                    elt.cursor_index = self.input_cursor_index_from_x(
+                        x,
+                        obj,
+                        display_text,
+                    )
+                else:
+                    elt.cursor_index = len(value)
+
                 self.render()
                 return
 
@@ -3611,8 +3578,53 @@ class Tab:
             if self.js.dispatch_event("keydown",self.focus):
                 return
 
-            self.focus.attributes["value"] += char
+            value = self.focus.attributes.get("value", "")
+            cursor = getattr(self.focus, "cursor_index", len(value))
+            cursor = max(0, min(cursor, len(value)))
+
+            self.focus.attributes["value"] = (
+                value[:cursor]
+                + char
+                + value[cursor:]
+            )
+            self.focus.cursor_index = cursor + len(char)
             self.render()
+
+    def backspace(self):
+        if not self.focus:
+            return
+
+        value = self.focus.attributes.get("value", "")
+        cursor = getattr(self.focus, "cursor_index", len(value))
+        cursor = max(0, min(cursor, len(value)))
+
+        if cursor == 0:
+            return
+
+        self.focus.attributes["value"] = (
+            value[:cursor - 1]
+            + value[cursor:]
+        )
+        self.focus.cursor_index = cursor - 1
+        self.render()
+
+    def left(self):
+        if not self.focus:
+            return
+
+        value = self.focus.attributes.get("value", "")
+        cursor = getattr(self.focus, "cursor_index", len(value))
+        self.focus.cursor_index = max(0, cursor - 1)
+        self.render()
+
+    def right(self):
+        if not self.focus:
+            return
+
+        value = self.focus.attributes.get("value", "")
+        cursor = getattr(self.focus, "cursor_index", len(value))
+        self.focus.cursor_index = min(len(value), cursor + 1)
+        self.render()
 
     def enter(self):
         if not self.focus:
@@ -3770,16 +3782,15 @@ class BrowserWindow:
 
         canvas = self.root_surface.getCanvas()
         canvas.clear(skia.ColorWHITE)
-        canvas_adapter = SkiaCanvasAdapter(canvas)
 
         if self.active_tab:
             self.active_tab.draw(
-                canvas_adapter,
+                canvas,
                 self.chrome.bottom,
             )
 
         for cmd in self.chrome.paint():
-            cmd.execute(0, canvas_adapter)
+            cmd.execute(0, canvas)
 
         self._present_surface()
 
@@ -3920,15 +3931,24 @@ class BrowserWindow:
         self.draw()
 
     def handle_backspace(self):
-        self.chrome.backspace()
+        if self.chrome.focus == "address bar":
+            self.chrome.backspace()
+        elif self.focus == "content" and self.active_tab:
+            self.active_tab.backspace()
         self.draw()
 
     def handle_left(self):
-        self.chrome.left()
+        if self.chrome.focus == "address bar":
+            self.chrome.left()
+        elif self.focus == "content" and self.active_tab:
+            self.active_tab.left()
         self.draw()
 
     def handle_right(self):
-        self.chrome.right()
+        if self.chrome.focus == "address bar":
+            self.chrome.right()
+        elif self.focus == "content" and self.active_tab:
+            self.active_tab.right()
         self.draw()
 
     def handle_new_window(self):
@@ -5049,6 +5069,7 @@ NON_INHERITED_PROPERTIES = {
     "width" : "auto",
     "height" : "auto",
     "display" : "inline",
+    "border-radius": "0px",
 }
 
 DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()
