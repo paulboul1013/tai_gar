@@ -7,6 +7,7 @@ from urllib.parse import unquote, quote_plus, quote
 from html import unescape,escape
 import webbrowser
 import os
+import math
 import dukpy
 from datetime import datetime, timezone
 from email.utils import format_datetime,parsedate_to_datetime
@@ -216,6 +217,14 @@ BUTTON_PADDING = 4
 
 SECURITY_ICON_SLOT=30
 
+# Chrome vector-icon system. Chrome controls keep their HTML/layout boxes for
+# hit testing, while their visible symbols are rasterized independently by Skia.
+ICON_DEFAULT_SIZE = 14
+ICON_STROKE_WIDTH = 2
+ICON_COLOR_ENABLED = "black"
+ICON_COLOR_DISABLED = "gray"
+ICON_COLOR_ACTIVE = "#d49b00"
+
 USE_RTL=False
 
 VOID_ELEMENTS = {
@@ -424,6 +433,126 @@ def make_skia_surface(width, height):
         at=skia.kUnpremul_AlphaType,
     )
     return skia.Surface.MakeRaster(info)
+
+
+def centered_icon_rect(rect, size=ICON_DEFAULT_SIZE):
+    """Return a square Skia rect centered inside a control's layout rect."""
+    size = float(size)
+    cx = (rect.left() + rect.right()) / 2
+    cy = (rect.top() + rect.bottom()) / 2
+    half = size / 2
+    return skia.Rect.MakeLTRB(
+        cx - half,
+        cy - half,
+        cx + half,
+        cy + half,
+    )
+
+
+def build_star_path(rect):
+    """Build a five-point star normalized to rect."""
+    cx = (rect.left() + rect.right()) / 2
+    cy = (rect.top() + rect.bottom()) / 2
+    width = rect.right() - rect.left()
+    height = rect.bottom() - rect.top()
+    outer = min(width, height) * 0.46
+    inner = outer * 0.45
+
+    path = skia.Path()
+    for i in range(10):
+        angle = -math.pi / 2 + i * math.pi / 5
+        radius = outer if i % 2 == 0 else inner
+        x = cx + math.cos(angle) * radius
+        y = cy + math.sin(angle) * radius
+
+        if i == 0:
+            path.moveTo(x, y)
+        else:
+            path.lineTo(x, y)
+
+    path.close()
+    return path
+
+
+def build_lock_path(rect):
+    """Build a simple outline padlock path normalized to rect."""
+    left = rect.left()
+    top = rect.top()
+    right = rect.right()
+    bottom = rect.bottom()
+    width = right - left
+    height = bottom - top
+    cx = (left + right) / 2
+
+    body_left = left + width * 0.18
+    body_right = right - width * 0.18
+    body_top = top + height * 0.46
+    body_bottom = bottom - height * 0.10
+
+    shackle_left = left + width * 0.30
+    shackle_right = right - width * 0.30
+    shackle_top = top + height * 0.10
+
+    path = skia.Path()
+
+    # Lock body.
+    path.moveTo(body_left, body_top)
+    path.lineTo(body_right, body_top)
+    path.lineTo(body_right, body_bottom)
+    path.lineTo(body_left, body_bottom)
+    path.close()
+
+    # Lock shackle. Keep this as a second sub-path so the same stroke paint
+    # can render both body and shackle.
+    path.moveTo(shackle_left, body_top)
+    path.lineTo(shackle_left, top + height * 0.30)
+    path.lineTo(cx, shackle_top)
+    path.lineTo(shackle_right, top + height * 0.30)
+    path.lineTo(shackle_right, body_top)
+
+    return path
+
+
+def build_icon_path(icon_name, rect):
+    """Map a semantic Chrome icon name to Skia vector geometry."""
+    left = rect.left()
+    top = rect.top()
+    right = rect.right()
+    bottom = rect.bottom()
+    width = right - left
+    height = bottom - top
+    cx = (left + right) / 2
+    cy = (top + bottom) / 2
+
+    if icon_name == "plus":
+        path = skia.Path()
+        path.moveTo(cx, top + height * 0.20)
+        path.lineTo(cx, bottom - height * 0.20)
+        path.moveTo(left + width * 0.20, cy)
+        path.lineTo(right - width * 0.20, cy)
+        return path
+
+    if icon_name == "back":
+        path = skia.Path()
+        path.moveTo(right - width * 0.22, top + height * 0.20)
+        path.lineTo(left + width * 0.28, cy)
+        path.lineTo(right - width * 0.22, bottom - height * 0.20)
+        return path
+
+    if icon_name == "forward":
+        path = skia.Path()
+        path.moveTo(left + width * 0.22, top + height * 0.20)
+        path.lineTo(right - width * 0.28, cy)
+        path.lineTo(left + width * 0.22, bottom - height * 0.20)
+        return path
+
+    if icon_name == "star":
+        return build_star_path(rect)
+
+    if icon_name == "lock":
+        return build_lock_path(rect)
+
+    return None
 
 
 def paint_tree(layout_object,display_list):
@@ -745,6 +874,41 @@ class DrawRRectOutline:
         shifted = self.rect.makeOffset(0, -scroll)
         rrect = skia.RRect.MakeRectXY(shifted, self.radius, self.radius)
         canvas.drawRRect(rrect, paint)
+
+
+class DrawVectorIcon:
+    """A semantic Chrome icon rasterized from a Skia Path."""
+    def __init__(
+        self,
+        rect,
+        icon_name,
+        color=ICON_COLOR_ENABLED,
+        stroke_width=ICON_STROKE_WIDTH,
+        fill=False,
+    ):
+        self.rect = rect
+        self.icon_name = icon_name
+        self.color = color
+        self.stroke_width = float(stroke_width)
+        self.fill = bool(fill)
+
+    def execute(self, scroll, canvas):
+        shifted = self.rect.makeOffset(0, -scroll)
+        path = build_icon_path(self.icon_name, shifted)
+        if path is None:
+            return
+
+        paint = skia.Paint(
+            AntiAlias=True,
+            Color=parse_color(self.color),
+            StrokeWidth=self.stroke_width,
+            Style=(
+                skia.Paint.kFill_Style
+                if self.fill
+                else skia.Paint.kStroke_Style
+            ),
+        )
+        canvas.drawPath(path, paint)
 
 
 class DrawImage:
@@ -2475,33 +2639,6 @@ class JSContext:
         return body
             
     
-class SecurityIconLayout:
-    def __init__(self,x,y,height,secure):
-        self.node=None
-        self.children=[]
-
-        self.x=x
-        self.y=y
-        self.height=height
-        self.secure=secure
-
-        if self.secure:
-            self.img=get_emoji("\N{lock}")
-
-    def paint(self):
-        if not self.secure:
-            return []
-
-        if self.img is None:
-            return []
-
-        LOCK_Y_OFFSET = -5
-        
-        #vertically center the lock in the address bar
-        icon_y =(self.y+max(0,(self.height-self.img.height())/2)+LOCK_Y_OFFSET)
-
-        return [DrawImage(self.x,icon_y,self.img)]
-
 class ChromeLayoutParent:
     def __init__(self,width):
         self.x=0
@@ -2521,7 +2658,9 @@ class Chrome:
         self.document = None
         self.display_list = []
 
-        self.security_icon = None
+        # When HTTPS is active, render() reserves a slot immediately before
+        # the address bar and stores the lock icon geometry here.
+        self.security_icon_rect = None
 
         # init height，new_tab build a Tab will use it
         self.bottom = 80
@@ -2724,16 +2863,6 @@ class Chrome:
                 .format(i,style,label)
             )
 
-        if self.browser.active_tab and self.browser.active_tab.can_go_back():
-            back_color="black"
-        else:
-            back_color = "gray"
-
-        if self.browser.active_tab and self.browser.active_tab.can_go_forward():
-            forward_color="black"
-        else:
-            forward_color="gray"
-
         if self.browser.is_current_page_bookmarked():
             bookmark_bg="yellow"
         else:
@@ -2751,14 +2880,14 @@ class Chrome:
         out += "<div style='background-color:lightgray;width:{}px'>".format(self.browser.width)
 
         # first layer: new tab button + tab links 
-        out += "<button id=new-tab style='width:30px'>+</button> "
+        out += "<button id=new-tab style='width:30px'></button> "
         out += tabs_html
 
         # second layer: back/ forward / bookmark / url address input
         out += "<br>"
-        out += "<button id=back style='width:45px;color:{}'>Back</button> ".format(back_color)
-        out += "<button id=forward style='width:45px;color:{}'>Fwd</button> ".format(forward_color)
-        out += "<button id=bookmark style='width:30px;background-color:{}'>★</button> ".format(bookmark_bg)
+        out += "<button id=back style='width:45px'></button> "
+        out += "<button id=forward style='width:45px'></button> "
+        out += "<button id=bookmark style='width:30px;background-color:{}'></button> ".format(bookmark_bg)
         out += "<input id=address style='width:{}px;background-color:white'>".format(address_width)
 
         out += "</div>"
@@ -2766,6 +2895,92 @@ class Chrome:
         out += "</html>"
 
         return out
+
+    def find_button_layout(self, button_id):
+        if self.document is None:
+            return None
+
+        for obj in tree_to_list(self.document, []):
+            if not isinstance(obj, ButtonLayout):
+                continue
+
+            node = getattr(obj, "node", None)
+            if (
+                isinstance(node, Element)
+                and node.tag == "button"
+                and node.attributes.get("id") == button_id
+            ):
+                return obj
+
+        return None
+
+    def build_chrome_icons(self):
+        """Create one unified Skia vector-icon display list for Chrome UI."""
+        icons = []
+
+        new_tab_layout = self.find_button_layout("new-tab")
+        if new_tab_layout:
+            icons.append(DrawVectorIcon(
+                centered_icon_rect(new_tab_layout.self_rect(), 12),
+                "plus",
+                color=ICON_COLOR_ENABLED,
+            ))
+
+        back_layout = self.find_button_layout("back")
+        if back_layout:
+            back_enabled = (
+                self.browser.active_tab is not None
+                and self.browser.active_tab.can_go_back()
+            )
+            icons.append(DrawVectorIcon(
+                centered_icon_rect(back_layout.self_rect(), 14),
+                "back",
+                color=(
+                    ICON_COLOR_ENABLED
+                    if back_enabled
+                    else ICON_COLOR_DISABLED
+                ),
+            ))
+
+        forward_layout = self.find_button_layout("forward")
+        if forward_layout:
+            forward_enabled = (
+                self.browser.active_tab is not None
+                and self.browser.active_tab.can_go_forward()
+            )
+            icons.append(DrawVectorIcon(
+                centered_icon_rect(forward_layout.self_rect(), 14),
+                "forward",
+                color=(
+                    ICON_COLOR_ENABLED
+                    if forward_enabled
+                    else ICON_COLOR_DISABLED
+                ),
+            ))
+
+        bookmark_layout = self.find_button_layout("bookmark")
+        if bookmark_layout:
+            bookmarked = self.browser.is_current_page_bookmarked()
+            icons.append(DrawVectorIcon(
+                centered_icon_rect(bookmark_layout.self_rect(), 14),
+                "star",
+                color=(
+                    ICON_COLOR_ACTIVE
+                    if bookmarked
+                    else ICON_COLOR_ENABLED
+                ),
+                fill=bookmarked,
+            ))
+
+        if self.security_icon_rect is not None:
+            icons.append(DrawVectorIcon(
+                self.security_icon_rect,
+                "lock",
+                color=ICON_COLOR_ENABLED,
+                stroke_width=1.8,
+            ))
+
+        return icons
 
     def find_address_layout(self,address_node):
         if self.document is None:
@@ -2815,36 +3030,45 @@ class Chrome:
         self.document = BlockLayout([self.nodes],parent,None)
         self.document.layout()
 
-        # security icon
-        self.security_icon = None
+        # Reserve a lock-icon slot before the address field. The lock itself
+        # is rendered later by the same DrawVectorIcon system as every other
+        # Chrome icon.
+        self.security_icon_rect = None
 
-        if (self.browser.active_tab and self.browser.active_tab.secure and address_node):
+        if (
+            self.browser.active_tab
+            and self.browser.active_tab.secure
+            and address_node
+        ):
             address_layout = self.find_address_layout(address_node)
 
             if address_layout:
-                icon_x=address_layout.x
-                icon_y=address_layout.y
+                slot_x = address_layout.x
+                slot_y = address_layout.y
+                slot_height = address_layout.height
 
-                # reserve the icon slot before address input
-                address_layout.x+=SECURITY_ICON_SLOT
+                address_layout.x += SECURITY_ICON_SLOT
 
-                self.security_icon = SecurityIconLayout(
-                    icon_x,
-                    icon_y,
-                    address_layout.height,
-                    True
+                icon_size = 14
+                icon_cx = slot_x + SECURITY_ICON_SLOT / 2
+                icon_cy = slot_y + slot_height / 2
+                half = icon_size / 2
+                self.security_icon_rect = skia.Rect.MakeLTRB(
+                    icon_cx - half,
+                    icon_cy - half,
+                    icon_cx + half,
+                    icon_cy + half,
                 )
 
-
-        # paint chrome DOM
+        # Paint the HTML/layout-defined Chrome controls first. Their empty
+        # button boxes remain responsible for layout and hit testing.
         self.display_list = []
         paint_tree(self.document,self.display_list)
 
-        # paint browser security UI
-        if self.security_icon:
-            for cmd in self.security_icon.paint():
-                cmd.layout_object=self.security_icon
-                self.display_list.append(cmd)
+        # Paint semantic vector icons as a visual overlay. These commands do
+        # not receive layout_object, so hit testing falls through to the
+        # underlying ButtonLayout instead of treating the icon as a widget.
+        self.display_list.extend(self.build_chrome_icons())
 
         self.bottom = self.document.height + 2
         
