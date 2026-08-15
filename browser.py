@@ -417,18 +417,46 @@ def parse_color(color):
                 b = int(raw[4:6], 16)
                 return skia.ColorSetARGB(255, r, g, b)
 
-            elif color.startswith("#") and len(color) == 9:
-                r = int(color[1:3], 16)
-                g = int(color[3:5], 16)
-                b = int(color[5:7], 16)
-                a = int(color[7:9], 16)
-                return skia.Color(r, g, b, a)
+            elif len(raw) == 8:
+                # CSS #RRGGBBAA: alpha is the final byte.
+                r = int(raw[0:2], 16)
+                g = int(raw[2:4], 16)
+                b = int(raw[4:6], 16)
+                a = int(raw[6:8], 16)
+                return skia.ColorSetARGB(a, r, g, b)
 
         except ValueError:
             pass
 
     # Keep unsupported CSS colors visible instead of crashing the renderer.
     return skia.ColorBLACK
+
+
+def parse_blend_mode(blend_mode_str):
+    """Map CSS mix-blend-mode values to the Skia blend mode used by saveLayer."""
+    blend_mode = str(blend_mode_str or "normal").strip().casefold()
+
+    if blend_mode == "multiply":
+        return skia.BlendMode.kMultiply
+    elif blend_mode == "difference":
+        return skia.BlendMode.kDifference
+    else:
+        # CSS normal mixing uses ordinary source-over compositing.
+        return skia.BlendMode.kSrcOver
+
+
+def parse_opacity(value):
+    """Parse CSS opacity and clamp it to the legal [0, 1] range."""
+    raw = str(value if value is not None else "1.0").strip()
+    try:
+        if raw.endswith("%"):
+            opacity = float(raw[:-1]) / 100.0
+        else:
+            opacity = float(raw)
+    except (TypeError, ValueError):
+        opacity = 1.0
+
+    return max(0.0, min(1.0, opacity))
 
 
 def make_skia_surface(width, height):
@@ -563,23 +591,121 @@ def build_icon_path(icon_name, rect):
     return None
 
 
-def paint_tree(layout_object,display_list):
-    should_paint =getattr(layout_object,"should_paint",lambda:True)
+class Opacity:
+    """Display-list effect node that composites all children at one opacity."""
+    def __init__(self, opacity, children):
+        self.opacity = parse_opacity(opacity)
+        self.children = list(children)
+        self.rect = skia.Rect.MakeEmpty()
+        for cmd in self.children:
+            if hasattr(cmd, "rect"):
+                self.rect.join(cmd.rect)
+
+    def execute(self, canvas):
+        if not self.children:
+            return
+
+        # saveLayer/restore behave like parentheses around the child commands:
+        # children raster first, then the whole temporary layer is blended back.
+        paint = skia.Paint(Alphaf=self.opacity)
+        canvas.saveLayer(None, paint)
+        for cmd in self.children:
+            cmd.execute(canvas)
+        canvas.restore()
+
+
+class Blend:
+    """Display-list effect node implementing CSS mix-blend-mode."""
+    def __init__(self, blend_mode, children):
+        self.blend_mode = str(blend_mode or "normal").strip().casefold()
+        self.children = list(children)
+        self.rect = skia.Rect.MakeEmpty()
+        for cmd in self.children:
+            if hasattr(cmd, "rect"):
+                self.rect.join(cmd.rect)
+
+    def execute(self, canvas):
+        if not self.children:
+            return
+
+        paint = skia.Paint(BlendMode=parse_blend_mode(self.blend_mode))
+        canvas.saveLayer(None, paint)
+        for cmd in self.children:
+            cmd.execute(canvas)
+        canvas.restore()
+
+
+def paint_visual_effects(node, cmds, rect=None):
+    """Wrap an element subtree in the visual-effect nodes required by CSS.
+
+    The nesting order is intentional: Opacity is applied to the element's
+    already-rastered contents first; Blend then mixes that result into the
+    backdrop/destination surface.
+    """
+    if not cmds or not isinstance(node, Element):
+        return cmds
+
+    # Synthetic button-content mirrors the button's style for text/layout.
+    # Its visual effects belong to the real <button>, not this helper node.
+    if node.tag == "button-content":
+        return cmds
+
+    opacity = parse_opacity(node.style.get("opacity", "1.0"))
+    blend_mode = str(node.style.get("mix-blend-mode", "normal") or "normal").casefold()
+
+    wrapped = cmds
+
+    # Avoid allocating identity layers; this keeps the normal rendering path
+    # almost as cheap as before this chapter.
+    if opacity < 1.0:
+        wrapped = [Opacity(opacity, wrapped)]
+
+    if blend_mode not in ["", "normal", "src-over", "source-over"]:
+        wrapped = [Blend(blend_mode, wrapped)]
+
+    return wrapped
+
+
+def paint_tree(layout_object, display_list):
+    """Build a tree-shaped display list, applying effects after descendants.
+
+    Visual effects such as opacity must wrap the whole layout subtree, so the
+    traversal gathers parent + child paint commands first and only then wraps
+    them in Opacity/Blend nodes.
+    """
+    should_paint = getattr(layout_object, "should_paint", lambda: True)
+    cmds = []
 
     if should_paint():
-
-        cmds = layout_object.paint()
-
-        for cmd in cmds:
-            # DrawText / DrawRect / DrawLine / DrawOutline
-            # normal object，can add attribute
-            if hasattr(cmd,"execute"):
+        own_cmds = layout_object.paint()
+        for cmd in own_cmds:
+            # Preserve the originating layout object on leaf paint commands for
+            # hit testing even when those leaves are nested under effects.
+            if hasattr(cmd, "execute"):
                 cmd.layout_object = layout_object
-
-            display_list.append(cmd)
+        cmds.extend(own_cmds)
 
     for child in layout_object.children:
-        paint_tree(child,display_list)
+        paint_tree(child, cmds)
+
+    if should_paint():
+        if hasattr(layout_object, "paint_effects"):
+            cmds = layout_object.paint_effects(cmds)
+        else:
+            node = getattr(layout_object, "node", None)
+            cmds = paint_visual_effects(node, cmds, None)
+
+    display_list.extend(cmds)
+
+
+def paint_commands_back_to_front(commands):
+    """Yield leaf draw commands in visual hit-test order through effect nodes."""
+    for cmd in reversed(commands):
+        children = getattr(cmd, "children", None)
+        if children is not None:
+            yield from paint_commands_back_to_front(children)
+        else:
+            yield cmd
 
 def tree_to_list(tree,out):
     out.append(tree)
@@ -1324,6 +1450,8 @@ class ButtonLayout:
         content_node.style=dict(self.node.style)
         content_node.style["background-color"] = "transparent"
         content_node.style["display"] = "block"
+        content_node.style["opacity"] = "1.0"
+        content_node.style["mix-blend-mode"] = "normal"
 
         return content_node
 
@@ -1485,6 +1613,17 @@ class BlockLayout: # layout for block level elements
             return True
 
         return self.node.tag not in ["input","button"]
+
+    def self_rect(self):
+        return skia.Rect.MakeLTRB(
+            self.x,
+            self.y,
+            self.x + self.width,
+            self.y + self.height,
+        )
+
+    def paint_effects(self, cmds):
+        return paint_visual_effects(self.node, cmds, self.self_rect())
 
     def paint(self):
         cmds=[]
@@ -3579,8 +3718,9 @@ class Tab:
         # tab coordinate-> page coordinate
         y += self.scroll
 
-        # from back to front scan，because the last one object is on top
-        for cmd in reversed(self.display_list):
+        # Effect commands make the display list tree-shaped. Walk through
+        # Blend/Opacity children until we reach the original leaf paint command.
+        for cmd in paint_commands_back_to_front(self.display_list):
             if not hasattr(cmd,"rect"):
                 continue
 
@@ -5442,6 +5582,8 @@ NON_INHERITED_PROPERTIES = {
     "height" : "auto",
     "display" : "inline",
     "border-radius": "0px",
+    "opacity": "1.0",
+    "mix-blend-mode": "normal",
 }
 
 DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()
