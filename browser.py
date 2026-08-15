@@ -433,13 +433,17 @@ def parse_color(color):
 
 
 def parse_blend_mode(blend_mode_str):
-    """Map CSS mix-blend-mode values to the Skia blend mode used by saveLayer."""
+    """Map CSS/internal compositing names to the Skia mode used by saveLayer."""
     blend_mode = str(blend_mode_str or "normal").strip().casefold()
 
     if blend_mode == "multiply":
         return skia.BlendMode.kMultiply
     elif blend_mode == "difference":
         return skia.BlendMode.kDifference
+    elif blend_mode == "destination-in":
+        # Internal mask operation used by overflow: clip.
+        # This is not a CSS mix-blend-mode value.
+        return skia.BlendMode.kDstIn
     else:
         # CSS normal mixing uses ordinary source-over compositing.
         return skia.BlendMode.kSrcOver
@@ -457,6 +461,19 @@ def parse_opacity(value):
         opacity = 1.0
 
     return max(0.0, min(1.0, opacity))
+
+
+def parse_css_px(value, default=0.0):
+    """Parse a simple CSS pixel length used by visual effects."""
+    raw = str(value if value is not None else "").strip().casefold()
+
+    if raw.endswith("px"):
+        raw = raw[:-2].strip()
+
+    try:
+        return max(0.0, float(raw))
+    except (TypeError, ValueError):
+        return float(default)
 
 
 def make_skia_surface(width, height):
@@ -615,7 +632,7 @@ class Opacity:
 
 
 class Blend:
-    """Display-list effect node implementing CSS mix-blend-mode."""
+    """Display-list effect node for blend/compositing operations."""
     def __init__(self, blend_mode, children):
         self.blend_mode = str(blend_mode or "normal").strip().casefold()
         self.children = list(children)
@@ -636,11 +653,16 @@ class Blend:
 
 
 def paint_visual_effects(node, cmds, rect=None):
-    """Wrap an element subtree in the visual-effect nodes required by CSS.
+    """Wrap an element subtree in opacity, clipping, and blend effects.
 
-    The nesting order is intentional: Opacity is applied to the element's
-    already-rastered contents first; Blend then mixes that result into the
-    backdrop/destination surface.
+    Execution order is deliberate:
+      1. draw the element subtree;
+      2. if overflow: clip, apply a destination-in rounded-rectangle mask;
+      3. composite the isolated result with CSS opacity;
+      4. apply mix-blend-mode against the backdrop.
+
+    overflow: clip requires an isolated layer even when opacity is 1.0;
+    otherwise destination-in would also mask pixels painted by earlier siblings.
     """
     if not cmds or not isinstance(node, Element):
         return cmds
@@ -651,20 +673,42 @@ def paint_visual_effects(node, cmds, rect=None):
         return cmds
 
     opacity = parse_opacity(node.style.get("opacity", "1.0"))
-    blend_mode = str(node.style.get("mix-blend-mode", "normal") or "normal").casefold()
+    blend_mode = str(
+        node.style.get("mix-blend-mode", "normal") or "normal"
+    ).strip().casefold()
+
+    overflow = str(
+        node.style.get("overflow", "visible") or "visible"
+    ).strip().casefold()
+
+    clip = overflow == "clip" and rect is not None
+
+    # The mask is drawn *after* the element contents. kDstIn keeps the
+    # destination (contents) only where the source mask has alpha.
+    if clip:
+        border_radius = parse_css_px(
+            node.style.get("border-radius", "0px"),
+            default=0.0,
+        )
+        cmds = list(cmds)
+        cmds.append(
+            Blend(
+                "destination-in",
+                [DrawRRect(rect, border_radius, "white")],
+            )
+        )
 
     wrapped = cmds
 
-    # Avoid allocating identity layers; this keeps the normal rendering path
-    # almost as cheap as before this chapter.
-    if opacity < 1.0:
+    # Opacity normally needs a layer only below 1.0. Clipping also needs an
+    # isolated layer so destination-in affects this element subtree only.
+    if opacity < 1.0 or clip:
         wrapped = [Opacity(opacity, wrapped)]
 
     if blend_mode not in ["", "normal", "src-over", "source-over"]:
         wrapped = [Blend(blend_mode, wrapped)]
 
     return wrapped
-
 
 def paint_tree(layout_object, display_list):
     """Build a tree-shaped display list, applying effects after descendants.
@@ -693,7 +737,11 @@ def paint_tree(layout_object, display_list):
             cmds = layout_object.paint_effects(cmds)
         else:
             node = getattr(layout_object, "node", None)
-            cmds = paint_visual_effects(node, cmds, None)
+            rect = None
+            self_rect = getattr(layout_object, "self_rect", None)
+            if callable(self_rect):
+                rect = self_rect()
+            cmds = paint_visual_effects(node, cmds, rect)
 
     display_list.extend(cmds)
 
@@ -1450,6 +1498,7 @@ class ButtonLayout:
         content_node.style=dict(self.node.style)
         content_node.style["background-color"] = "transparent"
         content_node.style["display"] = "block"
+        content_node.style["overflow"] = "visible"
         content_node.style["opacity"] = "1.0"
         content_node.style["mix-blend-mode"] = "normal"
 
@@ -5582,6 +5631,7 @@ NON_INHERITED_PROPERTIES = {
     "height" : "auto",
     "display" : "inline",
     "border-radius": "0px",
+    "overflow": "visible",
     "opacity": "1.0",
     "mix-blend-mode": "normal",
 }
