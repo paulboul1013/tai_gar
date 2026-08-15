@@ -5469,8 +5469,19 @@ class CSSParser:
 
     def body(self):
         pairs={}
+
+        # Inline style strings may begin with spaces/newlines:
+        # style="\n    width: 360px; ..."
+        # Unlike stylesheet parsing, body() can be called directly, so it must
+        # consume leading whitespace itself or the first declaration is skipped.
+        self.whitespace()
+
         while self.i < len(self.s) and self.s[self.i]!="}":
             try:
+                self.whitespace()
+                if self.i >= len(self.s) or self.s[self.i] == "}":
+                    break
+
                 prop, vals, important=self.pair()
 
                 if prop=="font":
