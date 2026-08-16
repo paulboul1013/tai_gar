@@ -444,6 +444,10 @@ def parse_blend_mode(blend_mode_str):
         # Internal mask operation used by overflow: clip.
         # This is not a CSS mix-blend-mode value.
         return skia.BlendMode.kDstIn
+    elif blend_mode in ["source-over", "src-over"]:
+        # Explicit source-over is used internally when clipping needs
+        # isolation even though the visual blend operation is the default.
+        return skia.BlendMode.kSrcOver
     else:
         # CSS normal mixing uses ordinary source-over compositing.
         return skia.BlendMode.kSrcOver
@@ -608,33 +612,27 @@ def build_icon_path(icon_name, rect):
     return None
 
 
-class Opacity:
-    """Display-list effect node that composites all children at one opacity."""
-    def __init__(self, opacity, children):
-        self.opacity = parse_opacity(opacity)
-        self.children = list(children)
-        self.rect = skia.Rect.MakeEmpty()
-        for cmd in self.children:
-            if hasattr(cmd, "rect"):
-                self.rect.join(cmd.rect)
-
-    def execute(self, canvas):
-        if not self.children:
-            return
-
-        # saveLayer/restore behave like parentheses around the child commands:
-        # children raster first, then the whole temporary layer is blended back.
-        paint = skia.Paint(Alphaf=self.opacity)
-        canvas.saveLayer(None, paint)
-        for cmd in self.children:
-            cmd.execute(canvas)
-        canvas.restore()
-
-
 class Blend:
-    """Display-list effect node for blend/compositing operations."""
-    def __init__(self, blend_mode, children):
-        self.blend_mode = str(blend_mode or "normal").strip().casefold()
+    """Display-list effect node for opacity and blend/compositing.
+
+    The important optimization is that opacity and blend mode share one
+    temporary layer. If neither effect needs isolation, child commands are
+    drawn directly into the current canvas without saveLayer().
+    """
+    def __init__(self, opacity, blend_mode, children):
+        self.opacity = parse_opacity(opacity)
+
+        raw_blend_mode = str(blend_mode or "").strip().casefold()
+        # Treat CSS's ordinary compositing values as "no special blend mode".
+        # paint_visual_effects may explicitly pass "source-over" when it needs
+        # an isolated layer for overflow clipping.
+        if raw_blend_mode in ["", "normal", "src-over"]:
+            self.blend_mode = None
+        else:
+            self.blend_mode = raw_blend_mode
+
+        self.should_save = bool(self.blend_mode) or self.opacity < 1.0
+
         self.children = list(children)
         self.rect = skia.Rect.MakeEmpty()
         for cmd in self.children:
@@ -645,24 +643,29 @@ class Blend:
         if not self.children:
             return
 
-        paint = skia.Paint(BlendMode=parse_blend_mode(self.blend_mode))
-        canvas.saveLayer(None, paint)
+        paint = skia.Paint(
+            Alphaf=self.opacity,
+            BlendMode=parse_blend_mode(self.blend_mode),
+        )
+
+        if self.should_save:
+            canvas.saveLayer(None, paint)
+
         for cmd in self.children:
             cmd.execute(canvas)
-        canvas.restore()
+
+        if self.should_save:
+            canvas.restore()
 
 
 def paint_visual_effects(node, cmds, rect=None):
-    """Wrap an element subtree in opacity, clipping, and blend effects.
+    """Apply opacity, clipping, and mix-blend-mode with minimal layers.
 
-    Execution order is deliberate:
-      1. draw the element subtree;
-      2. if overflow: clip, apply a destination-in rounded-rectangle mask;
-      3. composite the isolated result with CSS opacity;
-      4. apply mix-blend-mode against the backdrop.
-
-    overflow: clip requires an isolated layer even when opacity is 1.0;
-    otherwise destination-in would also mask pixels painted by earlier siblings.
+    Optimization rules:
+      1. opacity == 1 and no blend/clipping -> no saveLayer();
+      2. opacity and mix-blend-mode share the same outer Blend layer;
+      3. overflow: clip forces source-over isolation so destination-in only
+         clips this element subtree instead of previously painted siblings.
     """
     if not cmds or not isinstance(node, Element):
         return cmds
@@ -673,9 +676,16 @@ def paint_visual_effects(node, cmds, rect=None):
         return cmds
 
     opacity = parse_opacity(node.style.get("opacity", "1.0"))
-    blend_mode = str(
+
+    raw_blend_mode = str(
         node.style.get("mix-blend-mode", "normal") or "normal"
     ).strip().casefold()
+
+    # A normal CSS blend mode does not need a layer by itself.
+    if raw_blend_mode in ["", "normal", "src-over", "source-over"]:
+        blend_mode = None
+    else:
+        blend_mode = raw_blend_mode
 
     overflow = str(
         node.style.get("overflow", "visible") or "visible"
@@ -683,32 +693,31 @@ def paint_visual_effects(node, cmds, rect=None):
 
     clip = overflow == "clip" and rect is not None
 
-    # The mask is drawn *after* the element contents. kDstIn keeps the
-    # destination (contents) only where the source mask has alpha.
     if clip:
+        # destination-in must operate inside an isolated element layer.
+        # source-over is visually the default blend mode, but passing it
+        # explicitly makes the outer Blend allocate that isolation layer.
+        if not blend_mode:
+            blend_mode = "source-over"
+
         border_radius = parse_css_px(
             node.style.get("border-radius", "0px"),
             default=0.0,
         )
+
         cmds = list(cmds)
         cmds.append(
             Blend(
+                1.0,
                 "destination-in",
                 [DrawRRect(rect, border_radius, "white")],
             )
         )
 
-    wrapped = cmds
+    # One wrapper handles both opacity and blend mode. If neither effect is
+    # active, Blend.execute() simply executes its children without saveLayer().
+    return [Blend(opacity, blend_mode, cmds)]
 
-    # Opacity normally needs a layer only below 1.0. Clipping also needs an
-    # isolated layer so destination-in affects this element subtree only.
-    if opacity < 1.0 or clip:
-        wrapped = [Opacity(opacity, wrapped)]
-
-    if blend_mode not in ["", "normal", "src-over", "source-over"]:
-        wrapped = [Blend(blend_mode, wrapped)]
-
-    return wrapped
 
 def paint_tree(layout_object, display_list):
     """Build a tree-shaped display list, applying effects after descendants.
