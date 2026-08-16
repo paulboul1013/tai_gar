@@ -480,6 +480,43 @@ def parse_css_px(value, default=0.0):
         return float(default)
 
 
+def parse_blur_filter(value):
+    """Parse the subset of CSS filter supported by this browser: blur(<length>).
+
+    CSS blur() uses its length as the Gaussian standard deviation. This toy
+    browser accepts pixel lengths (for example blur(6px)) and unitless zero.
+    Unsupported filter functions safely behave like filter: none.
+    """
+    raw = str(value if value is not None else "none").strip().casefold()
+
+    if raw in ["", "none"]:
+        return 0.0
+
+    if not raw.startswith("blur(") or not raw.endswith(")"):
+        return 0.0
+
+    argument = raw[5:-1].strip()
+
+    # blur() defaults to zero.
+    if not argument:
+        return 0.0
+
+    if argument.endswith("px"):
+        argument = argument[:-2].strip()
+    elif argument not in ["0", "+0", "-0", "0.0", "+0.0", "-0.0"]:
+        # For now, only CSS px lengths are implemented.
+        return 0.0
+
+    try:
+        sigma = float(argument)
+    except (TypeError, ValueError):
+        return 0.0
+
+    # Negative blur values are invalid CSS; treating them as zero keeps the
+    # renderer robust while we do not yet have a full CSS value validator.
+    return max(0.0, sigma)
+
+
 def make_skia_surface(width, height):
     width = max(1, int(width))
     height = max(1, int(height))
@@ -612,6 +649,55 @@ def build_icon_path(icon_name, rect):
     return None
 
 
+class Blur:
+    """Display-list effect node for CSS filter: blur().
+
+    Blur is a pixel-moving effect, so it must rasterize the whole element
+    subtree into an intermediate layer and apply the image filter *before*
+    overflow clipping, opacity, and mix-blend-mode.
+    """
+    def __init__(self, sigma, children):
+        self.sigma = max(0.0, float(sigma))
+        self.children = list(children)
+
+        self.rect = skia.Rect.MakeEmpty()
+        for cmd in self.children:
+            if hasattr(cmd, "rect"):
+                self.rect.join(cmd.rect)
+
+        # A Gaussian is effectively negligible beyond roughly 3 sigma.
+        # Expanding the visual bounds makes parent effect bounds represent the
+        # pixels that blur can move outside the original geometry.
+        if self.sigma > 0.0 and not self.rect.isEmpty():
+            pad = 3.0 * self.sigma
+            self.rect = skia.Rect.MakeLTRB(
+                self.rect.left() - pad,
+                self.rect.top() - pad,
+                self.rect.right() + pad,
+                self.rect.bottom() + pad,
+            )
+
+    def execute(self, canvas):
+        if not self.children:
+            return
+
+        if self.sigma <= 0.0:
+            for cmd in self.children:
+                cmd.execute(canvas)
+            return
+
+        # CSS blur(<length>) defines <length> as Gaussian standard deviation,
+        # which maps directly to Skia's sigmaX/sigmaY. The filter is attached
+        # to the saveLayer paint so it is applied when the layer is restored.
+        image_filter = skia.ImageFilters.Blur(self.sigma, self.sigma)
+        paint = skia.Paint(ImageFilter=image_filter)
+
+        canvas.saveLayer(None, paint)
+        for cmd in self.children:
+            cmd.execute(canvas)
+        canvas.restore()
+
+
 class Blend:
     """Display-list effect node for opacity and blend/compositing.
 
@@ -659,13 +745,17 @@ class Blend:
 
 
 def paint_visual_effects(node, cmds, rect=None):
-    """Apply opacity, clipping, and mix-blend-mode with minimal layers.
+    """Apply filter, clipping, opacity, and blending in CSS rendering order.
 
-    Optimization rules:
-      1. opacity == 1 and no blend/clipping -> no saveLayer();
-      2. opacity and mix-blend-mode share the same outer Blend layer;
-      3. overflow: clip forces source-over isolation so destination-in only
-         clips this element subtree instead of previously painted siblings.
+    Rendering order:
+      1. paint the element subtree;
+      2. filter: blur() the complete subtree;
+      3. apply overflow clipping;
+      4. apply opacity and mix-blend-mode while compositing to the backdrop.
+
+    Blur cannot be merged into the final Blend layer because it moves pixels.
+    It therefore owns an inner saveLayer, while opacity and blend mode continue
+    sharing the optimized outer Blend layer.
     """
     if not cmds or not isinstance(node, Element):
         return cmds
@@ -675,6 +765,7 @@ def paint_visual_effects(node, cmds, rect=None):
     if node.tag == "button-content":
         return cmds
 
+    blur_sigma = parse_blur_filter(node.style.get("filter", "none"))
     opacity = parse_opacity(node.style.get("opacity", "1.0"))
 
     raw_blend_mode = str(
@@ -693,10 +784,16 @@ def paint_visual_effects(node, cmds, rect=None):
 
     clip = overflow == "clip" and rect is not None
 
+    # FILTER STAGE. Blur wraps only the element's painted subtree. Because this
+    # happens before adding the clip mask below, blurred pixels may expand and
+    # are then cut back by overflow: clip, matching browser rendering order.
+    filtered_cmds = list(cmds)
+    if blur_sigma > 0.0:
+        filtered_cmds = [Blur(blur_sigma, filtered_cmds)]
+
+    # CLIP STAGE. destination-in must operate inside an isolated element layer
+    # or it would also erase pixels painted by earlier siblings.
     if clip:
-        # destination-in must operate inside an isolated element layer.
-        # source-over is visually the default blend mode, but passing it
-        # explicitly makes the outer Blend allocate that isolation layer.
         if not blend_mode:
             blend_mode = "source-over"
 
@@ -705,8 +802,7 @@ def paint_visual_effects(node, cmds, rect=None):
             default=0.0,
         )
 
-        cmds = list(cmds)
-        cmds.append(
+        filtered_cmds.append(
             Blend(
                 1.0,
                 "destination-in",
@@ -714,10 +810,10 @@ def paint_visual_effects(node, cmds, rect=None):
             )
         )
 
-    # One wrapper handles both opacity and blend mode. If neither effect is
-    # active, Blend.execute() simply executes its children without saveLayer().
-    return [Blend(opacity, blend_mode, cmds)]
-
+    # COMPOSITING STAGE. Opacity and mix-blend-mode still share one outer
+    # layer. If neither effect nor clipping needs isolation, Blend.execute()
+    # simply forwards the children without creating another surface.
+    return [Blend(opacity, blend_mode, filtered_cmds)]
 
 def paint_tree(layout_object, display_list):
     """Build a tree-shaped display list, applying effects after descendants.
@@ -1510,6 +1606,7 @@ class ButtonLayout:
         content_node.style["overflow"] = "visible"
         content_node.style["opacity"] = "1.0"
         content_node.style["mix-blend-mode"] = "normal"
+        content_node.style["filter"] = "none"
 
         return content_node
 
@@ -5398,6 +5495,37 @@ class CSSParser:
         
         return self.s[start:self.i]
 
+    def value_token(self):
+        """Read one CSS declaration value token.
+
+        Unlike word(), declaration values may contain functional notation such
+        as blur(6px), grayscale(1), rgb(...), or calc(...). Keep a complete
+        parenthesized function together so later property-specific parsers can
+        interpret it.
+        """
+        start = self.i
+        depth = 0
+
+        while self.i < len(self.s):
+            c = self.s[self.i]
+
+            if depth == 0 and (c.isspace() or c in ";}!" ):
+                break
+
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                if depth == 0:
+                    raise Exception("Parsing error")
+                depth -= 1
+
+            self.i += 1
+
+        if self.i <= start or depth != 0:
+            raise Exception("Parsing error")
+
+        return self.s[start:self.i]
+
     def value(self):
         values=[]
         important = False
@@ -5419,7 +5547,7 @@ class CSSParser:
                 important = True
                 self.whitespace()
             else:
-                values.append(self.word())
+                values.append(self.value_token())
                 self.whitespace()
 
         return values,important
@@ -5654,6 +5782,7 @@ NON_INHERITED_PROPERTIES = {
     "overflow": "visible",
     "opacity": "1.0",
     "mix-blend-mode": "normal",
+    "filter": "none",
 }
 
 DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()
