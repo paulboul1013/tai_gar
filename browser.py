@@ -480,6 +480,119 @@ def parse_css_px(value, default=0.0):
         return float(default)
 
 
+def point_in_rounded_rect(x, y, rect, radius_x, radius_y=None):
+    """Return True when a point lies inside a rounded rectangle.
+
+    The rectangular bounds are the fast path. Only points that land inside one
+    of the four corner boxes need the more expensive quarter-ellipse test.
+
+    This browser currently parses the one-value border-radius form, so callers
+    normally pass the same radius on both axes. Keeping radius_x/radius_y
+    separate makes the geometry helper ready for elliptical radii later.
+    """
+    x = float(x)
+    y = float(y)
+
+    if not rect.contains(x, y):
+        return False
+
+    width = max(0.0, float(rect.width()))
+    height = max(0.0, float(rect.height()))
+
+    if width == 0.0 or height == 0.0:
+        return False
+
+    rx = max(0.0, float(radius_x))
+    ry = rx if radius_y is None else max(0.0, float(radius_y))
+
+    # CSS rounded corners cannot consume more than half of either box axis.
+    rx = min(rx, width / 2.0)
+    ry = min(ry, height / 2.0)
+
+    if rx == 0.0 or ry == 0.0:
+        return True
+
+    left = float(rect.left())
+    right = float(rect.right())
+    top = float(rect.top())
+    bottom = float(rect.bottom())
+
+    inner_left = left + rx
+    inner_right = right - rx
+    inner_top = top + ry
+    inner_bottom = bottom - ry
+
+    # Most points are in the horizontal or vertical center bands and therefore
+    # cannot be in a rounded-off corner. This is the fast path used before any
+    # ellipse arithmetic.
+    if inner_left <= x <= inner_right or inner_top <= y <= inner_bottom:
+        return True
+
+    # We are in one of the four corner boxes. Pick that quarter ellipse's
+    # center and test the normalized ellipse equation.
+    center_x = inner_left if x < inner_left else inner_right
+    center_y = inner_top if y < inner_top else inner_bottom
+
+    dx = (x - center_x) / rx
+    dy = (y - center_y) / ry
+
+    return dx * dx + dy * dy <= 1.0
+
+
+def layout_object_rect(layout_object):
+    """Return the layout object's own border box when one is available."""
+    self_rect = getattr(layout_object, "self_rect", None)
+    if callable(self_rect):
+        try:
+            return self_rect()
+        except (TypeError, ValueError):
+            return None
+
+    x = getattr(layout_object, "x", None)
+    y = getattr(layout_object, "y", None)
+    width = getattr(layout_object, "width", None)
+    height = getattr(layout_object, "height", None)
+
+    if None in [x, y, width, height]:
+        return None
+
+    return skia.Rect.MakeLTRB(
+        float(x),
+        float(y),
+        float(x + width),
+        float(y + height),
+    )
+
+
+def hit_test_layout_object(layout_object, x, y):
+    """Apply CSS shape-aware hit testing to one layout object.
+
+    Ordinary rectangular elements take the cheap path. Elements with a
+    border-radius are tested against their real rounded border box so clicks
+    in the visually removed corner do not target the element.
+    """
+    node = getattr(layout_object, "node", None)
+
+    if not isinstance(node, Element):
+        return True
+
+    radius = parse_css_px(
+        node.style.get("border-radius", "0px"),
+        default=0.0,
+    )
+
+    if radius <= 0.0:
+        return True
+
+    rect = layout_object_rect(layout_object)
+    if rect is None:
+        # If a synthetic/partial layout object has no own border box, retain the
+        # old hit-testing behavior instead of accidentally making it unclickable.
+        return True
+
+    return point_in_rounded_rect(x, y, rect, radius, radius)
+
+
 def parse_blur_filter(value):
     """Parse the subset of CSS filter supported by this browser: blur(<length>).
 
@@ -3016,15 +3129,11 @@ class Chrome:
 
     
     def layout_object_at(self,x,y):
-        # no need to adjust y coordinate
-        # tab coordinate -> page coordinate
-        # y += self.scroll
-
-        # reverse scan display list
-        # first get top level draw command
-        for cmd in reversed(self.display_list):
-            # only deal with DrawText / DrawRect / DrawLine / DrawOutline
-            # skip emoji tuple
+        # Chrome coordinates are already in the Chrome/layout coordinate space.
+        # Chrome now shares the same tree-shaped effect display list as page
+        # content, so descend through Blend/Blur nodes before testing leaf paint
+        # commands. Then apply the originating layout object's rounded geometry.
+        for cmd in paint_commands_back_to_front(self.display_list):
             if not hasattr(cmd,"rect"):
                 continue
 
@@ -3032,6 +3141,9 @@ class Chrome:
                 continue
 
             if not hasattr(cmd,"layout_object"):
+                continue
+
+            if not hit_test_layout_object(cmd.layout_object, x, y):
                 continue
 
             print("hit display command:",type(cmd).__name__)
@@ -3870,11 +3982,16 @@ class Tab:
 
 
     def layout_object_at(self,x,y):
-        # tab coordinate-> page coordinate
+        # Convert the viewport click into document coordinates.
         y += self.scroll
 
         # Effect commands make the display list tree-shaped. Walk through
-        # Blend/Opacity children until we reach the original leaf paint command.
+        # Blend/Blur children until we reach the original leaf paint command.
+        #
+        # Hit testing has two stages:
+        #   1. command.rect is the cheap bounding-box fast path;
+        #   2. hit_test_layout_object checks border-radius geometry before the
+        #      layout object is allowed to become the click target.
         for cmd in paint_commands_back_to_front(self.display_list):
             if not hasattr(cmd,"rect"):
                 continue
@@ -3883,6 +4000,9 @@ class Tab:
                 continue
 
             if not hasattr(cmd,"layout_object"):
+                continue
+
+            if not hit_test_layout_object(cmd.layout_object, x, y):
                 continue
 
             print("hit display command:", type(cmd).__name__)
