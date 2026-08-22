@@ -860,6 +860,34 @@ class Blend:
             canvas.restore()
 
 
+class Scroll:
+    """Display-list node for a scrollable element's child content.
+
+    Child commands remain in document/layout coordinates. During rasterization
+    the scroll container clips them to its fixed border box and translates the
+    child subtree upward by scroll_y. Nested Scroll nodes naturally compose.
+    """
+    def __init__(self, rect, scroll_y, children):
+        self.clip_rect = rect
+        self.scroll_y = max(0.0, float(scroll_y))
+        self.children = list(children)
+
+        # The visible bounds of a scrolling subtree are the container bounds,
+        # not the full (possibly very tall) layout-overflow bounds.
+        self.rect = rect
+
+    def execute(self, canvas):
+        if not self.children:
+            return
+
+        canvas.save()
+        canvas.clipRect(self.clip_rect)
+        canvas.translate(0, -self.scroll_y)
+        for cmd in self.children:
+            cmd.execute(canvas)
+        canvas.restore()
+
+
 def paint_visual_effects(node, cmds, rect=None):
     """Apply filter, clipping, opacity, and blending in CSS rendering order.
 
@@ -898,7 +926,7 @@ def paint_visual_effects(node, cmds, rect=None):
         node.style.get("overflow", "visible") or "visible"
     ).strip().casefold()
 
-    clip = overflow == "clip" and rect is not None
+    clip = overflow in ["clip", "scroll"] and rect is not None
 
     # FILTER STAGE. Blur wraps only the element's painted subtree. Because this
     # happens before adding the clip mask below, blurred pixels may expand and
@@ -932,37 +960,38 @@ def paint_visual_effects(node, cmds, rect=None):
     return [Blend(opacity, blend_mode, filtered_cmds)]
 
 def paint_tree(layout_object, display_list):
-    """Build a tree-shaped display list, applying effects after descendants.
+    """Build the tree-shaped display list with descendant effects.
 
-    Visual effects such as opacity must wrap the whole layout subtree, so the
-    traversal gathers parent + child paint commands first and only then wraps
-    them in Opacity/Blend nodes.
+    Own paint commands and descendant commands are kept separate until the
+    layout object's effect stage. A scroll container can therefore keep its
+    own background fixed while translating only its descendant content.
     """
     should_paint = getattr(layout_object, "should_paint", lambda: True)
-    cmds = []
+    own_cmds = []
 
     if should_paint():
         own_cmds = layout_object.paint()
         for cmd in own_cmds:
-            # Preserve the originating layout object on leaf paint commands for
-            # hit testing even when those leaves are nested under effects.
             if hasattr(cmd, "execute"):
                 cmd.layout_object = layout_object
-        cmds.extend(own_cmds)
 
+    child_cmds = []
     for child in layout_object.children:
-        paint_tree(child, cmds)
+        paint_tree(child, child_cmds)
 
     if should_paint():
         if hasattr(layout_object, "paint_effects"):
-            cmds = layout_object.paint_effects(cmds)
+            cmds = layout_object.paint_effects(own_cmds, child_cmds)
         else:
+            cmds = own_cmds + child_cmds
             node = getattr(layout_object, "node", None)
             rect = None
             self_rect = getattr(layout_object, "self_rect", None)
             if callable(self_rect):
                 rect = self_rect()
             cmds = paint_visual_effects(node, cmds, rect)
+    else:
+        cmds = child_cmds
 
     display_list.extend(cmds)
 
@@ -975,6 +1004,51 @@ def paint_commands_back_to_front(commands):
             yield from paint_commands_back_to_front(children)
         else:
             yield cmd
+
+def hit_test_paint_commands(commands, x, y):
+    """Return the topmost leaf command under a point.
+
+    Blend/Blur nodes preserve coordinates. Scroll nodes first reject points
+    outside their clip box, then convert the point into the scrolled child
+    coordinate space. This recursion also handles nested scroll containers.
+    """
+    x = float(x)
+    y = float(y)
+
+    for cmd in reversed(commands):
+        if isinstance(cmd, Scroll):
+            if not cmd.clip_rect.contains(x, y):
+                continue
+
+            hit = hit_test_paint_commands(
+                cmd.children,
+                x,
+                y + cmd.scroll_y,
+            )
+            if hit is not None:
+                return hit
+            continue
+
+        children = getattr(cmd, "children", None)
+        if children is not None:
+            hit = hit_test_paint_commands(children, x, y)
+            if hit is not None:
+                return hit
+            continue
+
+        if not hasattr(cmd, "rect"):
+            continue
+        if not cmd.rect.contains(x, y):
+            continue
+        if not hasattr(cmd, "layout_object"):
+            continue
+        if not hit_test_layout_object(cmd.layout_object, x, y):
+            continue
+
+        return cmd
+
+    return None
+
 
 def tree_to_list(tree,out):
     out.append(tree)
@@ -1197,6 +1271,15 @@ class DrawRect:
     def execute(self, canvas):
         paint = skia.Paint(Color=parse_color(self.color))
         canvas.drawRect(self.rect, paint)
+
+
+class DrawHitTest:
+    """Invisible display-list leaf used only to expose a layout hit region."""
+    def __init__(self, rect):
+        self.rect = rect
+
+    def execute(self, canvas):
+        pass
 
 
 class DrawRRect:
@@ -1873,6 +1956,11 @@ class BlockLayout: # layout for block level elements
         self.width=None
         self.height=None
 
+        # Natural laid-out content height is kept separately from a fixed CSS
+        # height so overflow: scroll can compute its scroll range.
+        self.content_height = 0
+        self.scroll = 0
+
         #self.display_list=[]
 
 
@@ -1893,7 +1981,19 @@ class BlockLayout: # layout for block level elements
             self.y + self.height,
         )
 
-    def paint_effects(self, cmds):
+    def paint_effects(self, own_cmds, child_cmds):
+        # Background/border paint belongs to the fixed scroll-container box.
+        # Only descendants move when the element scrolls.
+        if self.is_scrollable():
+            content_cmds = []
+            if child_cmds:
+                content_cmds.append(
+                    Scroll(self.self_rect(), self.scroll, child_cmds)
+                )
+            cmds = own_cmds + content_cmds
+        else:
+            cmds = own_cmds + child_cmds
+
         return paint_visual_effects(self.node, cmds, self.self_rect())
 
     def paint(self):
@@ -1960,6 +2060,11 @@ class BlockLayout: # layout for block level elements
              #   else:
                     # keep origin emoji/image tuple
           #          cmds.append(item)
+
+        # A transparent scroll container must still be clickable/focusable even
+        # when no painted child covers the exact click location.
+        if self.is_scrollable():
+            cmds.append(DrawHitTest(self.self_rect()))
 
         return cmds
 
@@ -2116,16 +2221,31 @@ class BlockLayout: # layout for block level elements
         for child in self.children:
             child.layout()
 
-        # block:chlidren are BlockLayout
-        # inline:children are LineLayout
-        self.height=sum(child.height for child in self.children)+ toc_header_h
+        # block:children are BlockLayout; inline:children are LineLayout.
+        # Keep the natural content height even when CSS fixes the visible box
+        # height. That difference is the vertical layout overflow.
+        self.content_height = (
+            sum(child.height for child in self.children)
+            + toc_header_h
+        )
+        self.height = self.content_height
 
         # if have toc_header_h,reset y
         self.y=old_y
 
         css_height=self.css_height()
-        if css_height:
+        if css_height is not None:
             self.height=css_height
+
+        if self.is_scrollable():
+            stored_scroll = getattr(self.node, "scroll_y", 0)
+            self.scroll = max(
+                0,
+                min(float(stored_scroll), self.max_scroll()),
+            )
+            self.node.scroll_y = self.scroll
+        else:
+            self.scroll = 0
 
     def flush(self):
         pass
@@ -2160,6 +2280,30 @@ class BlockLayout: # layout for block level elements
             return None
 
         return self.parse_px(self.node.style.get("height","auto"))
+
+    def is_scrollable(self):
+        return (
+            isinstance(self.node, Element)
+            and self.node.style.get("overflow", "visible") == "scroll"
+            and self.css_height() is not None
+        )
+
+    def max_scroll(self):
+        if not self.is_scrollable():
+            return 0
+        return max(0, self.content_height - self.height)
+
+    def scroll_by(self, delta):
+        if not self.is_scrollable():
+            return False
+
+        old_scroll = self.scroll
+        self.scroll = max(
+            0,
+            min(self.scroll + delta, self.max_scroll()),
+        )
+        self.node.scroll_y = self.scroll
+        return self.scroll != old_scroll
 
     # Convert CSS style into a Skia font.
     # CSS font-size conversion is centralized in css_font_size_to_skia().
@@ -3132,29 +3276,15 @@ class Chrome:
 
     
     def layout_object_at(self,x,y):
-        # Chrome coordinates are already in the Chrome/layout coordinate space.
-        # Chrome now shares the same tree-shaped effect display list as page
-        # content, so descend through Blend/Blur nodes before testing leaf paint
-        # commands. Then apply the originating layout object's rounded geometry.
-        for cmd in paint_commands_back_to_front(self.display_list):
-            if not hasattr(cmd,"rect"):
-                continue
+        # Chrome does not normally contain scroll containers, but sharing the
+        # transform-aware walker keeps hit testing consistent with page content.
+        cmd = hit_test_paint_commands(self.display_list, x, y)
+        if cmd is None:
+            return None
 
-            if not cmd.rect.contains(float(x), float(y)):
-                continue
-
-            if not hasattr(cmd,"layout_object"):
-                continue
-
-            if not hit_test_layout_object(cmd.layout_object, x, y):
-                continue
-
-            print("hit display command:",type(cmd).__name__)
-            print("generated by layout object:",type(cmd.layout_object).__name__)
-
-            return cmd.layout_object
-
-        return None
+        print("hit display command:", type(cmd).__name__)
+        print("generated by layout object:", type(cmd.layout_object).__name__)
+        return cmd.layout_object
 
     def ancestor(self,elt,tag):
         while elt:
@@ -3565,6 +3695,10 @@ class Tab:
 
         self.focus=None
 
+        # DOM element that currently owns keyboard overflow scrolling. Keeping
+        # the DOM node (not a layout object) survives relayout/repaint rebuilds.
+        self.scroll_focus = None
+
         self.visited_urls = visited_urls
         self.bookmarks = bookmarks
         self.rules=[]
@@ -3871,9 +4005,12 @@ class Tab:
         style(self.nodes,self.rules)
 
     def blur(self):
+        # Keyboard scrolling focus is independent of text-input focus.
+        self.scroll_focus = None
+
         if not self.focus:
             return
-       
+
         self.focus.is_focused = False # Text or Element disable focused
         self.focus= None
         self.render()
@@ -3994,35 +4131,57 @@ class Tab:
 
 
     def layout_object_at(self,x,y):
-        # Convert the viewport click into document coordinates.
-        y += self.scroll
+        # Viewport -> document coordinates. Nested Scroll nodes then convert the
+        # point into each scrolled child coordinate space as the tree is walked.
+        document_y = y + self.scroll
+        cmd = hit_test_paint_commands(self.display_list, x, document_y)
 
-        # Effect commands make the display list tree-shaped. Walk through
-        # Blend/Blur children until we reach the original leaf paint command.
-        #
-        # Hit testing has two stages:
-        #   1. command.rect is the cheap bounding-box fast path;
-        #   2. hit_test_layout_object checks border-radius geometry before the
-        #      layout object is allowed to become the click target.
-        for cmd in paint_commands_back_to_front(self.display_list):
-            if not hasattr(cmd,"rect"):
-                continue
+        if cmd is None:
+            return None
 
-            if not cmd.rect.contains(float(x), float(y)):
-                continue
+        print("hit display command:", type(cmd).__name__)
+        print("generated by layout object:", type(cmd.layout_object).__name__)
+        return cmd.layout_object
 
-            if not hasattr(cmd,"layout_object"):
-                continue
-
-            if not hit_test_layout_object(cmd.layout_object, x, y):
-                continue
-
-            print("hit display command:", type(cmd).__name__)
-            print("generated by layout object:", type(cmd.layout_object).__name__)
-
-            return cmd.layout_object
-
+    def scrollable_ancestor(self, layout_object):
+        """Return the nearest (innermost) scrollable BlockLayout ancestor."""
+        current = layout_object
+        while current is not None:
+            if isinstance(current, BlockLayout) and current.is_scrollable():
+                return current
+            current = getattr(current, "parent", None)
         return None
+
+    def scrollable_layout_for_node(self, node):
+        if node is None or self.document is None:
+            return None
+
+        for obj in tree_to_list(self.document, []):
+            if (
+                isinstance(obj, BlockLayout)
+                and obj.node is node
+                and obj.is_scrollable()
+            ):
+                return obj
+        return None
+
+    def scroll_focused_element(self, delta):
+        """Scroll the focused overflow container; return (handled, changed)."""
+        if self.scroll_focus is None:
+            return False, False
+
+        layout = self.scrollable_layout_for_node(self.scroll_focus)
+        if layout is None:
+            self.scroll_focus = None
+            return False, False
+
+        changed = layout.scroll_by(delta)
+        if changed:
+            # Geometry is unchanged, but rebuilding the display list captures the
+            # new Scroll node offset and preserves nested-scroll composition.
+            self.relayout()
+
+        return True, changed
 
     def href_at(self,x,y):
         obj = self.layout_object_at(x,y)
@@ -4158,10 +4317,20 @@ class Tab:
             self.render()
             return
 
+        scroll_candidate = self.scrollable_ancestor(obj)
+
         # from real target start dispatch event and bubble up ancestor
         if self.js.dispatch_event("click",target):
             # preventDefault() is called
             return
+
+        # Click focus chooses the nearest scroll container, which naturally makes
+        # nested overflow scrolling focus the innermost container first.
+        self.scroll_focus = (
+            scroll_candidate.node
+            if scroll_candidate is not None
+            else None
+        )
 
         button = self.button_ancestor(target) # find button object
         if button:
@@ -4777,15 +4946,28 @@ class BrowserWindow:
         if not self.active_tab:
             return
 
+        handled, changed = self.active_tab.scroll_focused_element(SCROLL_STEP)
+        if handled:
+            if changed:
+                self.raster_tab()
+            self.draw()
+            return
+
         self.active_tab.scrolldown()
 
-        # Fast path: keep compositing the cached surface while the viewport stays
-        # inside the interest region. Crossing its boundary triggers one reraster.
+        # Page scrolling keeps the 11-3 interest-region fast path.
         self.ensure_interest_region()
         self.draw()
 
     def handle_up(self):
         if not self.active_tab:
+            return
+
+        handled, changed = self.active_tab.scroll_focused_element(-SCROLL_STEP)
+        if handled:
+            if changed:
+                self.raster_tab()
+            self.draw()
             return
 
         self.active_tab.scrollup()
