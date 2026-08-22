@@ -1055,7 +1055,7 @@ def hit_test_paint_commands(commands, x, y):
     return None
 
 
-def _rects_intersect(a, b):
+def rects_intersect(a, b):
     return not (
         a.right() < b.left()
         or a.left() > b.right()
@@ -1063,7 +1063,7 @@ def _rects_intersect(a, b):
         or a.top() > b.bottom()
     )
 
-def _rect_intersection(a, b):
+def rect_intersection(a, b):
     left = max(float(a.left()), float(b.left()))
     top = max(float(a.top()), float(b.top()))
     right = min(float(a.right()), float(b.right()))
@@ -1072,7 +1072,7 @@ def _rect_intersection(a, b):
         return None
     return skia.Rect.MakeLTRB(left, top, right, bottom)
 
-def _translate_rect(rect, dx=0.0, dy=0.0):
+def translate_rect(rect, dx=0.0, dy=0.0):
     return skia.Rect.MakeLTRB(
         float(rect.left()) + dx,
         float(rect.top()) + dy,
@@ -1080,17 +1080,17 @@ def _translate_rect(rect, dx=0.0, dy=0.0):
         float(rect.bottom()) + dy,
     )
 
-def _clamp_point_to_rect(x, y, rect):
+def clamp_point_to_rect(x, y, rect):
     return (
         min(max(float(x), float(rect.left())), float(rect.right())),
         min(max(float(y), float(rect.top())), float(rect.bottom())),
     )
 
-def _point_to_rect_distance_squared(x, y, rect):
-    px, py = _clamp_point_to_rect(x, y, rect)
+def point_to_rect_distance_squared(x, y, rect):
+    px, py = clamp_point_to_rect(x, y, rect)
     return (float(x) - px) ** 2 + (float(y) - py) ** 2
 
-def _interactive_layout_object(layout_object):
+def interactive_layout_object(layout_object):
     """Whether a touch candidate belongs to a directly activatable control."""
     node = getattr(layout_object, "node", None)
     while node is not None:
@@ -1099,7 +1099,7 @@ def _interactive_layout_object(layout_object):
         node = getattr(node, "parent", None)
     return False
 
-def _touch_area_hits_layout_object(layout_object, touch_rect):
+def touch_area_hits_layout_object(layout_object, touch_rect):
     """Respect rounded element geometry when a fuzzy touch area overlaps it."""
     node = getattr(layout_object, "node", None)
     if not isinstance(node, Element):
@@ -1113,7 +1113,7 @@ def _touch_area_hits_layout_object(layout_object, touch_rect):
     if layout_rect is None:
         return True
 
-    overlap = _rect_intersection(layout_rect, touch_rect)
+    overlap = rect_intersection(layout_rect, touch_rect)
     if overlap is None:
         return False
 
@@ -1137,20 +1137,20 @@ def _touch_area_hits_layout_object(layout_object, touch_rect):
         for px, py in samples
     )
 
-def _collect_touch_candidates(commands, touch_rect, center_x, center_y, out):
+def collect_touch_candidates(commands, touch_rect, center_x, center_y, out):
     """Collect leaf commands overlapped by a touch area in visual front-to-back order."""
     for cmd in reversed(commands):
         if isinstance(cmd, Scroll):
-            visible_touch = _rect_intersection(touch_rect, cmd.clip_rect)
+            visible_touch = rect_intersection(touch_rect, cmd.clip_rect)
             if visible_touch is None:
                 continue
 
-            clamped_x, clamped_y = _clamp_point_to_rect(
+            clamped_x, clamped_y = clamp_point_to_rect(
                 center_x, center_y, visible_touch
             )
-            _collect_touch_candidates(
+            collect_touch_candidates(
                 cmd.children,
-                _translate_rect(visible_touch, dy=cmd.scroll_y),
+                translate_rect(visible_touch, dy=cmd.scroll_y),
                 clamped_x,
                 clamped_y + cmd.scroll_y,
                 out,
@@ -1159,25 +1159,25 @@ def _collect_touch_candidates(commands, touch_rect, center_x, center_y, out):
 
         children = getattr(cmd, "children", None)
         if children is not None:
-            _collect_touch_candidates(
+            collect_touch_candidates(
                 children, touch_rect, center_x, center_y, out
             )
             continue
 
         if not hasattr(cmd, "rect") or not hasattr(cmd, "layout_object"):
             continue
-        if not _rects_intersect(cmd.rect, touch_rect):
+        if not rects_intersect(cmd.rect, touch_rect):
             continue
-        if not _touch_area_hits_layout_object(cmd.layout_object, touch_rect):
+        if not touch_area_hits_layout_object(cmd.layout_object, touch_rect):
             continue
 
-        distance = _point_to_rect_distance_squared(center_x, center_y, cmd.rect)
+        distance = point_to_rect_distance_squared(center_x, center_y, cmd.rect)
         area = max(
             0.0,
             float(cmd.rect.width()) * float(cmd.rect.height()),
         )
         out.append((
-            0 if _interactive_layout_object(cmd.layout_object) else 1,
+            0 if interactive_layout_object(cmd.layout_object) else 1,
             distance,
             area,
             len(out),
@@ -1196,14 +1196,14 @@ def touch_hit_test_paint_commands(commands, x, y, radius=TOUCH_RADIUS_PX):
     radius = max(0.0, float(radius))
 
     exact = hit_test_paint_commands(commands, x, y)
-    if exact is not None and _interactive_layout_object(exact.layout_object):
+    if exact is not None and interactive_layout_object(exact.layout_object):
         return exact
 
     touch_rect = skia.Rect.MakeLTRB(
         x - radius, y - radius, x + radius, y + radius
     )
     candidates = []
-    _collect_touch_candidates(commands, touch_rect, x, y, candidates)
+    collect_touch_candidates(commands, touch_rect, x, y, candidates)
 
     interactive = [candidate for candidate in candidates if candidate[0] == 0]
     if interactive:
@@ -1291,12 +1291,12 @@ class BrowserApp:
     def window_for_id(self, window_id):
         return self.windows_by_id.get(int(window_id))
 
-    def _decode_text_input(self, event):
+    def decode_text_input(self, event):
         raw = bytes(event.text.text)
         raw = raw.split(b"\x00", 1)[0]
         return raw.decode("utf8", errors="ignore")
 
-    def _window_for_touch_event(self, event):
+    def window_for_touch_event(self, event):
         """Resolve the SDL window underneath a touch event."""
         window_id = int(getattr(event.tfinger, "windowID", 0) or 0)
         if window_id:
@@ -1308,7 +1308,7 @@ class BrowserApp:
             return self.windows[0]
         return None
 
-    def _touch_pixels(self, browser_window, event):
+    def touch_pixels(self, browser_window, event):
         """Convert SDL's normalized finger coordinates into window pixels."""
         nx = max(0.0, min(1.0, float(event.tfinger.x)))
         ny = max(0.0, min(1.0, float(event.tfinger.y)))
@@ -1316,7 +1316,7 @@ class BrowserApp:
         y = int(round(ny * max(browser_window.height - 1, 0)))
         return x, y
 
-    def _touch_key(self, event):
+    def touch_key(self, event):
         return (
             int(event.tfinger.touchId),
             int(event.tfinger.fingerId),
@@ -1386,12 +1386,12 @@ class BrowserApp:
             getattr(sdl2, "SDL_FINGERMOTION", -1),
             getattr(sdl2, "SDL_FINGERUP", -1),
         ]:
-            browser_window = self._window_for_touch_event(event)
+            browser_window = self.window_for_touch_event(event)
             if browser_window is None:
                 return
 
-            key = self._touch_key(event)
-            x, y = self._touch_pixels(browser_window, event)
+            key = self.touch_key(event)
+            x, y = self.touch_pixels(browser_window, event)
 
             if event_type == getattr(sdl2, "SDL_FINGERDOWN", -1):
                 # If another finger is already down in this window, mark both as
@@ -1479,7 +1479,7 @@ class BrowserApp:
             if browser_window is None:
                 return
 
-            text = self._decode_text_input(event)
+            text = self.decode_text_input(event)
             if text:
                 browser_window.handle_key(text)
 
@@ -4872,7 +4872,7 @@ class BrowserWindow:
         self.raster_tab()
         self.draw()
 
-    def _present_surface(self):
+    def present_surface(self):
         skia_image = self.root_surface.makeImageSnapshot()
         skia_bytes = skia_image.tobytes()
 
@@ -4922,11 +4922,11 @@ class BrowserWindow:
         for cmd in self.chrome.paint():
             cmd.execute(canvas)
 
-    def _tab_view_height(self):
+    def tab_view_height(self):
         """Height of the visible page viewport below browser chrome."""
         return max(1, int(math.ceil(self.height - self.chrome.bottom)))
 
-    def _document_height(self):
+    def document_height(self):
         """Full page height in document coordinates."""
         if not self.active_tab or not self.active_tab.document:
             return 0
@@ -4936,9 +4936,9 @@ class BrowserWindow:
             int(math.ceil(self.active_tab.document.height + 2 * VSTEP)),
         )
 
-    def _interest_surface_height(self):
+    def interest_surface_height(self):
         """Actual bounded raster-cache height for the current page."""
-        document_height = self._document_height()
+        document_height = self.document_height()
         if document_height <= 0:
             return 0
 
@@ -4950,8 +4950,8 @@ class BrowserWindow:
     def interest_end(self):
         """Document-space end coordinate represented by tab_surface."""
         return min(
-            self._document_height(),
-            self.interest_start + self._interest_surface_height(),
+            self.document_height(),
+            self.interest_start + self.interest_surface_height(),
         )
 
     # --- Coordinate-system helpers ---------------------------------------
@@ -4983,7 +4983,7 @@ class BrowserWindow:
             self.surface_to_document_y(surface_y)
         )
 
-    def _tab_surface_root_offset(self):
+    def tab_surface_root_offset(self):
         """Root-canvas y offset used when compositing tab_surface."""
         if not self.active_tab:
             return float(self.chrome.bottom)
@@ -4998,19 +4998,19 @@ class BrowserWindow:
 
     # --- Interest-region management -------------------------------------
 
-    def _viewport_inside_interest_region(self):
+    def viewport_inside_interest_region(self):
         """Return True when the complete visible viewport is cached."""
         if not self.active_tab or not self.active_tab.document:
             return False
 
-        region_height = self._interest_surface_height()
+        region_height = self.interest_surface_height()
         if region_height <= 0:
             return False
 
         viewport_top = float(self.active_tab.scroll)
         viewport_bottom = min(
-            float(self._document_height()),
-            viewport_top + float(self._tab_view_height()),
+            float(self.document_height()),
+            viewport_top + float(self.tab_view_height()),
         )
 
         region_top = float(self.interest_start)
@@ -5021,14 +5021,14 @@ class BrowserWindow:
             and viewport_bottom <= region_bottom
         )
 
-    def _choose_interest_start(self):
+    def choose_interest_start(self):
         """Center the viewport inside a new bounded document-space cache."""
         if not self.active_tab or not self.active_tab.document:
             return 0
 
-        document_height = self._document_height()
-        viewport_height = self._tab_view_height()
-        region_height = self._interest_surface_height()
+        document_height = self.document_height()
+        viewport_height = self.tab_view_height()
+        region_height = self.interest_surface_height()
 
         if region_height >= document_height:
             return 0
@@ -5042,9 +5042,9 @@ class BrowserWindow:
         max_start = max(0, document_height - region_height)
         return int(max(0, min(desired_start, max_start)))
 
-    def _reposition_interest_region(self):
+    def reposition_interest_region(self):
         """Move the raster-cache window without changing page layout."""
-        self.interest_start = self._choose_interest_start()
+        self.interest_start = self.choose_interest_start()
 
     def ensure_interest_region(self):
         """Reraster only when scrolling leaves the cached document region.
@@ -5056,8 +5056,8 @@ class BrowserWindow:
             self.interest_start = 0
             return False
 
-        if self.tab_surface is None or not self._viewport_inside_interest_region():
-            self._reposition_interest_region()
+        if self.tab_surface is None or not self.viewport_inside_interest_region():
+            self.reposition_interest_region()
             self.raster_tab()
             return True
 
@@ -5075,7 +5075,7 @@ class BrowserWindow:
             self.interest_start = 0
             return
 
-        tab_view_height = self._tab_view_height()
+        tab_view_height = self.tab_view_height()
         if (
             self.active_tab.width != self.width
             or self.active_tab.tab_height != tab_view_height
@@ -5083,14 +5083,14 @@ class BrowserWindow:
             self.active_tab.resize(self.width, tab_view_height)
 
         # Layout may have changed during resize, so recompute the bounded cache.
-        region_height = self._interest_surface_height()
+        region_height = self.interest_surface_height()
 
         # Keep the viewport fully covered. Page edits/navigations can change
         # document height or scroll position even when this is not a scroll event.
-        if not self._viewport_inside_interest_region():
-            self._reposition_interest_region()
+        if not self.viewport_inside_interest_region():
+            self.reposition_interest_region()
 
-        region_height = self._interest_surface_height()
+        region_height = self.interest_surface_height()
         region_end = self.interest_start + region_height
 
         if (
@@ -5127,7 +5127,7 @@ class BrowserWindow:
         self.active_tab.raster(canvas, document_interest_rect)
         canvas.restore()
 
-    def _draw_scrollbar(self, canvas):
+    def draw_scrollbar(self, canvas):
         """Draw the viewport scrollbar during compositing, not page raster."""
         if not self.active_tab or not self.active_tab.document:
             return
@@ -5179,7 +5179,7 @@ class BrowserWindow:
             # tab_surface y=0 is no longer document y=0. It represents
             # document y=interest_start, so composite with the third coordinate
             # conversion: surface -> viewport/root.
-            tab_offset = self._tab_surface_root_offset()
+            tab_offset = self.tab_surface_root_offset()
 
             canvas.save()
             canvas.clipRect(tab_rect)
@@ -5188,7 +5188,7 @@ class BrowserWindow:
             canvas.restore()
 
             # The scrollbar is viewport-relative, so it is cheap to redraw here.
-            self._draw_scrollbar(canvas)
+            self.draw_scrollbar(canvas)
 
         # Chrome surface is composited last so page pixels never cover it.
         if self.chrome_surface is not None:
@@ -5203,7 +5203,7 @@ class BrowserWindow:
             self.chrome_surface.draw(canvas, 0, 0)
             canvas.restore()
 
-        self._present_surface()
+        self.present_surface()
 
     def update_title(self):
         if self.active_tab:
@@ -5283,7 +5283,7 @@ class BrowserWindow:
         self.ensure_interest_region()
         self.draw()
 
-    def _handle_primary_activation(self, x, y, touch_radius=None):
+    def handle_primary_activation(self, x, y, touch_radius=None):
         """Shared mouse/touch activation path.
 
         Mouse uses exact point hit testing. Touch passes a contact radius, but both
@@ -5333,12 +5333,12 @@ class BrowserWindow:
         self.draw()
 
     def handle_click(self, x, y):
-        self._handle_primary_activation(x, y, touch_radius=None)
+        self.handle_primary_activation(x, y, touch_radius=None)
 
     def handle_touch(self, x, y, radius=TOUCH_RADIUS_PX):
         """Handle a one-finger tap using area-based hit testing."""
         print("[touch] tap at ({}, {}) radius={}".format(x, y, radius))
-        self._handle_primary_activation(x, y, touch_radius=radius)
+        self.handle_primary_activation(x, y, touch_radius=radius)
 
     def handle_middle_click(self, x, y):
         if not self.active_tab:
