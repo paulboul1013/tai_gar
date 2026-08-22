@@ -204,6 +204,11 @@ SCROLL_STEP = 100
 # Interest region: keep only a bounded raster cache around the viewport.
 INTEREST_REGION_MULTIPLIER = 4
 
+# Touch input uses a small contact area instead of an exact mouse point.
+# Shift + left click uses the same path on desktop machines without a touch screen.
+TOUCH_RADIUS_PX = 20
+TOUCH_MOVE_TOLERANCE_PX = 12
+
 # CSS font-size -> Skia font-size conversion.
 #
 # The old Tkinter-era code multiplied CSS px by 0.75 (16px -> 12pt).
@@ -1050,6 +1055,167 @@ def hit_test_paint_commands(commands, x, y):
     return None
 
 
+def _rects_intersect(a, b):
+    return not (
+        a.right() < b.left()
+        or a.left() > b.right()
+        or a.bottom() < b.top()
+        or a.top() > b.bottom()
+    )
+
+def _rect_intersection(a, b):
+    left = max(float(a.left()), float(b.left()))
+    top = max(float(a.top()), float(b.top()))
+    right = min(float(a.right()), float(b.right()))
+    bottom = min(float(a.bottom()), float(b.bottom()))
+    if right < left or bottom < top:
+        return None
+    return skia.Rect.MakeLTRB(left, top, right, bottom)
+
+def _translate_rect(rect, dx=0.0, dy=0.0):
+    return skia.Rect.MakeLTRB(
+        float(rect.left()) + dx,
+        float(rect.top()) + dy,
+        float(rect.right()) + dx,
+        float(rect.bottom()) + dy,
+    )
+
+def _clamp_point_to_rect(x, y, rect):
+    return (
+        min(max(float(x), float(rect.left())), float(rect.right())),
+        min(max(float(y), float(rect.top())), float(rect.bottom())),
+    )
+
+def _point_to_rect_distance_squared(x, y, rect):
+    px, py = _clamp_point_to_rect(x, y, rect)
+    return (float(x) - px) ** 2 + (float(y) - py) ** 2
+
+def _interactive_layout_object(layout_object):
+    """Whether a touch candidate belongs to a directly activatable control."""
+    node = getattr(layout_object, "node", None)
+    while node is not None:
+        if isinstance(node, Element) and node.tag in ["a", "button", "input"]:
+            return True
+        node = getattr(node, "parent", None)
+    return False
+
+def _touch_area_hits_layout_object(layout_object, touch_rect):
+    """Respect rounded element geometry when a fuzzy touch area overlaps it."""
+    node = getattr(layout_object, "node", None)
+    if not isinstance(node, Element):
+        return True
+
+    radius = parse_css_px(node.style.get("border-radius", "0px"), default=0.0)
+    if radius <= 0.0:
+        return True
+
+    layout_rect = layout_object_rect(layout_object)
+    if layout_rect is None:
+        return True
+
+    overlap = _rect_intersection(layout_rect, touch_rect)
+    if overlap is None:
+        return False
+
+    # A few representative points are enough for this axis-aligned toy browser:
+    # if the overlap only touches a rounded-off corner, all samples remain out.
+    cx = (overlap.left() + overlap.right()) / 2.0
+    cy = (overlap.top() + overlap.bottom()) / 2.0
+    samples = [
+        (cx, cy),
+        (overlap.left(), overlap.top()),
+        (overlap.right(), overlap.top()),
+        (overlap.left(), overlap.bottom()),
+        (overlap.right(), overlap.bottom()),
+        (cx, overlap.top()),
+        (cx, overlap.bottom()),
+        (overlap.left(), cy),
+        (overlap.right(), cy),
+    ]
+    return any(
+        point_in_rounded_rect(px, py, layout_rect, radius, radius)
+        for px, py in samples
+    )
+
+def _collect_touch_candidates(commands, touch_rect, center_x, center_y, out):
+    """Collect leaf commands overlapped by a touch area in visual front-to-back order."""
+    for cmd in reversed(commands):
+        if isinstance(cmd, Scroll):
+            visible_touch = _rect_intersection(touch_rect, cmd.clip_rect)
+            if visible_touch is None:
+                continue
+
+            clamped_x, clamped_y = _clamp_point_to_rect(
+                center_x, center_y, visible_touch
+            )
+            _collect_touch_candidates(
+                cmd.children,
+                _translate_rect(visible_touch, dy=cmd.scroll_y),
+                clamped_x,
+                clamped_y + cmd.scroll_y,
+                out,
+            )
+            continue
+
+        children = getattr(cmd, "children", None)
+        if children is not None:
+            _collect_touch_candidates(
+                children, touch_rect, center_x, center_y, out
+            )
+            continue
+
+        if not hasattr(cmd, "rect") or not hasattr(cmd, "layout_object"):
+            continue
+        if not _rects_intersect(cmd.rect, touch_rect):
+            continue
+        if not _touch_area_hits_layout_object(cmd.layout_object, touch_rect):
+            continue
+
+        distance = _point_to_rect_distance_squared(center_x, center_y, cmd.rect)
+        area = max(
+            0.0,
+            float(cmd.rect.width()) * float(cmd.rect.height()),
+        )
+        out.append((
+            0 if _interactive_layout_object(cmd.layout_object) else 1,
+            distance,
+            area,
+            len(out),
+            cmd,
+        ))
+
+def touch_hit_test_paint_commands(commands, x, y, radius=TOUCH_RADIUS_PX):
+    """Area-based hit testing used for finger taps.
+
+    Interactive controls are preferred inside the contact patch, then the nearest
+    and smallest visual candidate. If no interactive element overlaps the finger,
+    preserve an exact point hit (important for focusing overflow scroll containers).
+    """
+    x = float(x)
+    y = float(y)
+    radius = max(0.0, float(radius))
+
+    exact = hit_test_paint_commands(commands, x, y)
+    if exact is not None and _interactive_layout_object(exact.layout_object):
+        return exact
+
+    touch_rect = skia.Rect.MakeLTRB(
+        x - radius, y - radius, x + radius, y + radius
+    )
+    candidates = []
+    _collect_touch_candidates(commands, touch_rect, x, y, candidates)
+
+    interactive = [candidate for candidate in candidates if candidate[0] == 0]
+    if interactive:
+        return min(interactive)[-1]
+
+    if exact is not None:
+        return exact
+
+    if not candidates:
+        return None
+    return min(candidates)[-1]
+
 def tree_to_list(tree,out):
     out.append(tree)
     for child in tree.children:
@@ -1097,6 +1263,11 @@ class BrowserApp:
         self.bookmarks = set()
         self.running = False
 
+        # Active physical fingers. We wait for FINGERUP before turning a short,
+        # single-finger contact into a browser tap/click. This prevents drags and
+        # multi-touch gestures from accidentally activating links.
+        self.active_touches = {}
+
         sdl2.SDL_StartTextInput()
 
     def new_window(self, url=None):
@@ -1124,6 +1295,32 @@ class BrowserApp:
         raw = bytes(event.text.text)
         raw = raw.split(b"\x00", 1)[0]
         return raw.decode("utf8", errors="ignore")
+
+    def _window_for_touch_event(self, event):
+        """Resolve the SDL window underneath a touch event."""
+        window_id = int(getattr(event.tfinger, "windowID", 0) or 0)
+        if window_id:
+            return self.window_for_id(window_id)
+
+        # Some backends may not provide windowID. Falling back is unambiguous
+        # when this app currently owns exactly one native window.
+        if len(self.windows) == 1:
+            return self.windows[0]
+        return None
+
+    def _touch_pixels(self, browser_window, event):
+        """Convert SDL's normalized finger coordinates into window pixels."""
+        nx = max(0.0, min(1.0, float(event.tfinger.x)))
+        ny = max(0.0, min(1.0, float(event.tfinger.y)))
+        x = int(round(nx * max(browser_window.width - 1, 0)))
+        y = int(round(ny * max(browser_window.height - 1, 0)))
+        return x, y
+
+    def _touch_key(self, event):
+        return (
+            int(event.tfinger.touchId),
+            int(event.tfinger.fingerId),
+        )
 
     def dispatch_event(self, event):
         event_type = event.type
@@ -1154,13 +1351,87 @@ class BrowserApp:
             if browser_window is None:
                 return
 
+            # SDL can synthesize a mouse click from a real finger tap. Since the
+            # browser handles SDL_FINGERUP directly below, ignore that synthetic
+            # mouse event or the DOM click would fire twice.
+            touch_mouse_id = getattr(sdl2, "SDL_TOUCH_MOUSEID", None)
+            if (
+                touch_mouse_id is not None
+                and int(event.button.which) == int(touch_mouse_id)
+            ):
+                return
+
             x = int(event.button.x)
             y = int(event.button.y)
 
             if event.button.button == sdl2.SDL_BUTTON_LEFT:
-                browser_window.handle_click(x, y)
+                # Desktop test path: Shift + left click emulates a finger tap and
+                # therefore uses area hit testing instead of exact point testing.
+                shift_mask = getattr(
+                    sdl2,
+                    "KMOD_SHIFT",
+                    getattr(sdl2, "KMOD_LSHIFT", 0)
+                    | getattr(sdl2, "KMOD_RSHIFT", 0),
+                )
+                if int(sdl2.SDL_GetModState()) & int(shift_mask):
+                    browser_window.handle_touch(x, y, TOUCH_RADIUS_PX)
+                else:
+                    browser_window.handle_click(x, y)
             elif event.button.button == sdl2.SDL_BUTTON_MIDDLE:
                 browser_window.handle_middle_click(x, y)
+            return
+
+        if event_type in [
+            getattr(sdl2, "SDL_FINGERDOWN", -1),
+            getattr(sdl2, "SDL_FINGERMOTION", -1),
+            getattr(sdl2, "SDL_FINGERUP", -1),
+        ]:
+            browser_window = self._window_for_touch_event(event)
+            if browser_window is None:
+                return
+
+            key = self._touch_key(event)
+            x, y = self._touch_pixels(browser_window, event)
+
+            if event_type == getattr(sdl2, "SDL_FINGERDOWN", -1):
+                # If another finger is already down in this window, mark both as
+                # multi-touch so neither finger release becomes a click.
+                multi = False
+                for state in self.active_touches.values():
+                    if state["window_id"] == browser_window.window_id:
+                        state["multi"] = True
+                        multi = True
+
+                self.active_touches[key] = {
+                    "window_id": browser_window.window_id,
+                    "start_x": x,
+                    "start_y": y,
+                    "moved": False,
+                    "multi": multi,
+                }
+                return
+
+            state = self.active_touches.get(key)
+            if state is None:
+                return
+
+            distance = math.hypot(
+                x - state["start_x"],
+                y - state["start_y"],
+            )
+            if distance > TOUCH_MOVE_TOLERANCE_PX:
+                state["moved"] = True
+
+            if event_type == getattr(sdl2, "SDL_FINGERMOTION", -1):
+                return
+
+            # FINGERUP: a short single-finger contact is a tap. Drags and any
+            # multi-touch sequence are intentionally not converted into click.
+            self.active_touches.pop(key, None)
+            if state["moved"] or state["multi"]:
+                return
+
+            browser_window.handle_touch(x, y, TOUCH_RADIUS_PX)
             return
 
         if event_type == sdl2.SDL_MOUSEWHEEL:
@@ -3286,6 +3557,14 @@ class Chrome:
         print("generated by layout object:", type(cmd.layout_object).__name__)
         return cmd.layout_object
 
+    def touch_layout_object_at(self, x, y, radius=TOUCH_RADIUS_PX):
+        cmd = touch_hit_test_paint_commands(
+            self.display_list, x, y, radius
+        )
+        if cmd is None:
+            return None
+        return cmd.layout_object
+
     def ancestor(self,elt,tag):
         while elt:
             if isinstance(elt,Element) and elt.tag==tag:
@@ -3295,11 +3574,14 @@ class Chrome:
         return None
 
 
-    def click(self,x,y):
+    def click(self,x,y,touch_radius=None):
 
         was_address_bar_focused = self.focus=="address bar"
 
-        obj = self.layout_object_at(x,y)
+        if touch_radius is None:
+            obj = self.layout_object_at(x,y)
+        else:
+            obj = self.touch_layout_object_at(x,y,touch_radius)
 
         #click any chrome section，default is clear first
         self.focus=None
@@ -4143,6 +4425,18 @@ class Tab:
         print("generated by layout object:", type(cmd.layout_object).__name__)
         return cmd.layout_object
 
+    def touch_layout_object_at(self, x, y, radius=TOUCH_RADIUS_PX):
+        # The finger area starts in the page viewport coordinate system. Convert
+        # only its center by page scroll; nested Scroll nodes perform the remaining
+        # element-scroll transforms recursively. Radius is unchanged by translation.
+        document_y = y + self.scroll
+        cmd = touch_hit_test_paint_commands(
+            self.display_list, x, document_y, radius
+        )
+        if cmd is None:
+            return None
+        return cmd.layout_object
+
     def scrollable_ancestor(self, layout_object):
         """Return the nearest (innermost) scrollable BlockLayout ancestor."""
         current = layout_object
@@ -4297,10 +4591,13 @@ class Tab:
 
         return len(display_text)
 
-    def click(self,x,y):
+    def click(self,x,y,touch_radius=None):
         self.blur()
 
-        obj = self.layout_object_at(x,y)
+        if touch_radius is None:
+            obj = self.layout_object_at(x,y)
+        else:
+            obj = self.touch_layout_object_at(x,y,touch_radius)
 
         if obj is None:
             self.render()
@@ -4986,7 +5283,12 @@ class BrowserWindow:
         self.ensure_interest_region()
         self.draw()
 
-    def handle_click(self, x, y):
+    def _handle_primary_activation(self, x, y, touch_radius=None):
+        """Shared mouse/touch activation path.
+
+        Mouse uses exact point hit testing. Touch passes a contact radius, but both
+        inputs ultimately reuse the same Chrome/Tab click semantics and DOM events.
+        """
         if y < self.chrome.bottom:
             self.focus = None
 
@@ -4997,16 +5299,12 @@ class BrowserWindow:
             if old_tab:
                 old_tab.blur()
 
-            self.chrome.click(x, y)
+            self.chrome.click(x, y, touch_radius=touch_radius)
 
             new_tab = self.active_tab
             new_url = str(new_tab.url) if new_tab and new_tab.url else None
 
-            # Chrome always changed (focus/caret/button/tab state).
             self.raster_chrome()
-
-            # Only reraster page pixels when Chrome action changed the page,
-            # switched tabs, navigated, or removed an in-page focus caret.
             if tab_was_focused or new_tab is not old_tab or new_url != old_url:
                 self.raster_tab()
         else:
@@ -5019,20 +5317,28 @@ class BrowserWindow:
 
             old_url = str(self.active_tab.url) if self.active_tab.url else None
             tab_y = y - self.chrome.bottom
-            self.active_tab.click(x, tab_y)
+            self.active_tab.click(x, tab_y, touch_radius=touch_radius)
             new_url = str(self.active_tab.url) if self.active_tab.url else None
 
-            # A page click can change form focus, controls, DOM, or navigation.
+            # A page activation can change form focus, controls, DOM, navigation,
+            # or the focused overflow-scroll container.
             self.raster_tab()
 
             if old_url != new_url:
                 self.chrome.discard_address_bar_edit()
 
-            # URL/security/history or address-bar focus affects Chrome pixels.
             if chrome_was_focused or old_url != new_url:
                 self.raster_chrome()
 
         self.draw()
+
+    def handle_click(self, x, y):
+        self._handle_primary_activation(x, y, touch_radius=None)
+
+    def handle_touch(self, x, y, radius=TOUCH_RADIUS_PX):
+        """Handle a one-finger tap using area-based hit testing."""
+        print("[touch] tap at ({}, {}) radius={}".format(x, y, radius))
+        self._handle_primary_activation(x, y, touch_radius=radius)
 
     def handle_middle_click(self, x, y):
         if not self.active_tab:
