@@ -201,6 +201,9 @@ WIDTH,HEIGHT=800,600
 HSTEP, VSTEP = 13, 18
 SCROLL_STEP = 100
 
+# Interest region: keep only a bounded raster cache around the viewport.
+INTEREST_REGION_MULTIPLIER = 4
+
 # CSS font-size -> Skia font-size conversion.
 #
 # The old Tkinter-era code multiplied CSS px by 0.75 (16px -> 12pt).
@@ -3956,13 +3959,22 @@ class Tab:
         self.scroll_to_fragment(fragment)
 
 
-    def raster(self, canvas):
-        """Raster the entire page into tab_surface in page coordinates.
+    def raster(self, canvas, interest_rect=None):
+        """Raster page commands in document coordinates.
 
-        Scroll is deliberately not applied here. BrowserWindow.draw() performs
-        scrolling later by translating the already-rastered tab surface.
+        BrowserWindow owns the document->surface transform. When an interest
+        rectangle is supplied, skip top-level display-list items whose visual
+        bounds do not overlap that cached document region. Skia clipRect remains
+        the final pixel-level guard against drawing outside the surface.
         """
         for item in self.display_list:
+            if interest_rect is not None and hasattr(item, "rect"):
+                if (
+                    item.rect.bottom() <= interest_rect.top()
+                    or item.rect.top() >= interest_rect.bottom()
+                ):
+                    continue
+
             item.execute(canvas)
 
     def scrolldown(self):
@@ -4335,10 +4347,20 @@ class BrowserWindow:
         self.window_id = int(sdl2.SDL_GetWindowID(self.sdl_window))
         self.root_surface = make_skia_surface(self.width, self.height)
 
-        # Browser compositing surfaces. Chrome has a small fixed-height surface;
-        # tab_surface is allocated lazily after layout tells us page height.
+        # Browser compositing surfaces. Chrome has a small fixed-height surface.
+        # tab_surface is now a bounded interest-region cache instead of a
+        # full-document bitmap, so very long pages do not allocate huge surfaces.
         self.chrome_surface = None
         self.tab_surface = None
+
+        # Document coordinate represented by tab_surface y=0.
+        self.interest_start = 0
+
+        # Maximum cached height. The actual surface is smaller for short pages.
+        self.interest_height = max(
+            1,
+            INTEREST_REGION_MULTIPLIER * self.height,
+        )
 
         if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
             self.RED_MASK = 0xff000000
@@ -4434,34 +4456,210 @@ class BrowserWindow:
         for cmd in self.chrome.paint():
             cmd.execute(canvas)
 
-    def raster_tab(self):
-        """Raster the full active page only when page pixels actually change."""
+    def _tab_view_height(self):
+        """Height of the visible page viewport below browser chrome."""
+        return max(1, int(math.ceil(self.height - self.chrome.bottom)))
+
+    def _document_height(self):
+        """Full page height in document coordinates."""
+        if not self.active_tab or not self.active_tab.document:
+            return 0
+
+        return max(
+            1,
+            int(math.ceil(self.active_tab.document.height + 2 * VSTEP)),
+        )
+
+    def _interest_surface_height(self):
+        """Actual bounded raster-cache height for the current page."""
+        document_height = self._document_height()
+        if document_height <= 0:
+            return 0
+
+        return max(
+            1,
+            min(document_height, int(math.ceil(self.interest_height))),
+        )
+
+    def interest_end(self):
+        """Document-space end coordinate represented by tab_surface."""
+        return min(
+            self._document_height(),
+            self.interest_start + self._interest_surface_height(),
+        )
+
+    # --- Coordinate-system helpers ---------------------------------------
+    # Document: positions produced by layout/display-list commands.
+    # Surface:  pixels stored in the bounded interest-region tab_surface.
+    # Viewport: positions visible inside the page area after scrolling.
+
+    def document_to_surface_y(self, document_y):
+        """Document coordinate -> interest-surface coordinate."""
+        return float(document_y) - float(self.interest_start)
+
+    def surface_to_document_y(self, surface_y):
+        """Interest-surface coordinate -> document coordinate."""
+        return float(surface_y) + float(self.interest_start)
+
+    def document_to_viewport_y(self, document_y):
+        """Document coordinate -> page viewport coordinate."""
+        scroll = self.active_tab.scroll if self.active_tab else 0
+        return float(document_y) - float(scroll)
+
+    def viewport_to_document_y(self, viewport_y):
+        """Page viewport coordinate -> document coordinate."""
+        scroll = self.active_tab.scroll if self.active_tab else 0
+        return float(viewport_y) + float(scroll)
+
+    def surface_to_viewport_y(self, surface_y):
+        """Interest-surface coordinate -> page viewport coordinate."""
+        return self.document_to_viewport_y(
+            self.surface_to_document_y(surface_y)
+        )
+
+    def _tab_surface_root_offset(self):
+        """Root-canvas y offset used when compositing tab_surface."""
+        if not self.active_tab:
+            return float(self.chrome.bottom)
+
+        # surface y=0 represents document y=interest_start. Convert that point
+        # into viewport coordinates, then place the viewport below Chrome.
+        return (
+            float(self.chrome.bottom)
+            + float(self.interest_start)
+            - float(self.active_tab.scroll)
+        )
+
+    # --- Interest-region management -------------------------------------
+
+    def _viewport_inside_interest_region(self):
+        """Return True when the complete visible viewport is cached."""
+        if not self.active_tab or not self.active_tab.document:
+            return False
+
+        region_height = self._interest_surface_height()
+        if region_height <= 0:
+            return False
+
+        viewport_top = float(self.active_tab.scroll)
+        viewport_bottom = min(
+            float(self._document_height()),
+            viewport_top + float(self._tab_view_height()),
+        )
+
+        region_top = float(self.interest_start)
+        region_bottom = region_top + float(region_height)
+
+        return (
+            viewport_top >= region_top
+            and viewport_bottom <= region_bottom
+        )
+
+    def _choose_interest_start(self):
+        """Center the viewport inside a new bounded document-space cache."""
+        if not self.active_tab or not self.active_tab.document:
+            return 0
+
+        document_height = self._document_height()
+        viewport_height = self._tab_view_height()
+        region_height = self._interest_surface_height()
+
+        if region_height >= document_height:
+            return 0
+
+        # Put half of the extra cached pixels before the viewport and half
+        # after it. This avoids rerastering again immediately after crossing
+        # an old interest-region boundary.
+        spare_height = max(0, region_height - viewport_height)
+        desired_start = float(self.active_tab.scroll) - spare_height / 2.0
+
+        max_start = max(0, document_height - region_height)
+        return int(max(0, min(desired_start, max_start)))
+
+    def _reposition_interest_region(self):
+        """Move the raster-cache window without changing page layout."""
+        self.interest_start = self._choose_interest_start()
+
+    def ensure_interest_region(self):
+        """Reraster only when scrolling leaves the cached document region.
+
+        Returns True when a new raster was required, otherwise False.
+        """
         if not self.active_tab or not self.active_tab.document:
             self.tab_surface = None
+            self.interest_start = 0
+            return False
+
+        if self.tab_surface is None or not self._viewport_inside_interest_region():
+            self._reposition_interest_region()
+            self.raster_tab()
+            return True
+
+        return False
+
+    def raster_tab(self):
+        """Raster only the active page's bounded interest region.
+
+        Display-list commands remain in document coordinates. We clip the Skia
+        surface in surface coordinates first, then translate the document so
+        interest_start lands at surface y=0.
+        """
+        if not self.active_tab or not self.active_tab.document:
+            self.tab_surface = None
+            self.interest_start = 0
             return
 
-        tab_view_height = max(1, self.height - self.chrome.bottom)
+        tab_view_height = self._tab_view_height()
         if (
             self.active_tab.width != self.width
             or self.active_tab.tab_height != tab_view_height
         ):
             self.active_tab.resize(self.width, tab_view_height)
 
-        tab_height = max(
-            1,
-            math.ceil(self.active_tab.document.height + 2 * VSTEP),
-        )
+        # Layout may have changed during resize, so recompute the bounded cache.
+        region_height = self._interest_surface_height()
+
+        # Keep the viewport fully covered. Page edits/navigations can change
+        # document height or scroll position even when this is not a scroll event.
+        if not self._viewport_inside_interest_region():
+            self._reposition_interest_region()
+
+        region_height = self._interest_surface_height()
+        region_end = self.interest_start + region_height
 
         if (
             self.tab_surface is None
             or self.tab_surface.width() != self.width
-            or self.tab_surface.height() != tab_height
+            or self.tab_surface.height() != region_height
         ):
-            self.tab_surface = make_skia_surface(self.width, tab_height)
+            self.tab_surface = make_skia_surface(self.width, region_height)
 
         canvas = self.tab_surface.getCanvas()
         canvas.clear(skia.ColorWHITE)
-        self.active_tab.raster(canvas)
+
+        # clipRect is expressed in surface coordinates while the CTM is still
+        # identity. The following translate maps document coordinates into that
+        # fixed-height surface:
+        #
+        #     surface_y = document_y - interest_start
+        surface_clip = skia.Rect.MakeLTRB(
+            0,
+            0,
+            self.width,
+            region_height,
+        )
+        document_interest_rect = skia.Rect.MakeLTRB(
+            0,
+            self.interest_start,
+            self.width,
+            region_end,
+        )
+
+        canvas.save()
+        canvas.clipRect(surface_clip)
+        canvas.translate(0, -self.interest_start)
+        self.active_tab.raster(canvas, document_interest_rect)
+        canvas.restore()
 
     def _draw_scrollbar(self, canvas):
         """Draw the viewport scrollbar during compositing, not page raster."""
@@ -4512,7 +4710,10 @@ class BrowserWindow:
                 self.width,
                 self.height,
             )
-            tab_offset = self.chrome.bottom - self.active_tab.scroll
+            # tab_surface y=0 is no longer document y=0. It represents
+            # document y=interest_start, so composite with the third coordinate
+            # conversion: surface -> viewport/root.
+            tab_offset = self._tab_surface_root_offset()
 
             canvas.save()
             canvas.clipRect(tab_rect)
@@ -4575,15 +4776,20 @@ class BrowserWindow:
     def handle_down(self):
         if not self.active_tab:
             return
+
         self.active_tab.scrolldown()
-        # Scrolling only changes which cached pixels are copied to the window.
+
+        # Fast path: keep compositing the cached surface while the viewport stays
+        # inside the interest region. Crossing its boundary triggers one reraster.
+        self.ensure_interest_region()
         self.draw()
 
     def handle_up(self):
         if not self.active_tab:
             return
+
         self.active_tab.scrollup()
-        # No raster_tab() here: composited scrolling reuses tab_surface.
+        self.ensure_interest_region()
         self.draw()
 
     def handle_mousewheel(self, delta):
@@ -4594,7 +4800,8 @@ class BrowserWindow:
             self.active_tab.scrollup()
         else:
             self.active_tab.scrolldown()
-        # No raster_tab() here either.
+
+        self.ensure_interest_region()
         self.draw()
 
     def handle_click(self, x, y):
@@ -4754,6 +4961,13 @@ class BrowserWindow:
         self.root_surface = make_skia_surface(width, height)
         self.chrome_surface = None
         self.tab_surface = None
+
+        # Resize changes both viewport size and the bounded raster-cache budget.
+        self.interest_height = max(
+            1,
+            INTEREST_REGION_MULTIPLIER * self.height,
+        )
+        self.interest_start = 0
 
         # Chrome width changes first; its resulting height defines tab viewport.
         self.raster_chrome()
