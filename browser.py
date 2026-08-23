@@ -14,6 +14,7 @@ from email.utils import format_datetime,parsedate_to_datetime
 import sdl2
 import skia
 import ctypes
+import threading
 
 # emolji cache
 # key: character (e.g. "😀")
@@ -208,6 +209,62 @@ INTEREST_REGION_MULTIPLIER = 4
 # Shift + left click uses the same path on desktop machines without a touch screen.
 TOUCH_RADIUS_PX = 20
 TOUCH_MOVE_TOLERANCE_PX = 12
+
+# Chapter 12 scheduling: target ~30 frames per second.
+REFRESH_RATE_SEC = .033
+
+# Small JavaScript bridge snippets executed from main-thread tasks.
+SETTIMEOUT_JS = "runSetTimeout(dukpy.handle)"
+XHR_ONLOAD_JS = "runXHROnload(dukpy.out, dukpy.handle)"
+
+
+class Task:
+    """A deferred function call plus its arguments."""
+    def __init__(self, task_code, *args):
+        self.task_code = task_code
+        self.args = args
+
+    def run(self):
+        task_code = self.task_code
+        args = self.args
+        try:
+            if task_code is not None:
+                return task_code(*args)
+        finally:
+            # Release references after completion so completed tasks do not keep
+            # pages, callbacks, or large response objects alive unnecessarily.
+            self.task_code = None
+            self.args = None
+
+
+class TaskRunner:
+    """Thread-safe FIFO task queue owned by one Tab."""
+    def __init__(self, tab):
+        self.tab = tab
+        self.tasks = []
+        self.condition = threading.Condition()
+
+    def schedule_task(self, task):
+        with self.condition:
+            self.tasks.append(task)
+            self.condition.notify_all()
+
+    def run(self):
+        task = None
+        with self.condition:
+            if self.tasks:
+                task = self.tasks.pop(0)
+
+        if task is None:
+            return False
+
+        task.run()
+        return True
+
+    def clear_tasks(self):
+        with self.condition:
+            self.tasks.clear()
+
 
 # CSS font-size -> Skia font-size conversion.
 #
@@ -1495,6 +1552,14 @@ class BrowserApp:
 
                 while sdl2.SDL_PollEvent(ctypes.byref(event)) != 0:
                     self.dispatch_event(event)
+
+                # Each native window has one visible active tab. Run at most one
+                # queued task per loop so SDL input remains responsive.
+                for browser_window in list(self.windows):
+                    if browser_window.active_tab is not None:
+                        browser_window.active_tab.task_runner.run()
+                    browser_window.raster_and_draw()
+                    browser_window.schedule_animation_frame()
         finally:
             for browser_window in list(self.windows):
                 browser_window.close()
@@ -3028,12 +3093,68 @@ def cascade_priority(rule):
 
 RUNTIME_JS = open("runtime.js").read()
 
+# Chapter 12 APIs are layered on top of the existing runtime.js. Keeping this
+# small bridge here lets the scheduling implementation travel with browser.py
+# without replacing the rest of the project's DOM/event runtime.
+SCHEDULING_RUNTIME_JS = r"""
+SET_TIMEOUT_REQUESTS = {};
+
+function setTimeout(callback, time_delta) {
+    var handle = Object.keys(SET_TIMEOUT_REQUESTS).length;
+    SET_TIMEOUT_REQUESTS[handle] = callback;
+    call_python("setTimeout", handle, time_delta);
+}
+
+function runSetTimeout(handle) {
+    var callback = SET_TIMEOUT_REQUESTS[handle];
+    if (callback) callback();
+}
+
+XHR_REQUESTS = {};
+
+XMLHttpRequest = function() {
+    this.handle = Object.keys(XHR_REQUESTS).length;
+    XHR_REQUESTS[this.handle] = this;
+    this.is_async = false;
+    this.method = "GET";
+    this.url = "";
+    this.responseText = "";
+    this.onload = null;
+};
+
+XMLHttpRequest.prototype.open = function(method, url, is_async) {
+    this.is_async = !!is_async;
+    this.method = method;
+    this.url = url;
+};
+
+XMLHttpRequest.prototype.send = function(body) {
+    if (body === undefined) body = null;
+    var out = call_python(
+        "XMLHttpRequest_send",
+        this.method, this.url, body, this.is_async, this.handle
+    );
+    if (!this.is_async) this.responseText = out;
+    return out;
+};
+
+function runXHROnload(body, handle) {
+    var obj = XHR_REQUESTS[handle];
+    if (!obj) return;
+
+    var evt = new Event("load");
+    obj.responseText = body;
+    if (obj.onload) obj.onload(evt);
+}
+"""
+
 EVENT_DISPATCH_JS = \
     "dispatch_event_path(dukpy.type, dukpy.handles)"
 
 class JSContext:
     def __init__(self,tab):
         self.tab = tab
+        self.discarded = False
 
         self.node_to_handle = {}
         self.handle_to_node = {}
@@ -3058,9 +3179,11 @@ class JSContext:
         self.interp.export_function("document_cookie_set",self.document_cookie_set)
 
         self.interp.export_function("XMLHttpRequest_send",self.XMLHttpRequest_send)
+        self.interp.export_function("setTimeout",self.setTimeout)
 
 
         self.interp.evaljs(RUNTIME_JS)
+        self.interp.evaljs(SCHEDULING_RUNTIME_JS)
 
         self.update_id_globals()
 
@@ -3160,30 +3283,85 @@ class JSContext:
 
         return None
 
-    def XMLHttpRequest_send(self,method,url,body):
-        full_url = self.tab.url.resolve(url)
+    def dispatch_settimeout(self, handle):
+        if self.discarded:
+            return
+
+        try:
+            self.interp.evaljs(SETTIMEOUT_JS, handle=handle)
+        except dukpy.JSRuntimeError as e:
+            print("setTimeout callback crashed", e)
+
+    def setTimeout(self, handle, time_delta):
+        def run_callback():
+            if self.discarded:
+                return
+            task = Task(self.dispatch_settimeout, handle)
+            self.tab.task_runner.schedule_task(task)
+
+        timer = threading.Timer(max(0.0, float(time_delta)) / 1000.0, run_callback)
+        timer.daemon = True
+        timer.start()
+
+    def dispatch_xhr_onload(self, out, handle):
+        if self.discarded:
+            return
+
+        try:
+            self.interp.evaljs(XHR_ONLOAD_JS, out=out, handle=handle)
+        except dukpy.JSRuntimeError as e:
+            print("XMLHttpRequest onload crashed", e)
+
+    def XMLHttpRequest_send(self, method, url, body, isasync=False, handle=None):
+        # Capture the source-document state before a worker thread starts. A later
+        # navigation may replace tab.url/referrer_policy while the request is live.
+        source_url = self.tab.url
+        referrer_policy = self.tab.referrer_policy
+        full_url = source_url.resolve(url)
 
         if not self.tab.allowed_request(full_url):
             raise Exception("Cross-origin XHR blocked by CSP")
 
-        page_origin = self.tab.url.origin()
+        page_origin = source_url.origin()
+        is_cross_origin = full_url.origin() != page_origin
+        request_origin = page_origin if is_cross_origin else None
 
-        is_cross_origin=(full_url.origin()!=page_origin)
+        def perform_request():
+            response_headers, out = full_url.request(
+                source_url,
+                body,
+                origin=request_origin,
+                referrer_policy=referrer_policy,
+            )
 
-        # only cross-origin request need to add origin header
-        request_origin = (page_origin if is_cross_origin else None)
+            if is_cross_origin:
+                allowed_origin = response_headers.get(
+                    "access-control-allow-origin"
+                )
+                if allowed_origin not in [page_origin, "*"]:
+                    raise Exception("Cross-origin XHR blocked by CORS")
 
-        response_headers,out = full_url.request(self.tab.url,body,origin=request_origin,referrer_policy=self.tab.referrer_policy)
+            return out
 
-        # decide js can access response
-        if is_cross_origin:
-            allowed_origin = response_headers.get("access-control-allow-origin")
+        if not isasync:
+            return perform_request()
 
-            if allowed_origin not in [page_origin,"*"]:
-                raise Exception("Cross-origin XHR blocked by CORS")
+        def run_load():
+            try:
+                out = perform_request()
+            except Exception as e:
+                print("Async XMLHttpRequest failed", e)
+                return
 
+            if self.discarded:
+                return
+            task = Task(self.dispatch_xhr_onload, out, handle)
+            self.tab.task_runner.schedule_task(task)
 
-        return out
+        thread = threading.Thread(target=run_load)
+        thread.daemon = True
+        thread.start()
+        return None
 
     def querySelectorAll(self,selector_text):
         selector = CSSParser(selector_text).selector()
@@ -3217,7 +3395,7 @@ class JSContext:
         if name=="id":
             self.update_id_globals()
 
-        self.tab.render()
+        self.tab.set_needs_render()
 
     def serialize_attributes(self,element):
         output = []
@@ -3338,7 +3516,7 @@ class JSContext:
         parent.children.append(child) # append new child
         
         self.update_id_globals() # after subtree connect into document, maybe have add id globals
-        self.tab.render()
+        self.tab.set_needs_render()
 
         return child_handle
 
@@ -3371,7 +3549,7 @@ class JSContext:
         parent.children.insert(index,new_child)
 
         self.update_id_globals() # after subtree connect into document, maybe have add id globals
-        self.tab.render()
+        self.tab.set_needs_render()
 
         return new_child_handle
 
@@ -3389,7 +3567,7 @@ class JSContext:
         self.update_id_globals() # after subtree remove from document, maybe have remove id globals
 
         # after DOM changed，render it
-        self.tab.render()
+        self.tab.set_needs_render()
 
         # return removed child
         return child_handle
@@ -3422,7 +3600,7 @@ class JSContext:
 
         # delete old id globals，add new id globals
         self.update_id_globals()
-        self.tab.render()
+        self.tab.set_needs_render()
 
     def dispatch_event(self,type,elt):
         handles =[] 
@@ -3453,6 +3631,9 @@ class JSContext:
             return False
 
     def run(self,script,code):
+        if self.discarded:
+            return None
+
         try:
             return self.interp.evaljs(code)
         except dukpy.JSRuntimeError as e:
@@ -3617,7 +3798,6 @@ class Chrome:
             elif button_id == "bookmark":
                 self.discard_address_bar_edit()
                 self.browser.toggle_bookmark()
-                self.render()
                 return
 
         if isinstance(elt,Element) and elt.tag == "input" and elt.attributes.get("id") == "address":
@@ -3922,7 +4102,7 @@ class Chrome:
             if url.is_external():
                 url.open_external()
                 self.discard_address_bar_edit()
-                return
+                return True
 
             if self.browser.active_tab:
                 self.browser.active_tab.load(url)
@@ -3930,6 +4110,9 @@ class Chrome:
                 self.browser.new_tab(url)
 
             self.discard_address_bar_edit()
+            return True
+
+        return False
 
     def backspace(self):
         if self.focus=="address bar":
@@ -3960,7 +4143,8 @@ class Chrome:
         
 
 class Tab:
-    def __init__(self,width,tab_height,visited_urls,bookmarks):
+    def __init__(self,browser,width,tab_height,visited_urls,bookmarks):
+        self.browser = browser
         self.width=width
         self.height=tab_height
         self.tab_height=tab_height
@@ -3987,6 +4171,19 @@ class Tab:
         
         self.history=[]
         self.history_index=-1
+
+        self.task_runner = TaskRunner(self)
+        self.needs_render = False
+        self.js = None
+        self.pending_fragment = None
+
+    def set_needs_render(self):
+        self.needs_render = True
+
+    def discard(self):
+        if self.js is not None:
+            self.js.discarded = True
+        self.task_runner.clear_tasks()
 
     def is_internal_page(self,url):
         return url.scheme=="about" and url.path=="bookmarks"
@@ -4051,6 +4248,11 @@ class Tab:
         return "\n".join(out)
 
     def load(self, url,payload=None,add_to_history=True):
+        if self.js is not None:
+            self.js.discarded = True
+        self.task_runner.clear_tasks()
+        self.pending_fragment = None
+
         referrer=self.url #old url
         referrer_policy=self.referrer_policy #old url referrer policy
         
@@ -4156,7 +4358,8 @@ class Tab:
             except Exception:
                 continue
 
-            self.js.run(script,body)
+            task = Task(self.js.run, script, body)
+            self.task_runner.schedule_task(task)
 
 
         rules=DEFAULT_STYLE_SHEET.copy()
@@ -4203,11 +4406,11 @@ class Tab:
         self.rules=sorted(rules,key=cascade_priority)
 
         self.focus=None
+        self.pending_fragment = self.url.fragment or None
+        self.set_needs_render()
 
-        self.render()
-
-        if self.url.fragment:
-            self.scroll_to_fragment(self.url.fragment)
+        # Navigation changes URL/history/security shown by browser chrome.
+        self.browser.set_needs_raster_and_draw(chrome=True)
 
         # self.document=DocumentLayout(self.nodes)
         # self.document.layout()
@@ -4295,11 +4498,23 @@ class Tab:
 
         self.focus.is_focused = False # Text or Element disable focused
         self.focus= None
-        self.render()
+        self.set_needs_render()
 
     def render(self):
+        if not self.needs_render:
+            return False
+
         self.restyle()
         self.relayout()
+        self.needs_render = False
+
+        if self.pending_fragment:
+            fragment = self.pending_fragment
+            self.pending_fragment = None
+            self.scroll_to_fragment(fragment)
+
+        self.browser.set_needs_raster_and_draw(tab=True)
+        return True
 
     def relayout(self):
         self.document=DocumentLayout(self.nodes,self.width)
@@ -4371,11 +4586,9 @@ class Tab:
             self.history.append(url)
             self.history_index+=1
 
-        self.restyle()
-
-        self.relayout()
-
-        self.scroll_to_fragment(fragment)
+        self.pending_fragment = fragment
+        self.set_needs_render()
+        self.browser.set_needs_raster_and_draw(chrome=True)
 
 
     def raster(self, canvas, interest_rect=None):
@@ -4413,6 +4626,8 @@ class Tab:
 
 
     def layout_object_at(self,x,y):
+        self.render()
+
         # Viewport -> document coordinates. Nested Scroll nodes then convert the
         # point into each scrolled child coordinate space as the tree is walked.
         document_y = y + self.scroll
@@ -4426,6 +4641,8 @@ class Tab:
         return cmd.layout_object
 
     def touch_layout_object_at(self, x, y, radius=TOUCH_RADIUS_PX):
+        self.render()
+
         # The finger area starts in the page viewport coordinate system. Convert
         # only its center by page scroll; nested Scroll nodes perform the remaining
         # element-scroll transforms recursively. Radius is unchanged by translation.
@@ -4461,6 +4678,8 @@ class Tab:
 
     def scroll_focused_element(self, delta):
         """Scroll the focused overflow container; return (handled, changed)."""
+        self.render()
+
         if self.scroll_focus is None:
             return False, False
 
@@ -4474,6 +4693,7 @@ class Tab:
             # Geometry is unchanged, but rebuilding the display list captures the
             # new Scroll node offset and preserves nested-scroll composition.
             self.relayout()
+            self.browser.set_needs_raster_and_draw(tab=True)
 
         return True, changed
 
@@ -4600,7 +4820,6 @@ class Tab:
             obj = self.touch_layout_object_at(x,y,touch_radius)
 
         if obj is None:
-            self.render()
             return
 
         target = obj.node
@@ -4611,7 +4830,6 @@ class Tab:
             target = target.parent
 
         if target is None:
-            self.render()
             return
 
         scroll_candidate = self.scrollable_ancestor(obj)
@@ -4635,7 +4853,6 @@ class Tab:
             if self.submit_button(button): # find form and action attribution
                 return
 
-            self.render()
             return
 
         elt=target
@@ -4645,7 +4862,7 @@ class Tab:
 
                 if is_checkbox_input(elt):
                     elt.is_checked = not elt.is_checked
-                    self.render()
+                    self.set_needs_render()
                     return
 
                 # Match the address bar editing model: clicking focuses the
@@ -4667,7 +4884,7 @@ class Tab:
                 else:
                     elt.cursor_index = len(value)
 
-                self.render()
+                self.set_needs_render()
                 return
 
             if isinstance(elt,Element) and elt.tag == "a" and "href" in elt.attributes:
@@ -4692,7 +4909,7 @@ class Tab:
 
             elt = elt.parent
 
-        self.render()
+        return
 
     def keypress(self,char):
         if self.focus:
@@ -4709,7 +4926,7 @@ class Tab:
                 + value[cursor:]
             )
             self.focus.cursor_index = cursor + len(char)
-            self.render()
+            self.set_needs_render()
 
     def backspace(self):
         if not self.focus:
@@ -4727,7 +4944,7 @@ class Tab:
             + value[cursor:]
         )
         self.focus.cursor_index = cursor - 1
-        self.render()
+        self.set_needs_render()
 
     def left(self):
         if not self.focus:
@@ -4736,7 +4953,7 @@ class Tab:
         value = self.focus.attributes.get("value", "")
         cursor = getattr(self.focus, "cursor_index", len(value))
         self.focus.cursor_index = max(0, cursor - 1)
-        self.render()
+        self.set_needs_render()
 
     def right(self):
         if not self.focus:
@@ -4745,7 +4962,7 @@ class Tab:
         value = self.focus.attributes.get("value", "")
         cursor = getattr(self.focus, "cursor_index", len(value))
         self.focus.cursor_index = min(len(value), cursor + 1)
-        self.render()
+        self.set_needs_render()
 
     def enter(self):
         if not self.focus:
@@ -4778,8 +4995,7 @@ class Tab:
         self.tab_height = tab_height
 
         if self.nodes:
-            self.restyle()
-            self.relayout()
+            self.set_needs_render()
 
 
 
@@ -4794,6 +5010,12 @@ class BrowserWindow:
         self.active_tab = None
         self.focus = None
         self._closed = False
+
+        self.animation_timer = None
+        self.animation_lock = threading.Lock()
+        self.needs_raster_and_draw = False
+        self.needs_chrome_raster = False
+        self.needs_tab_raster = False
 
         flags = sdl2.SDL_WINDOW_SHOWN | sdl2.SDL_WINDOW_RESIZABLE
         self.sdl_window = sdl2.SDL_CreateWindow(
@@ -4847,6 +5069,15 @@ class BrowserWindow:
             return
 
         self._closed = True
+
+        with self.animation_lock:
+            if self.animation_timer is not None:
+                self.animation_timer.cancel()
+                self.animation_timer = None
+
+        for tab in self.tabs:
+            tab.discard()
+
         self.app.unregister_window(self)
 
         if self.sdl_window:
@@ -4858,6 +5089,7 @@ class BrowserWindow:
 
     def new_tab(self, url):
         new_tab = Tab(
+            self,
             self.width,
             max(1, self.height - self.chrome.bottom),
             self.app.visited_urls,
@@ -4868,9 +5100,59 @@ class BrowserWindow:
         self.tabs.append(new_tab)
         self.active_tab = new_tab
 
-        self.raster_chrome()
-        self.raster_tab()
+        # Build the initial display list so callers can inspect the tab before
+        # the SDL loop starts. External scripts are already queued and still run later.
+        new_tab.render()
+        self.set_needs_raster_and_draw(chrome=True, tab=True)
+
+    def set_needs_raster_and_draw(self, chrome=False, tab=False):
+        self.needs_raster_and_draw = True
+        if chrome:
+            self.needs_chrome_raster = True
+        if tab:
+            self.needs_tab_raster = True
+
+    def schedule_animation_frame(self):
+        if self._closed or self.active_tab is None:
+            return
+
+        with self.animation_lock:
+            if self.animation_timer is not None:
+                return
+
+            def callback():
+                if not self._closed and self.active_tab is not None:
+                    task = Task(self.active_tab.render)
+                    self.active_tab.task_runner.schedule_task(task)
+
+                with self.animation_lock:
+                    self.animation_timer = None
+
+            timer = threading.Timer(REFRESH_RATE_SEC, callback)
+            timer.daemon = True
+            self.animation_timer = timer
+            timer.start()
+
+    def raster_and_draw(self):
+        if not self.needs_raster_and_draw or self._closed:
+            return False
+
+        chrome_raster = self.needs_chrome_raster
+        tab_raster = self.needs_tab_raster
+
+        if chrome_raster:
+            self.raster_chrome()
+        if tab_raster:
+            self.raster_tab()
+
         self.draw()
+
+        # Consume all rendering dirtiness handled by this frame. raster_tab may
+        # call Tab.render() after a resize; that render belongs to this same frame.
+        self.needs_raster_and_draw = False
+        self.needs_chrome_raster = False
+        self.needs_tab_raster = False
+        return True
 
     def present_surface(self):
         skia_image = self.root_surface.makeImageSnapshot()
@@ -5058,7 +5340,7 @@ class BrowserWindow:
 
         if self.tab_surface is None or not self.viewport_inside_interest_region():
             self.reposition_interest_region()
-            self.raster_tab()
+            self.set_needs_raster_and_draw(tab=True)
             return True
 
         return False
@@ -5081,6 +5363,8 @@ class BrowserWindow:
             or self.active_tab.tab_height != tab_view_height
         ):
             self.active_tab.resize(self.width, tab_view_height)
+
+        self.active_tab.render()
 
         # Layout may have changed during resize, so recompute the bounded cache.
         region_height = self.interest_surface_height()
@@ -5239,6 +5523,8 @@ class BrowserWindow:
         else:
             self.app.bookmarks.add(url)
 
+        self.set_needs_raster_and_draw(chrome=True)
+
     def handle_down(self):
         if not self.active_tab:
             return
@@ -5246,15 +5532,16 @@ class BrowserWindow:
         handled, changed = self.active_tab.scroll_focused_element(SCROLL_STEP)
         if handled:
             if changed:
-                self.raster_tab()
-            self.draw()
+                self.set_needs_raster_and_draw(tab=True)
             return
 
+        old_scroll = self.active_tab.scroll
         self.active_tab.scrolldown()
-
-        # Page scrolling keeps the 11-3 interest-region fast path.
-        self.ensure_interest_region()
-        self.draw()
+        if self.active_tab.scroll != old_scroll:
+            self.ensure_interest_region()
+            # Page scrolling is usually compositing-only while the viewport stays
+            # inside the 11-3 interest-region raster cache.
+            self.set_needs_raster_and_draw()
 
     def handle_up(self):
         if not self.active_tab:
@@ -5263,32 +5550,31 @@ class BrowserWindow:
         handled, changed = self.active_tab.scroll_focused_element(-SCROLL_STEP)
         if handled:
             if changed:
-                self.raster_tab()
-            self.draw()
+                self.set_needs_raster_and_draw(tab=True)
             return
 
+        old_scroll = self.active_tab.scroll
         self.active_tab.scrollup()
-        self.ensure_interest_region()
-        self.draw()
+        if self.active_tab.scroll != old_scroll:
+            self.ensure_interest_region()
+            self.set_needs_raster_and_draw()
 
     def handle_mousewheel(self, delta):
         if not self.active_tab or delta == 0:
             return
 
+        old_scroll = self.active_tab.scroll
         if delta > 0:
             self.active_tab.scrollup()
         else:
             self.active_tab.scrolldown()
 
-        self.ensure_interest_region()
-        self.draw()
+        if self.active_tab.scroll != old_scroll:
+            self.ensure_interest_region()
+            self.set_needs_raster_and_draw()
 
     def handle_primary_activation(self, x, y, touch_radius=None):
-        """Shared mouse/touch activation path.
-
-        Mouse uses exact point hit testing. Touch passes a contact radius, but both
-        inputs ultimately reuse the same Chrome/Tab click semantics and DOM events.
-        """
+        """Shared mouse/touch activation path with deferred rendering."""
         if y < self.chrome.bottom:
             self.focus = None
 
@@ -5304,9 +5590,18 @@ class BrowserWindow:
             new_tab = self.active_tab
             new_url = str(new_tab.url) if new_tab and new_tab.url else None
 
-            self.raster_chrome()
-            if tab_was_focused or new_tab is not old_tab or new_url != old_url:
-                self.raster_tab()
+            # Chrome hit state, tab selection, navigation controls, and address
+            # display may all have changed. Page mutations render on the frame task.
+            self.set_needs_raster_and_draw(chrome=True)
+            if tab_was_focused and old_tab is self.active_tab:
+                old_tab.render()
+
+            if new_tab is not old_tab:
+                if new_tab is not None:
+                    new_tab.render()
+                self.set_needs_raster_and_draw(tab=True)
+            elif new_url != old_url:
+                self.set_needs_raster_and_draw(chrome=True)
         else:
             self.focus = "content"
             chrome_was_focused = self.chrome.focus == "address bar"
@@ -5320,17 +5615,11 @@ class BrowserWindow:
             self.active_tab.click(x, tab_y, touch_radius=touch_radius)
             new_url = str(self.active_tab.url) if self.active_tab.url else None
 
-            # A page activation can change form focus, controls, DOM, navigation,
-            # or the focused overflow-scroll container.
-            self.raster_tab()
-
             if old_url != new_url:
                 self.chrome.discard_address_bar_edit()
 
             if chrome_was_focused or old_url != new_url:
-                self.raster_chrome()
-
-        self.draw()
+                self.set_needs_raster_and_draw(chrome=True)
 
     def handle_click(self, x, y):
         self.handle_primary_activation(x, y, touch_radius=None)
@@ -5348,9 +5637,8 @@ class BrowserWindow:
             tab_was_focused = bool(self.active_tab.focus)
             self.active_tab.blur()
             if tab_was_focused:
-                self.raster_tab()
-            self.raster_chrome()
-            self.draw()
+                self.active_tab.render()
+            self.set_needs_raster_and_draw(chrome=True)
             return
 
         chrome_was_focused = self.chrome.focus == "address bar"
@@ -5359,76 +5647,58 @@ class BrowserWindow:
         url = self.active_tab.link_at(x, tab_y)
 
         if chrome_was_focused:
-            self.raster_chrome()
+            self.set_needs_raster_and_draw(chrome=True)
 
         if url:
             if url.is_external():
                 url.open_external()
-                self.draw()
             else:
                 self.new_tab(url)
-        else:
-            self.draw()
 
     def handle_key(self, text):
         if not text:
             return
 
-        # SDL_TEXTINPUT already gives decoded user text. Keep control
-        # characters out, but allow Unicode and IME-produced text.
         text = "".join(ch for ch in text if ord(ch) >= 0x20)
         if not text:
             return
 
         if self.chrome.keypress(text):
-            self.raster_chrome()
-            self.draw()
+            self.set_needs_raster_and_draw(chrome=True)
         elif self.focus == "content" and self.active_tab:
             self.active_tab.keypress(text)
-            self.raster_tab()
-            self.draw()
 
     def handle_enter(self):
         if self.chrome.focus == "address bar":
-            self.chrome.enter()
-            # Enter in the address bar may navigate or create the first tab.
-            self.raster_chrome()
-            self.raster_tab()
+            if self.chrome.enter():
+                self.set_needs_raster_and_draw(chrome=True)
         elif self.focus == "content" and self.active_tab:
             old_url = str(self.active_tab.url) if self.active_tab.url else None
             self.active_tab.enter()
             new_url = str(self.active_tab.url) if self.active_tab.url else None
-            self.raster_tab()
             if old_url != new_url:
-                self.raster_chrome()
-        self.draw()
+                self.set_needs_raster_and_draw(chrome=True)
 
     def handle_backspace(self):
         if self.chrome.focus == "address bar":
             self.chrome.backspace()
-            self.raster_chrome()
+            self.set_needs_raster_and_draw(chrome=True)
         elif self.focus == "content" and self.active_tab:
             self.active_tab.backspace()
-            self.raster_tab()
-        self.draw()
 
     def handle_left(self):
         if self.chrome.focus == "address bar":
             self.chrome.left()
-            self.raster_chrome()
+            self.set_needs_raster_and_draw(chrome=True)
         elif self.focus == "content" and self.active_tab:
             self.active_tab.left()
-            self.raster_tab()
-        self.draw()
 
     def handle_right(self):
         if self.chrome.focus == "address bar":
             self.chrome.right()
-            self.raster_chrome()
+            self.set_needs_raster_and_draw(chrome=True)
         elif self.focus == "content" and self.active_tab:
             self.active_tab.right()
-            self.raster_tab()
-        self.draw()
 
     def handle_new_window(self):
         self.app.new_window(
@@ -5450,22 +5720,26 @@ class BrowserWindow:
         self.chrome_surface = None
         self.tab_surface = None
 
-        # Resize changes both viewport size and the bounded raster-cache budget.
         self.interest_height = max(
             1,
             INTEREST_REGION_MULTIPLIER * self.height,
         )
         self.interest_start = 0
 
-        # Chrome width changes first; its resulting height defines tab viewport.
+        # Chrome geometry defines the page viewport, so compute it immediately.
         self.raster_chrome()
         tab_height = max(1, height - self.chrome.bottom)
 
         for tab in self.tabs:
             tab.resize(width, tab_height)
 
-        self.raster_tab()
-        self.draw()
+        if self.active_tab:
+            self.active_tab.render()
+
+        # chrome_surface is already fresh; the active tab needs a new raster.
+        self.needs_raster_and_draw = True
+        self.needs_chrome_raster = False
+        self.needs_tab_raster = self.active_tab is not None
 
 
 class URL:
