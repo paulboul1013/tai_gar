@@ -15,6 +15,7 @@ import sdl2
 import skia
 import ctypes
 import threading
+import json
 
 # emolji cache
 # key: character (e.g. "😀")
@@ -217,6 +218,65 @@ REFRESH_RATE_SEC = .033
 SETTIMEOUT_JS = "runSetTimeout(dukpy.handle)"
 XHR_ONLOAD_JS = "runXHROnload(dukpy.out, dukpy.handle)"
 RAF_JS = "runRAFHandlers()"
+
+
+class MeasureTime:
+    """Write Chrome/Perfetto-compatible JSON trace events for browser work."""
+    def __init__(self, filename="browser.trace"):
+        self.file = open(filename, "w", encoding="utf-8")
+        self.finished = False
+        self.lock = threading.Lock()
+
+        # A trace is a JSON object containing a traceEvents array. Emit one
+        # metadata event up front so later events can simply be comma-prefixed.
+        self.file.write('{"traceEvents":[')
+        self.write_event({
+            "name": "process_name",
+            "ph": "M",
+            "ts": time.time() * 1000000,
+            "pid": 1,
+            "cat": "__metadata",
+            "args": {"name": "Browser"},
+        }, first=True)
+
+    def write_event(self, event, first=False):
+        with self.lock:
+            if self.finished:
+                return
+            if not first:
+                self.file.write(",")
+            self.file.write(json.dumps(event, separators=(",", ":")))
+            # Preserve trace data even if the browser crashes before finish().
+            self.file.flush()
+
+    def time(self, name):
+        self.write_event({
+            "ph": "B",
+            "cat": "_",
+            "name": str(name),
+            "ts": time.time() * 1000000,
+            "pid": 1,
+            "tid": 1,
+        })
+
+    def stop(self, name):
+        self.write_event({
+            "ph": "E",
+            "cat": "_",
+            "name": str(name),
+            "ts": time.time() * 1000000,
+            "pid": 1,
+            "tid": 1,
+        })
+
+    def finish(self):
+        with self.lock:
+            if self.finished:
+                return
+            self.file.write("]}")
+            self.file.flush()
+            self.file.close()
+            self.finished = True
 
 
 class Task:
@@ -1315,6 +1375,10 @@ class BrowserApp:
                 error = error.decode("utf8", errors="replace")
             raise RuntimeError("SDL_Init failed: {}".format(error))
 
+        # One process-wide trace shared by every native BrowserWindow. Keeping
+        # ownership here avoids multiple windows overwriting browser.trace.
+        self.measure = MeasureTime()
+
         self.windows = []
         self.windows_by_id = {}
         self.visited_urls = set()
@@ -1565,6 +1629,7 @@ class BrowserApp:
             for browser_window in list(self.windows):
                 browser_window.close()
 
+            self.measure.finish()
             sdl2.SDL_StopTextInput()
             sdl2.SDL_Quit()
 
@@ -3205,10 +3270,18 @@ class JSContext:
         )
 
 
-        self.interp.evaljs(RUNTIME_JS)
-        self.interp.evaljs(SCHEDULING_RUNTIME_JS)
+        self.evaljs(RUNTIME_JS)
+        self.evaljs(SCHEDULING_RUNTIME_JS)
 
         self.update_id_globals()
+
+    def evaljs(self, code, **kwargs):
+        """Run JavaScript while recording its main-thread execution time."""
+        self.tab.browser.measure.time("javascript")
+        try:
+            return self.interp.evaljs(code, **kwargs)
+        finally:
+            self.tab.browser.measure.stop("javascript")
 
     def get_handle(self,node):
         if node not in self.node_to_handle:
@@ -3246,7 +3319,7 @@ class JSContext:
                 self.get_handle(node)
             ])
 
-        self.interp.evaljs(
+        self.evaljs(
             "sync_id_globals(dukpy.entries)",
             entries=entries
         )
@@ -3311,7 +3384,7 @@ class JSContext:
             return
 
         try:
-            self.interp.evaljs(SETTIMEOUT_JS, handle=handle)
+            self.evaljs(SETTIMEOUT_JS, handle=handle)
         except dukpy.JSRuntimeError as e:
             print("setTimeout callback crashed", e)
 
@@ -3340,7 +3413,7 @@ class JSContext:
             return
 
         try:
-            self.interp.evaljs(XHR_ONLOAD_JS, out=out, handle=handle)
+            self.evaljs(XHR_ONLOAD_JS, out=out, handle=handle)
         except dukpy.JSRuntimeError as e:
             print("XMLHttpRequest onload crashed", e)
 
@@ -3650,7 +3723,7 @@ class JSContext:
             return False
 
         try:
-            do_default = self.interp.evaljs(
+            do_default = self.evaljs(
                 EVENT_DISPATCH_JS,
                 type=type,
                 handles=handles
@@ -3667,7 +3740,7 @@ class JSContext:
             return None
 
         try:
-            return self.interp.evaljs(code)
+            return self.evaljs(code)
         except dukpy.JSRuntimeError as e:
             print("Script",script,"crashed",e)
 
@@ -4539,7 +4612,7 @@ class Tab:
         # This small wrapper keeps that distinction while staying single-threaded.
         if self.js is not None and not self.js.discarded:
             try:
-                self.js.interp.evaljs(RAF_JS)
+                self.js.evaljs(RAF_JS)
             except dukpy.JSRuntimeError as e:
                 print("requestAnimationFrame callback crashed", e)
 
@@ -4549,17 +4622,21 @@ class Tab:
         if not self.needs_render:
             return False
 
-        self.restyle()
-        self.relayout()
-        self.needs_render = False
+        self.browser.measure.time("render")
+        try:
+            self.restyle()
+            self.relayout()
+            self.needs_render = False
 
-        if self.pending_fragment:
-            fragment = self.pending_fragment
-            self.pending_fragment = None
-            self.scroll_to_fragment(fragment)
+            if self.pending_fragment:
+                fragment = self.pending_fragment
+                self.pending_fragment = None
+                self.scroll_to_fragment(fragment)
 
-        self.browser.set_needs_raster_and_draw(tab=True)
-        return True
+            self.browser.set_needs_raster_and_draw(tab=True)
+            return True
+        finally:
+            self.browser.measure.stop("render")
 
     def relayout(self):
         self.document=DocumentLayout(self.nodes,self.width)
@@ -5048,6 +5125,7 @@ class BrowserWindow:
     """One native SDL window containing many browser tabs."""
     def __init__(self, app, width=WIDTH, height=HEIGHT):
         self.app = app
+        self.measure = app.measure
         self.width = int(width)
         self.height = int(height)
 
@@ -5205,22 +5283,26 @@ class BrowserWindow:
         if not self.needs_raster_and_draw or self._closed:
             return False
 
-        chrome_raster = self.needs_chrome_raster
-        tab_raster = self.needs_tab_raster
+        self.measure.time("raster_and_draw")
+        try:
+            chrome_raster = self.needs_chrome_raster
+            tab_raster = self.needs_tab_raster
 
-        if chrome_raster:
-            self.raster_chrome()
-        if tab_raster:
-            self.raster_tab()
+            if chrome_raster:
+                self.raster_chrome()
+            if tab_raster:
+                self.raster_tab()
 
-        self.draw()
+            self.draw()
 
-        # Consume all rendering dirtiness handled by this frame. raster_tab may
-        # call Tab.render() after a resize; that render belongs to this same frame.
-        self.needs_raster_and_draw = False
-        self.needs_chrome_raster = False
-        self.needs_tab_raster = False
-        return True
+            # Consume all rendering dirtiness handled by this frame. raster_tab may
+            # call Tab.render() after a resize; that render belongs to this same frame.
+            self.needs_raster_and_draw = False
+            self.needs_chrome_raster = False
+            self.needs_tab_raster = False
+            return True
+        finally:
+            self.measure.stop("raster_and_draw")
 
     def present_surface(self):
         skia_image = self.root_surface.makeImageSnapshot()
