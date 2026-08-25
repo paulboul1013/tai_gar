@@ -216,6 +216,7 @@ REFRESH_RATE_SEC = .033
 # Small JavaScript bridge snippets executed from main-thread tasks.
 SETTIMEOUT_JS = "runSetTimeout(dukpy.handle)"
 XHR_ONLOAD_JS = "runXHROnload(dukpy.out, dukpy.handle)"
+RAF_JS = "runRAFHandlers()"
 
 
 class Task:
@@ -3110,6 +3111,25 @@ function runSetTimeout(handle) {
     if (callback) callback();
 }
 
+RAF_LISTENERS = [];
+
+function requestAnimationFrame(callback) {
+    RAF_LISTENERS.push(callback);
+    call_python("requestAnimationFrame");
+}
+
+function runRAFHandlers() {
+    // Move this frame's callbacks out before running them. A callback that
+    // requests another animation frame therefore lands in the fresh list and
+    // cannot run recursively in the current frame.
+    var handlers_copy = RAF_LISTENERS;
+    RAF_LISTENERS = [];
+
+    for (var i = 0; i < handlers_copy.length; i++) {
+        handlers_copy[i]();
+    }
+}
+
 XHR_REQUESTS = {};
 
 XMLHttpRequest = function() {
@@ -3180,6 +3200,9 @@ class JSContext:
 
         self.interp.export_function("XMLHttpRequest_send",self.XMLHttpRequest_send)
         self.interp.export_function("setTimeout",self.setTimeout)
+        self.interp.export_function(
+            "requestAnimationFrame", self.requestAnimationFrame
+        )
 
 
         self.interp.evaljs(RUNTIME_JS)
@@ -3302,6 +3325,15 @@ class JSContext:
         timer = threading.Timer(max(0.0, float(time_delta)) / 1000.0, run_callback)
         timer.daemon = True
         timer.start()
+
+    def requestAnimationFrame(self):
+        if self.discarded:
+            return
+
+        # RAF does not execute JavaScript immediately. It only asks the active
+        # browser window for one rendering frame; all callbacks requested before
+        # that frame are coalesced and run together at the frame boundary.
+        self.tab.browser.set_needs_animation_frame(self.tab)
 
     def dispatch_xhr_onload(self, out, handle):
         if self.discarded:
@@ -4179,6 +4211,7 @@ class Tab:
 
     def set_needs_render(self):
         self.needs_render = True
+        self.browser.set_needs_animation_frame(self)
 
     def discard(self):
         if self.js is not None:
@@ -4499,6 +4532,18 @@ class Tab:
         self.focus.is_focused = False # Text or Element disable focused
         self.focus= None
         self.set_needs_render()
+
+    def run_animation_frame(self):
+        # requestAnimationFrame callbacks belong to the frame boundary, not to
+        # arbitrary render() calls used by hit testing or other synchronous paths.
+        # This small wrapper keeps that distinction while staying single-threaded.
+        if self.js is not None and not self.js.discarded:
+            try:
+                self.js.interp.evaljs(RAF_JS)
+            except dukpy.JSRuntimeError as e:
+                print("requestAnimationFrame callback crashed", e)
+
+        return self.render()
 
     def render(self):
         if not self.needs_render:
@@ -5013,6 +5058,7 @@ class BrowserWindow:
 
         self.animation_timer = None
         self.animation_lock = threading.Lock()
+        self.needs_animation_frame = True
         self.needs_raster_and_draw = False
         self.needs_chrome_raster = False
         self.needs_tab_raster = False
@@ -5099,6 +5145,7 @@ class BrowserWindow:
 
         self.tabs.append(new_tab)
         self.active_tab = new_tab
+        self.set_needs_animation_frame(new_tab)
 
         # Build the initial display list so callers can inspect the tab before
         # the SDL loop starts. External scripts are already queued and still run later.
@@ -5112,21 +5159,42 @@ class BrowserWindow:
         if tab:
             self.needs_tab_raster = True
 
+    def set_needs_animation_frame(self, tab):
+        if self._closed:
+            return
+
+        # Background tabs may queue RAF callbacks, but only the visible tab is
+        # allowed to wake this native window's rendering cadence.
+        with self.animation_lock:
+            if tab is self.active_tab:
+                self.needs_animation_frame = True
+
     def schedule_animation_frame(self):
         if self._closed or self.active_tab is None:
             return
 
         with self.animation_lock:
-            if self.animation_timer is not None:
+            if (
+                not self.needs_animation_frame
+                or self.animation_timer is not None
+            ):
                 return
 
             def callback():
-                if not self._closed and self.active_tab is not None:
-                    task = Task(self.active_tab.render)
-                    self.active_tab.task_runner.schedule_task(task)
-
                 with self.animation_lock:
                     self.animation_timer = None
+
+                    if self._closed or self.active_tab is None:
+                        return
+
+                    active_tab = self.active_tab
+                    # Consume exactly one requested frame before its callbacks run.
+                    # If a RAF callback requests another frame, it sets this flag
+                    # back to True and the main loop schedules the next timer.
+                    self.needs_animation_frame = False
+
+                task = Task(active_tab.run_animation_frame)
+                active_tab.task_runner.schedule_task(task)
 
             timer = threading.Timer(REFRESH_RATE_SEC, callback)
             timer.daemon = True
@@ -5599,6 +5667,7 @@ class BrowserWindow:
             if new_tab is not old_tab:
                 if new_tab is not None:
                     new_tab.render()
+                    self.set_needs_animation_frame(new_tab)
                 self.set_needs_raster_and_draw(tab=True)
             elif new_url != old_url:
                 self.set_needs_raster_and_draw(chrome=True)
