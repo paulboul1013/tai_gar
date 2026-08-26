@@ -227,17 +227,26 @@ class MeasureTime:
         self.finished = False
         self.lock = threading.Lock()
 
+        # Trace timestamps measure elapsed execution time, so they must come
+        # from one process-wide monotonic clock. Wall-clock time can jump when
+        # NTP, suspend/resume, a VM host, or the OS adjusts the system clock.
+        self.clock = time.perf_counter_ns
+
         # A trace is a JSON object containing a traceEvents array. Emit one
         # metadata event up front so later events can simply be comma-prefixed.
         self.file.write('{"traceEvents":[')
         self.write_event({
             "name": "process_name",
             "ph": "M",
-            "ts": time.time() * 1000000,
+            "ts": self.timestamp_us(),
             "pid": 1,
             "cat": "__metadata",
             "args": {"name": "Browser"},
         }, first=True)
+
+    def timestamp_us(self):
+        """Return a monotonic process-wide trace timestamp in microseconds."""
+        return self.clock() // 1000
 
     def write_event(self, event, first=False):
         with self.lock:
@@ -253,7 +262,7 @@ class MeasureTime:
         self.write_event({
             "name": "thread_name",
             "ph": "M",
-            "ts": time.time() * 1000000,
+            "ts": self.timestamp_us(),
             "pid": 1,
             "tid": threading.get_ident(),
             "cat": "__metadata",
@@ -265,7 +274,7 @@ class MeasureTime:
             "ph": "B",
             "cat": "_",
             "name": str(name),
-            "ts": time.time() * 1000000,
+            "ts": self.timestamp_us(),
             "pid": 1,
             "tid": threading.get_ident(),
         })
@@ -275,7 +284,7 @@ class MeasureTime:
             "ph": "E",
             "cat": "_",
             "name": str(name),
-            "ts": time.time() * 1000000,
+            "ts": self.timestamp_us(),
             "pid": 1,
             "tid": threading.get_ident(),
         })
