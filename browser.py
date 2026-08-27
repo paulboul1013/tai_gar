@@ -221,19 +221,22 @@ RAF_JS = "runRAFHandlers()"
 
 
 class MeasureTime:
-    """Write Chrome/Perfetto-compatible JSON trace events for browser work."""
+    """Write thread-aware Chrome/Perfetto JSON trace events."""
     def __init__(self, filename="browser.trace"):
         self.file = open(filename, "w", encoding="utf-8")
         self.finished = False
         self.lock = threading.Lock()
 
-        # Trace timestamps measure elapsed execution time, so they must come
-        # from one process-wide monotonic clock. Wall-clock time can jump when
-        # NTP, suspend/resume, a VM host, or the OS adjusts the system clock.
+        # Remember thread names for the entire trace lifetime. Tab main threads
+        # can terminate before finish(), so relying only on threading.enumerate()
+        # at shutdown would lose their human-readable names.
+        self.thread_names = {}
+        self.thread_names_emitted = set()
+
+        # Performance intervals need one process-wide monotonic clock. Wall-clock
+        # time can jump because of NTP, suspend/resume, VM synchronization, etc.
         self.clock = time.perf_counter_ns
 
-        # A trace is a JSON object containing a traceEvents array. Emit one
-        # metadata event up front so later events can simply be comma-prefixed.
         self.file.write('{"traceEvents":[')
         self.write_event({
             "name": "process_name",
@@ -249,27 +252,63 @@ class MeasureTime:
         return self.clock() // 1000
 
     def write_event(self, event, first=False):
+        """Atomically append one trace event from any browser thread."""
         with self.lock:
             if self.finished:
-                return
+                return False
+
             if not first:
                 self.file.write(",")
-            self.file.write(json.dumps(event, separators=(",", ":")))
-            # Preserve trace data even if the browser crashes before finish().
-            self.file.flush()
 
-    def thread_name(self, name):
-        self.write_event({
-            "name": "thread_name",
-            "ph": "M",
-            "ts": self.timestamp_us(),
-            "pid": 1,
-            "tid": threading.get_ident(),
-            "cat": "__metadata",
-            "args": {"name": str(name)},
-        })
+            self.file.write(json.dumps(event, separators=(",", ":")))
+            self.file.flush()
+            return True
+
+    def thread_name(self, name=None):
+        """Register and emit metadata for the calling thread exactly once."""
+        tid = threading.get_ident()
+        if name is None:
+            name = threading.current_thread().name
+        name = str(name)
+
+        with self.lock:
+            if self.finished:
+                return False
+
+            self.thread_names[tid] = name
+            if tid in self.thread_names_emitted:
+                return True
+
+            event = {
+                "name": "thread_name",
+                "ph": "M",
+                "ts": self.timestamp_us(),
+                "pid": 1,
+                "tid": tid,
+                "cat": "__metadata",
+                "args": {"name": name},
+            }
+            self.file.write(",")
+            self.file.write(json.dumps(event, separators=(",", ":")))
+            self.file.flush()
+            self.thread_names_emitted.add(tid)
+            return True
+
+    def ensure_thread_name(self):
+        """Automatically name a profiled thread even if its caller forgot."""
+        tid = threading.get_ident()
+
+        with self.lock:
+            if self.finished:
+                return False
+            if tid in self.thread_names_emitted:
+                return True
+
+        return self.thread_name(threading.current_thread().name)
 
     def time(self, name):
+        """Begin a duration event on the calling thread."""
+        self.ensure_thread_name()
         self.write_event({
             "ph": "B",
             "cat": "_",
@@ -280,6 +319,8 @@ class MeasureTime:
         })
 
     def stop(self, name):
+        """End a duration event on the calling thread."""
+        self.ensure_thread_name()
         self.write_event({
             "ph": "E",
             "cat": "_",
@@ -290,9 +331,36 @@ class MeasureTime:
         })
 
     def finish(self):
+        """Finish a valid trace while preserving names for all known threads."""
         with self.lock:
             if self.finished:
                 return
+
+            for thread in threading.enumerate():
+                if thread.ident is None:
+                    continue
+                self.thread_names.setdefault(
+                    int(thread.ident),
+                    str(thread.name),
+                )
+
+            for tid, name in self.thread_names.items():
+                if tid in self.thread_names_emitted:
+                    continue
+
+                event = {
+                    "name": "thread_name",
+                    "ph": "M",
+                    "ts": self.timestamp_us(),
+                    "pid": 1,
+                    "tid": tid,
+                    "cat": "__metadata",
+                    "args": {"name": name},
+                }
+                self.file.write(",")
+                self.file.write(json.dumps(event, separators=(",", ":")))
+                self.thread_names_emitted.add(tid)
+
             self.file.write("]}")
             self.file.flush()
             self.file.close()
