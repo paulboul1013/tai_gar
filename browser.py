@@ -4389,6 +4389,7 @@ class CommitData:
         "can_go_forward",
         "width",
         "tab_height",
+        "threaded_scroll_safe",
     )
 
     def __init__(
@@ -4403,12 +4404,15 @@ class CommitData:
         can_go_forward=False,
         width=0,
         tab_height=0,
+        threaded_scroll_safe=False,
     ):
         # Everything needed by the Browser Thread is captured before commit().
         # display_list is intentionally not copied: ownership moves across the
         # commit boundary, and the Tab drops its reference after a successful send.
         self.url = str(url) if url is not None else None
-        self.scroll = float(scroll)
+        # None means "Main Thread accepts the Browser Thread's current scroll".
+        # A numeric value means "Main Thread overrides Browser scroll".
+        self.scroll = None if scroll is None else float(scroll)
         self.height = max(0.0, float(height))
         self.display_list = display_list
         self.title = str(title)
@@ -4417,6 +4421,7 @@ class CommitData:
         self.can_go_forward = bool(can_go_forward)
         self.width = int(width)
         self.tab_height = int(tab_height)
+        self.threaded_scroll_safe = bool(threaded_scroll_safe)
 
     @property
     def url_string(self):
@@ -4437,6 +4442,12 @@ class Tab:
         self.display_list = []
         self.display_list_needs_commit = False
         self.scroll = 0
+        # True means the Main Thread has a more authoritative scroll value than
+        # the Browser Thread (load, fragment jump, clamp, non-threaded fallback).
+        self.scroll_changed_in_tab = False
+        # Pages with nested overflow scrolling keep the existing Main-Thread
+        # scrolling path; ordinary pages can use Browser-Thread scrolling.
+        self.threaded_scroll_safe = False
         self.url=None
         self.nodes=None
         self.document=None
@@ -4549,6 +4560,8 @@ class Tab:
         
         self.url=url # new url to come
         self.scroll=0
+        self.scroll_changed_in_tab = True
+        self.threaded_scroll_safe = False
 
         # every navigation starts as unverified
         self.secure = False
@@ -4790,8 +4803,13 @@ class Tab:
         self.focus= None
         self.set_needs_render()
 
-    def run_animation_frame(self):
-        """Run one frame on the Tab Main Thread and commit its rendering snapshot."""
+    def run_animation_frame(self, browser_scroll):
+        """Run one Main-Thread frame and synchronize scroll through commit()."""
+        # Browser Thread owns interactive top-level scrolling. Main Thread adopts
+        # that value unless it already changed scroll for a stronger reason.
+        if not self.scroll_changed_in_tab and browser_scroll is not None:
+            self.scroll = float(browser_scroll)
+
         # RAF belongs to the frame boundary. render() is intentionally reusable by
         # hit testing and other synchronous Main-Thread paths and therefore does
         # not commit by itself.
@@ -4809,9 +4827,16 @@ class Tab:
             else 0.0
         )
 
+        # Browser Thread already knows the scroll it sent us. Return a number only
+        # when Main Thread changed/clamped scroll and needs to override that value.
+        scroll_override = (
+            self.scroll
+            if self.scroll_changed_in_tab
+            else None
+        )
+
         # Only a display list produced by render/relayout crosses the ownership
-        # boundary. A scroll-only frame sends None so BrowserWindow can reuse the
-        # previously committed display list.
+        # boundary. Browser-only top-level scrolling can reuse the old list.
         committed_display_list = (
             self.display_list
             if self.display_list_needs_commit
@@ -4820,7 +4845,7 @@ class Tab:
 
         data = CommitData(
             self.url,
-            self.scroll,
+            scroll_override,
             document_height,
             committed_display_list,
             title=self.get_title(),
@@ -4829,16 +4854,19 @@ class Tab:
             can_go_forward=self.can_go_forward(),
             width=self.width,
             tab_height=self.tab_height,
+            threaded_scroll_safe=self.threaded_scroll_safe,
         )
 
         accepted = self.browser.commit(self, data)
 
-        if accepted and committed_display_list is not None:
-            # Ownership moved only after BrowserWindow accepted this snapshot.
-            # If the window rejects a commit (for example during shutdown), keep
-            # the local list so it is not silently lost.
-            self.display_list = None
-            self.display_list_needs_commit = False
+        if accepted:
+            # Browser now knows any Main-Thread scroll override from this frame.
+            self.scroll_changed_in_tab = False
+
+            if committed_display_list is not None:
+                # Ownership moved only after BrowserWindow accepted this snapshot.
+                self.display_list = None
+                self.display_list_needs_commit = False
 
         return accepted
 
@@ -4858,6 +4886,11 @@ class Tab:
                 self.pending_fragment = None
                 self.scroll_to_fragment(fragment)
 
+            clamped_scroll = self.clamp_scroll(self.scroll)
+            if clamped_scroll != self.scroll:
+                self.scroll_changed_in_tab = True
+            self.scroll = clamped_scroll
+
             return True
         finally:
             self.browser.measure.stop("render")
@@ -4866,9 +4899,30 @@ class Tab:
         self.document=DocumentLayout(self.nodes,self.width)
         self.document.layout()
 
+        # Keep nested overflow scrolling correct. Its offset is encoded inside
+        # Scroll display-list nodes, so pages containing scrollable containers
+        # fall back to the existing Main-Thread scroll path.
+        self.threaded_scroll_safe = True
+        for layout_object in tree_to_list(self.document, []):
+            if (
+                isinstance(layout_object, BlockLayout)
+                and layout_object.is_scrollable()
+            ):
+                self.threaded_scroll_safe = False
+                break
+
         self.display_list=[]
         paint_tree(self.document,self.display_list)
         self.display_list_needs_commit = True
+
+    def clamp_scroll(self, scroll):
+        """Clamp Main-Thread scroll against the current document geometry."""
+        if self.document is None:
+            return 0.0
+
+        height = math.ceil(self.document.height + 2 * VSTEP)
+        max_scroll = max(0.0, float(height - self.tab_height))
+        return max(0.0, min(float(scroll), max_scroll))
 
     def scroll_to_fragment(self,fragment):
         if not fragment or not self.document or not self.nodes:
@@ -4914,11 +4968,10 @@ class Tab:
             return
 
         target_y = min(candidate_y)
-        max_y = max(
-            self.document.height + 2 * VSTEP - self.tab_height,
-            0,
-        )
-        self.scroll = max(0, min(target_y, max_y))
+        new_scroll = self.clamp_scroll(target_y)
+        if new_scroll != self.scroll:
+            self.scroll = new_scroll
+            self.scroll_changed_in_tab = True
 
     def navigate_to_fragment(self,fragment,add_to_history=True):
         url=self.url.with_fragment(fragment)
@@ -4982,12 +5035,12 @@ class Tab:
             return changed
 
         old_scroll = self.scroll
-        max_y = max(self.document.height + 2 * VSTEP - self.tab_height, 0)
-        self.scroll = max(0, min(self.scroll + delta, max_y))
+        self.scroll = self.clamp_scroll(self.scroll + delta)
 
         if self.scroll != old_scroll:
-            # Scroll state crosses threads only at a frame boundary. No new display
-            # list is needed for ordinary page scrolling.
+            # This is the non-threaded fallback path (for example nested overflow
+            # pages), so Main Thread becomes authoritative for top-level scroll.
+            self.scroll_changed_in_tab = True
             self.browser.set_needs_animation_frame(self)
             return True
 
@@ -5401,6 +5454,12 @@ class BrowserWindow:
         self.committed_states = {}
         self.frame_state = None
 
+        # Browser Thread owns the scroll applied to the currently displayed copy
+        # of the display list. Main Thread keeps a separate Tab.scroll.
+        self.active_tab_scroll = 0.0
+        self.tab_scrolls = {}
+        self.frame_scroll = None
+
         self.animation_timer = None
         self.needs_animation_frame = True
         self.needs_raster_and_draw = False
@@ -5512,7 +5571,26 @@ class BrowserWindow:
                 self.needs_animation_frame = True
                 return
 
+            # Preserve the Browser Thread's latest scroll for the tab we leave.
+            if self.active_tab is not None:
+                self.tab_scrolls[self.active_tab] = self.active_tab_scroll
+
             self.active_tab = tab
+
+            cached_state = self.committed_states.get(tab)
+            cached_scroll = self.tab_scrolls.get(
+                tab,
+                cached_state.scroll if cached_state is not None else 0.0,
+            )
+            if cached_state is not None:
+                cached_scroll = self.clamp_scroll(
+                    cached_scroll,
+                    cached_state.document_height,
+                    cached_state.tab_height,
+                )
+
+            self.active_tab_scroll = float(cached_scroll)
+            self.tab_scrolls[tab] = self.active_tab_scroll
             self.needs_animation_frame = True
 
             # A timer may belong to the previously-active tab. Release that frame
@@ -5527,6 +5605,25 @@ class BrowserWindow:
             self.needs_raster_and_draw = True
             self.needs_chrome_raster = True
             self.needs_tab_raster = True
+
+    def clamp_scroll(self, scroll, document_height=None, viewport_height=None):
+        """Clamp a Browser-Thread scroll against committed page geometry."""
+        with self.lock:
+            if document_height is None:
+                state = self.committed_states.get(self.active_tab)
+                if state is None:
+                    return 0.0
+                document_height = state.document_height
+                viewport_height = state.tab_height
+
+            if viewport_height is None or viewport_height <= 0:
+                viewport_height = max(1, self.height - self.chrome.bottom)
+
+            max_scroll = max(
+                0.0,
+                float(document_height) - float(viewport_height),
+            )
+            return max(0.0, min(float(scroll), max_scroll))
 
     def schedule_tab_task(self, tab, task_code, *args, clear_pending=False):
         if tab is None:
@@ -5583,7 +5680,7 @@ class BrowserWindow:
         return new_tab
 
     def commit(self, tab, data):
-        """Accept one Main-Thread CommitData snapshot as quickly as possible."""
+        """Accept one Main-Thread snapshot and reconcile optional scroll override."""
         self.measure.time("commit")
         try:
             with self.lock:
@@ -5593,22 +5690,60 @@ class BrowserWindow:
                 old_state = self.committed_states.get(tab)
                 has_new_display_list = data.display_list is not None
 
-                # None means "reuse this tab's previously committed display list".
-                # This keeps scroll-only frames cheap without sharing live Tab state.
+                # None display_list means "reuse this tab's previously committed
+                # paint commands". This is the common Browser-only scroll path.
                 if data.display_list is None:
                     if old_state is None:
                         data.display_list = []
                     else:
                         data.display_list = old_state.display_list
 
-                self.committed_states[tab] = data
                 is_active = tab is self.active_tab
+                scroll_override = data.scroll
 
-                # Inactive tabs are allowed to finish one last frame. Cache their
-                # snapshot for a future tab switch, but never disturb the visible
-                # tab's timer, dirty flags, chrome, or raster state.
+                if is_active:
+                    # Numeric scroll means Main Thread had a stronger decision
+                    # (load/fragment/clamp/fallback). None accepts Browser scroll.
+                    if scroll_override is not None:
+                        self.active_tab_scroll = self.clamp_scroll(
+                            scroll_override,
+                            data.height,
+                            data.tab_height,
+                        )
+
+                    resolved_scroll = self.active_tab_scroll
+                else:
+                    # Background tabs keep their own Browser-side scroll cache.
+                    if tab in self.tab_scrolls:
+                        resolved_scroll = self.tab_scrolls[tab]
+                    elif old_state is not None and old_state.scroll is not None:
+                        resolved_scroll = old_state.scroll
+                    else:
+                        resolved_scroll = 0.0
+
+                    if scroll_override is not None:
+                        resolved_scroll = self.clamp_scroll(
+                            scroll_override,
+                            data.height,
+                            data.tab_height,
+                        )
+
+                resolved_scroll = self.clamp_scroll(
+                    resolved_scroll,
+                    data.height,
+                    data.tab_height,
+                )
+                self.tab_scrolls[tab] = resolved_scroll
+
+                # Stored committed snapshots always contain a concrete scroll for
+                # tab switching/debugging. None is only the wire-level ACK value.
+                data.scroll = resolved_scroll
+                self.committed_states[tab] = data
+
                 if not is_active:
                     return True
+
+                self.active_tab_scroll = resolved_scroll
 
                 chrome_changed = (
                     old_state is None
@@ -5625,9 +5760,7 @@ class BrowserWindow:
                 ):
                     self.discard_address_bar_edit_on_commit = True
 
-                # The animation timer remains non-None from scheduling until the
-                # active tab commits. Clearing it here is the frame gate that
-                # prevents multiple rendering tasks from piling up.
+                # The active frame gate remains closed until Main Thread commits.
                 self.animation_timer = None
 
                 self.needs_raster_and_draw = True
@@ -5675,6 +5808,7 @@ class BrowserWindow:
                         return
 
                     active_tab = self.active_tab
+                    browser_scroll = self.active_tab_scroll
                     # Consume this request, but deliberately keep animation_timer
                     # non-None. commit() clears it only after Main Thread finishes
                     # the frame, providing back pressure.
@@ -5686,7 +5820,7 @@ class BrowserWindow:
                     return
 
                 scheduled = active_tab.task_runner.schedule_task(
-                    Task(active_tab.run_animation_frame)
+                    Task(active_tab.run_animation_frame, browser_scroll)
                 )
                 if not scheduled:
                     with self.lock:
@@ -5717,6 +5851,7 @@ class BrowserWindow:
             # A commit arriving after this lock is released becomes next frame's
             # dirty work and cannot be mixed into the frame being presented now.
             self.frame_state = self.committed_states.get(self.active_tab)
+            self.frame_scroll = self.active_tab_scroll
 
         self.measure.time("raster_and_draw")
         try:
@@ -5742,6 +5877,7 @@ class BrowserWindow:
         finally:
             with self.lock:
                 self.frame_state = None
+                self.frame_scroll = None
             self.measure.stop("raster_and_draw")
 
 
@@ -5846,8 +5982,10 @@ class BrowserWindow:
         return float(surface_y) + float(self.interest_start)
 
     def active_scroll(self):
-        state = self.page_state()
-        return float(state.scroll) if state is not None else 0.0
+        with self.lock:
+            if self.frame_scroll is not None:
+                return float(self.frame_scroll)
+            return float(self.active_tab_scroll)
 
     def document_to_viewport_y(self, document_y):
         """Document coordinate -> page viewport coordinate."""
@@ -5885,7 +6023,7 @@ class BrowserWindow:
         if region_height <= 0:
             return False
 
-        viewport_top = float(state.scroll)
+        viewport_top = self.active_scroll()
         viewport_bottom = min(
             float(self.document_height()),
             viewport_top + float(self.tab_view_height()),
@@ -5916,7 +6054,7 @@ class BrowserWindow:
         # after it. This avoids rerastering again immediately after crossing
         # an old interest-region boundary.
         spare_height = max(0, region_height - viewport_height)
-        desired_start = float(state.scroll) - spare_height / 2.0
+        desired_start = self.active_scroll() - spare_height / 2.0
 
         max_start = max(0, document_height - region_height)
         return int(max(0, min(desired_start, max_start)))
@@ -6015,7 +6153,7 @@ class BrowserWindow:
 
         max_scroll = max(document_height - viewport_height, 1)
         max_bar_y = max(viewport_height - bar_height, 0.0)
-        bar_y = max_bar_y * float(state.scroll) / max_scroll
+        bar_y = max_bar_y * self.active_scroll() / max_scroll
 
         scrollbar = skia.Rect.MakeLTRB(
             self.width - SCROLLBAR_WIDTH,
@@ -6123,29 +6261,65 @@ class BrowserWindow:
 
         self.set_needs_raster_and_draw(chrome=True)
 
-    def handle_down(self):
+    def scroll_active_tab(self, delta):
+        """Browser-Thread fast path for top-level scrolling."""
+        fallback_tab = None
+
         with self.lock:
             tab = self.active_tab
-        if tab is not None:
-            self.schedule_tab_task(tab, tab.scroll_by, SCROLL_STEP)
+            state = self.committed_states.get(tab)
+            if tab is None or state is None or state.document_height <= 0:
+                return False
+
+            if not state.threaded_scroll_safe:
+                # Nested overflow scrolling is encoded in the display list and
+                # remains a Main-Thread operation in this browser.
+                fallback_tab = tab
+            else:
+                old_scroll = self.active_tab_scroll
+                new_scroll = self.clamp_scroll(
+                    old_scroll + delta,
+                    state.document_height,
+                    state.tab_height,
+                )
+
+                if new_scroll == old_scroll:
+                    return False
+
+                self.active_tab_scroll = new_scroll
+                self.tab_scrolls[tab] = new_scroll
+
+                # Re-composite immediately using the Browser Thread's display-list
+                # copy. If the viewport exits the interest cache, raster_and_draw()
+                # upgrades this to a tab raster automatically.
+                self.needs_raster_and_draw = True
+
+                # Main Thread receives this new value asynchronously on its next
+                # animation frame for hit testing and future commits.
+                self.needs_animation_frame = True
+                return True
+
+        if fallback_tab is not None:
+            return self.schedule_tab_task(
+                fallback_tab,
+                fallback_tab.scroll_by,
+                delta,
+            )
+
+        return False
+
+    def handle_down(self):
+        self.scroll_active_tab(SCROLL_STEP)
 
     def handle_up(self):
-        with self.lock:
-            tab = self.active_tab
-        if tab is not None:
-            self.schedule_tab_task(tab, tab.scroll_by, -SCROLL_STEP)
+        self.scroll_active_tab(-SCROLL_STEP)
 
     def handle_mousewheel(self, delta):
         if delta == 0:
             return
 
-        with self.lock:
-            tab = self.active_tab
-        if tab is None:
-            return
-
         scroll_delta = -SCROLL_STEP if delta > 0 else SCROLL_STEP
-        self.schedule_tab_task(tab, tab.scroll_by, scroll_delta)
+        self.scroll_active_tab(scroll_delta)
 
 
     def handle_primary_activation(self, x, y, touch_radius=None):
@@ -6194,7 +6368,7 @@ class BrowserWindow:
         if state is None or not state.url_string:
             return None
 
-        document_y = float(y) + float(state.scroll)
+        document_y = float(y) + self.active_scroll()
         cmd = hit_test_paint_commands(state.display_list, x, document_y)
         if cmd is None or not hasattr(cmd, "layout_object"):
             return None
