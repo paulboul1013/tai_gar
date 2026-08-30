@@ -216,8 +216,13 @@ REFRESH_RATE_SEC = .033
 
 # Small JavaScript bridge snippets executed from main-thread tasks.
 SETTIMEOUT_JS = "runSetTimeout(dukpy.handle)"
+SETINTERVAL_JS = "runSetInterval(dukpy.handle)"
 XHR_ONLOAD_JS = "runXHROnload(dukpy.out, dukpy.handle)"
 RAF_JS = "runRAFHandlers()"
+
+# Set BROWSER_INTERVAL_TIMING=1 to print monotonic interval diagnostics.
+# This is deliberately off by default because normal pages should not spam stdout.
+INTERVAL_TIMING_DEBUG = os.environ.get("BROWSER_INTERVAL_TIMING", "0") == "1"
 
 
 class MeasureTime:
@@ -3299,17 +3304,47 @@ RUNTIME_JS = open("runtime.js").read()
 # small bridge here lets the scheduling implementation travel with browser.py
 # without replacing the rest of the project's DOM/event runtime.
 SCHEDULING_RUNTIME_JS = r"""
+// setTimeout and setInterval share one monotonically increasing handle source.
+// This avoids reusing an ID just because an earlier callback was deleted.
+NEXT_TIMER_HANDLE = 0;
 SET_TIMEOUT_REQUESTS = {};
+SET_INTERVAL_REQUESTS = {};
 
 function setTimeout(callback, time_delta) {
-    var handle = Object.keys(SET_TIMEOUT_REQUESTS).length;
+    var handle = NEXT_TIMER_HANDLE++;
     SET_TIMEOUT_REQUESTS[handle] = callback;
     call_python("setTimeout", handle, time_delta);
+    return handle;
 }
 
 function runSetTimeout(handle) {
     var callback = SET_TIMEOUT_REQUESTS[handle];
-    if (callback) callback();
+    if (callback === undefined) return;
+
+    // A timeout is one-shot. Delete it before invoking user code so the callback
+    // can schedule another timer without retaining the completed callback.
+    delete SET_TIMEOUT_REQUESTS[handle];
+    callback();
+}
+
+function setInterval(callback, time_delta) {
+    var handle = NEXT_TIMER_HANDLE++;
+    SET_INTERVAL_REQUESTS[handle] = callback;
+    call_python("setInterval", handle, time_delta);
+    return handle;
+}
+
+function clearInterval(handle) {
+    // Deleting the JavaScript callback makes already-queued interval tasks safe:
+    // runSetInterval becomes a no-op even if one crossed the queue boundary.
+    delete SET_INTERVAL_REQUESTS[handle];
+    call_python("clearInterval", handle);
+}
+
+function runSetInterval(handle) {
+    var callback = SET_INTERVAL_REQUESTS[handle];
+    if (callback === undefined) return;
+    callback();
 }
 
 RAF_LISTENERS = [];
@@ -3380,6 +3415,11 @@ class JSContext:
         self.node_to_handle = {}
         self.handle_to_node = {}
 
+        # setInterval workers only wake timers and enqueue Tasks. JavaScript still
+        # executes exclusively on this Tab's TaskRunner main thread.
+        self.interval_lock = threading.Lock()
+        self.intervals = {}
+
         self.interp=dukpy.JSInterpreter()
         self.interp.export_function("log",print)
         self.interp.export_function("querySelectorAll",self.querySelectorAll)
@@ -3401,6 +3441,8 @@ class JSContext:
 
         self.interp.export_function("XMLHttpRequest_send",self.XMLHttpRequest_send)
         self.interp.export_function("setTimeout",self.setTimeout)
+        self.interp.export_function("setInterval",self.setInterval)
+        self.interp.export_function("clearInterval",self.clearInterval)
         self.interp.export_function(
             "requestAnimationFrame", self.requestAnimationFrame
         )
@@ -3515,6 +3557,18 @@ class JSContext:
 
         return None
 
+    def _timer_delay_seconds(self, time_delta):
+        """Normalize a JavaScript timer delay to non-negative seconds."""
+        try:
+            delay_ms = float(time_delta)
+        except (TypeError, ValueError):
+            delay_ms = 0.0
+
+        if not math.isfinite(delay_ms):
+            delay_ms = 0.0
+
+        return max(0.0, delay_ms) / 1000.0
+
     def dispatch_settimeout(self, handle):
         if self.discarded:
             return
@@ -3531,9 +3585,175 @@ class JSContext:
             task = Task(self.dispatch_settimeout, handle)
             self.tab.task_runner.schedule_task(task)
 
-        timer = threading.Timer(max(0.0, float(time_delta)) / 1000.0, run_callback)
+        timer = threading.Timer(self._timer_delay_seconds(time_delta), run_callback)
         timer.daemon = True
         timer.start()
+
+    def _interval_is_active(self, handle, state=None):
+        with self.interval_lock:
+            current = self.intervals.get(int(handle))
+            if current is None:
+                return False
+            if state is not None and current is not state:
+                return False
+            return not current["stop_event"].is_set()
+
+    def setInterval(self, handle, time_delta):
+        """Start a repeating timer whose callbacks execute through TaskRunner.
+
+        The worker thread measures deadlines with time.perf_counter(), but never
+        runs JavaScript itself. Each expiration only enqueues a Task, preserving
+        run-to-completion semantics on the Tab's serialized main thread.
+        """
+        handle = int(handle)
+        delay = self._timer_delay_seconds(time_delta)
+
+        # A literal 0 ms repeating worker would spin continuously outside the
+        # JavaScript event loop. One millisecond is a small safety floor for this
+        # toy implementation; ordinary exercise cadences are much larger.
+        delay = max(0.001, delay)
+
+        created_at = time.perf_counter()
+        stop_event = threading.Event()
+        state = {
+            "delay": delay,
+            "created_at": created_at,
+            "stop_event": stop_event,
+            "tick": 0,
+            "last_actual": None,
+        }
+
+        with self.interval_lock:
+            old_state = self.intervals.pop(handle, None)
+            if old_state is not None:
+                old_state["stop_event"].set()
+            self.intervals[handle] = state
+
+        def run_interval():
+            # Keep an absolute ideal timeline: start + N * cadence. The timer
+            # thread may wake late, and the main thread may execute later still;
+            # both effects are visible in the diagnostics below.
+            next_deadline = created_at + delay
+
+            while True:
+                wait = max(0.0, next_deadline - time.perf_counter())
+                if stop_event.wait(wait):
+                    return
+
+                timer_fired_at = time.perf_counter()
+
+                with self.interval_lock:
+                    current = self.intervals.get(handle)
+                    if (
+                        self.discarded
+                        or current is not state
+                        or stop_event.is_set()
+                    ):
+                        return
+                    state["tick"] += 1
+                    tick = state["tick"]
+
+                task = Task(
+                    self.dispatch_setinterval,
+                    handle,
+                    next_deadline,
+                    timer_fired_at,
+                    tick,
+                )
+                if not self.tab.task_runner.schedule_task(task):
+                    self.clearInterval(handle)
+                    return
+
+                next_deadline += delay
+
+        worker = threading.Thread(
+            target=run_interval,
+            name="setInterval-{}".format(handle),
+            daemon=True,
+        )
+        state["thread"] = worker
+        worker.start()
+        return None
+
+    def dispatch_setinterval(self, handle, ideal_deadline, timer_fired_at, tick):
+        """Execute one interval callback on the Tab main thread and measure delay."""
+        if self.discarded:
+            return
+
+        actual_at = time.perf_counter()
+
+        with self.interval_lock:
+            state = self.intervals.get(int(handle))
+            if state is None or state["stop_event"].is_set():
+                return
+
+            last_actual = state["last_actual"]
+            state["last_actual"] = actual_at
+            requested_ms = state["delay"] * 1000.0
+            ideal_elapsed_ms = (ideal_deadline - state["created_at"]) * 1000.0
+            actual_elapsed_ms = (actual_at - state["created_at"]) * 1000.0
+
+        actual_delta_ms = (
+            requested_ms
+            if last_actual is None
+            else (actual_at - last_actual) * 1000.0
+        )
+        cadence_jitter_ms = actual_delta_ms - requested_ms
+        deadline_late_ms = (actual_at - ideal_deadline) * 1000.0
+        queue_delay_ms = (actual_at - timer_fired_at) * 1000.0
+
+        if INTERVAL_TIMING_DEBUG:
+            print(
+                "[setInterval timing] handle={} tick={} requested={:.3f}ms "
+                "ideal_elapsed={:.3f}ms actual_elapsed={:.3f}ms "
+                "actual_delta={:.3f}ms jitter={:+.3f}ms "
+                "deadline_late={:+.3f}ms queue_delay={:.3f}ms".format(
+                    handle,
+                    tick,
+                    requested_ms,
+                    ideal_elapsed_ms,
+                    actual_elapsed_ms,
+                    actual_delta_ms,
+                    cadence_jitter_ms,
+                    deadline_late_ms,
+                    queue_delay_ms,
+                )
+            )
+
+        # clearInterval may have been called while this task was waiting in the
+        # queue, so both Python state and the JS callback map are checked.
+        if not self._interval_is_active(handle, state):
+            return
+
+        try:
+            self.evaljs(SETINTERVAL_JS, handle=handle)
+        except dukpy.JSRuntimeError as e:
+            print("setInterval callback crashed", e)
+
+    def clearInterval(self, handle):
+        """Stop future ticks; already-queued ticks become harmless no-ops."""
+        try:
+            handle = int(handle)
+        except (TypeError, ValueError):
+            return None
+
+        with self.interval_lock:
+            state = self.intervals.pop(handle, None)
+
+        if state is not None:
+            state["stop_event"].set()
+
+        return None
+
+    def discard(self):
+        """Invalidate this document's JavaScript context and stop its intervals."""
+        self.discarded = True
+        with self.interval_lock:
+            states = list(self.intervals.values())
+            self.intervals.clear()
+
+        for state in states:
+            state["stop_event"].set()
 
     def requestAnimationFrame(self):
         if self.discarded:
@@ -4389,7 +4609,6 @@ class CommitData:
         "can_go_forward",
         "width",
         "tab_height",
-        "threaded_scroll_safe",
     )
 
     def __init__(
@@ -4404,15 +4623,12 @@ class CommitData:
         can_go_forward=False,
         width=0,
         tab_height=0,
-        threaded_scroll_safe=False,
     ):
         # Everything needed by the Browser Thread is captured before commit().
         # display_list is intentionally not copied: ownership moves across the
         # commit boundary, and the Tab drops its reference after a successful send.
         self.url = str(url) if url is not None else None
-        # None means "Main Thread accepts the Browser Thread's current scroll".
-        # A numeric value means "Main Thread overrides Browser scroll".
-        self.scroll = None if scroll is None else float(scroll)
+        self.scroll = float(scroll)
         self.height = max(0.0, float(height))
         self.display_list = display_list
         self.title = str(title)
@@ -4421,7 +4637,6 @@ class CommitData:
         self.can_go_forward = bool(can_go_forward)
         self.width = int(width)
         self.tab_height = int(tab_height)
-        self.threaded_scroll_safe = bool(threaded_scroll_safe)
 
     @property
     def url_string(self):
@@ -4442,12 +4657,6 @@ class Tab:
         self.display_list = []
         self.display_list_needs_commit = False
         self.scroll = 0
-        # True means the Main Thread has a more authoritative scroll value than
-        # the Browser Thread (load, fragment jump, clamp, non-threaded fallback).
-        self.scroll_changed_in_tab = False
-        # Pages with nested overflow scrolling keep the existing Main-Thread
-        # scrolling path; ordinary pages can use Browser-Thread scrolling.
-        self.threaded_scroll_safe = False
         self.url=None
         self.nodes=None
         self.document=None
@@ -4480,7 +4689,7 @@ class Tab:
 
     def discard(self):
         if self.js is not None:
-            self.js.discarded = True
+            self.js.discard()
         self.task_runner.clear_tasks()
 
     def is_internal_page(self,url):
@@ -4552,7 +4761,7 @@ class Tab:
 
     def load(self, url,payload=None,add_to_history=True):
         if self.js is not None:
-            self.js.discarded = True
+            self.js.discard()
         self.pending_fragment = None
 
         referrer=self.url #old url
@@ -4560,8 +4769,6 @@ class Tab:
         
         self.url=url # new url to come
         self.scroll=0
-        self.scroll_changed_in_tab = True
-        self.threaded_scroll_safe = False
 
         # every navigation starts as unverified
         self.secure = False
@@ -4803,13 +5010,8 @@ class Tab:
         self.focus= None
         self.set_needs_render()
 
-    def run_animation_frame(self, browser_scroll):
-        """Run one Main-Thread frame and synchronize scroll through commit()."""
-        # Browser Thread owns interactive top-level scrolling. Main Thread adopts
-        # that value unless it already changed scroll for a stronger reason.
-        if not self.scroll_changed_in_tab and browser_scroll is not None:
-            self.scroll = float(browser_scroll)
-
+    def run_animation_frame(self):
+        """Run one frame on the Tab Main Thread and commit its rendering snapshot."""
         # RAF belongs to the frame boundary. render() is intentionally reusable by
         # hit testing and other synchronous Main-Thread paths and therefore does
         # not commit by itself.
@@ -4827,16 +5029,9 @@ class Tab:
             else 0.0
         )
 
-        # Browser Thread already knows the scroll it sent us. Return a number only
-        # when Main Thread changed/clamped scroll and needs to override that value.
-        scroll_override = (
-            self.scroll
-            if self.scroll_changed_in_tab
-            else None
-        )
-
         # Only a display list produced by render/relayout crosses the ownership
-        # boundary. Browser-only top-level scrolling can reuse the old list.
+        # boundary. A scroll-only frame sends None so BrowserWindow can reuse the
+        # previously committed display list.
         committed_display_list = (
             self.display_list
             if self.display_list_needs_commit
@@ -4845,7 +5040,7 @@ class Tab:
 
         data = CommitData(
             self.url,
-            scroll_override,
+            self.scroll,
             document_height,
             committed_display_list,
             title=self.get_title(),
@@ -4854,19 +5049,16 @@ class Tab:
             can_go_forward=self.can_go_forward(),
             width=self.width,
             tab_height=self.tab_height,
-            threaded_scroll_safe=self.threaded_scroll_safe,
         )
 
         accepted = self.browser.commit(self, data)
 
-        if accepted:
-            # Browser now knows any Main-Thread scroll override from this frame.
-            self.scroll_changed_in_tab = False
-
-            if committed_display_list is not None:
-                # Ownership moved only after BrowserWindow accepted this snapshot.
-                self.display_list = None
-                self.display_list_needs_commit = False
+        if accepted and committed_display_list is not None:
+            # Ownership moved only after BrowserWindow accepted this snapshot.
+            # If the window rejects a commit (for example during shutdown), keep
+            # the local list so it is not silently lost.
+            self.display_list = None
+            self.display_list_needs_commit = False
 
         return accepted
 
@@ -4886,11 +5078,6 @@ class Tab:
                 self.pending_fragment = None
                 self.scroll_to_fragment(fragment)
 
-            clamped_scroll = self.clamp_scroll(self.scroll)
-            if clamped_scroll != self.scroll:
-                self.scroll_changed_in_tab = True
-            self.scroll = clamped_scroll
-
             return True
         finally:
             self.browser.measure.stop("render")
@@ -4899,30 +5086,9 @@ class Tab:
         self.document=DocumentLayout(self.nodes,self.width)
         self.document.layout()
 
-        # Keep nested overflow scrolling correct. Its offset is encoded inside
-        # Scroll display-list nodes, so pages containing scrollable containers
-        # fall back to the existing Main-Thread scroll path.
-        self.threaded_scroll_safe = True
-        for layout_object in tree_to_list(self.document, []):
-            if (
-                isinstance(layout_object, BlockLayout)
-                and layout_object.is_scrollable()
-            ):
-                self.threaded_scroll_safe = False
-                break
-
         self.display_list=[]
         paint_tree(self.document,self.display_list)
         self.display_list_needs_commit = True
-
-    def clamp_scroll(self, scroll):
-        """Clamp Main-Thread scroll against the current document geometry."""
-        if self.document is None:
-            return 0.0
-
-        height = math.ceil(self.document.height + 2 * VSTEP)
-        max_scroll = max(0.0, float(height - self.tab_height))
-        return max(0.0, min(float(scroll), max_scroll))
 
     def scroll_to_fragment(self,fragment):
         if not fragment or not self.document or not self.nodes:
@@ -4968,10 +5134,11 @@ class Tab:
             return
 
         target_y = min(candidate_y)
-        new_scroll = self.clamp_scroll(target_y)
-        if new_scroll != self.scroll:
-            self.scroll = new_scroll
-            self.scroll_changed_in_tab = True
+        max_y = max(
+            self.document.height + 2 * VSTEP - self.tab_height,
+            0,
+        )
+        self.scroll = max(0, min(target_y, max_y))
 
     def navigate_to_fragment(self,fragment,add_to_history=True):
         url=self.url.with_fragment(fragment)
@@ -5035,12 +5202,12 @@ class Tab:
             return changed
 
         old_scroll = self.scroll
-        self.scroll = self.clamp_scroll(self.scroll + delta)
+        max_y = max(self.document.height + 2 * VSTEP - self.tab_height, 0)
+        self.scroll = max(0, min(self.scroll + delta, max_y))
 
         if self.scroll != old_scroll:
-            # This is the non-threaded fallback path (for example nested overflow
-            # pages), so Main Thread becomes authoritative for top-level scroll.
-            self.scroll_changed_in_tab = True
+            # Scroll state crosses threads only at a frame boundary. No new display
+            # list is needed for ordinary page scrolling.
             self.browser.set_needs_animation_frame(self)
             return True
 
@@ -5454,12 +5621,6 @@ class BrowserWindow:
         self.committed_states = {}
         self.frame_state = None
 
-        # Browser Thread owns the scroll applied to the currently displayed copy
-        # of the display list. Main Thread keeps a separate Tab.scroll.
-        self.active_tab_scroll = 0.0
-        self.tab_scrolls = {}
-        self.frame_scroll = None
-
         self.animation_timer = None
         self.needs_animation_frame = True
         self.needs_raster_and_draw = False
@@ -5571,26 +5732,7 @@ class BrowserWindow:
                 self.needs_animation_frame = True
                 return
 
-            # Preserve the Browser Thread's latest scroll for the tab we leave.
-            if self.active_tab is not None:
-                self.tab_scrolls[self.active_tab] = self.active_tab_scroll
-
             self.active_tab = tab
-
-            cached_state = self.committed_states.get(tab)
-            cached_scroll = self.tab_scrolls.get(
-                tab,
-                cached_state.scroll if cached_state is not None else 0.0,
-            )
-            if cached_state is not None:
-                cached_scroll = self.clamp_scroll(
-                    cached_scroll,
-                    cached_state.document_height,
-                    cached_state.tab_height,
-                )
-
-            self.active_tab_scroll = float(cached_scroll)
-            self.tab_scrolls[tab] = self.active_tab_scroll
             self.needs_animation_frame = True
 
             # A timer may belong to the previously-active tab. Release that frame
@@ -5605,25 +5747,6 @@ class BrowserWindow:
             self.needs_raster_and_draw = True
             self.needs_chrome_raster = True
             self.needs_tab_raster = True
-
-    def clamp_scroll(self, scroll, document_height=None, viewport_height=None):
-        """Clamp a Browser-Thread scroll against committed page geometry."""
-        with self.lock:
-            if document_height is None:
-                state = self.committed_states.get(self.active_tab)
-                if state is None:
-                    return 0.0
-                document_height = state.document_height
-                viewport_height = state.tab_height
-
-            if viewport_height is None or viewport_height <= 0:
-                viewport_height = max(1, self.height - self.chrome.bottom)
-
-            max_scroll = max(
-                0.0,
-                float(document_height) - float(viewport_height),
-            )
-            return max(0.0, min(float(scroll), max_scroll))
 
     def schedule_tab_task(self, tab, task_code, *args, clear_pending=False):
         if tab is None:
@@ -5680,7 +5803,7 @@ class BrowserWindow:
         return new_tab
 
     def commit(self, tab, data):
-        """Accept one Main-Thread snapshot and reconcile optional scroll override."""
+        """Accept one Main-Thread CommitData snapshot as quickly as possible."""
         self.measure.time("commit")
         try:
             with self.lock:
@@ -5690,60 +5813,22 @@ class BrowserWindow:
                 old_state = self.committed_states.get(tab)
                 has_new_display_list = data.display_list is not None
 
-                # None display_list means "reuse this tab's previously committed
-                # paint commands". This is the common Browser-only scroll path.
+                # None means "reuse this tab's previously committed display list".
+                # This keeps scroll-only frames cheap without sharing live Tab state.
                 if data.display_list is None:
                     if old_state is None:
                         data.display_list = []
                     else:
                         data.display_list = old_state.display_list
 
-                is_active = tab is self.active_tab
-                scroll_override = data.scroll
-
-                if is_active:
-                    # Numeric scroll means Main Thread had a stronger decision
-                    # (load/fragment/clamp/fallback). None accepts Browser scroll.
-                    if scroll_override is not None:
-                        self.active_tab_scroll = self.clamp_scroll(
-                            scroll_override,
-                            data.height,
-                            data.tab_height,
-                        )
-
-                    resolved_scroll = self.active_tab_scroll
-                else:
-                    # Background tabs keep their own Browser-side scroll cache.
-                    if tab in self.tab_scrolls:
-                        resolved_scroll = self.tab_scrolls[tab]
-                    elif old_state is not None and old_state.scroll is not None:
-                        resolved_scroll = old_state.scroll
-                    else:
-                        resolved_scroll = 0.0
-
-                    if scroll_override is not None:
-                        resolved_scroll = self.clamp_scroll(
-                            scroll_override,
-                            data.height,
-                            data.tab_height,
-                        )
-
-                resolved_scroll = self.clamp_scroll(
-                    resolved_scroll,
-                    data.height,
-                    data.tab_height,
-                )
-                self.tab_scrolls[tab] = resolved_scroll
-
-                # Stored committed snapshots always contain a concrete scroll for
-                # tab switching/debugging. None is only the wire-level ACK value.
-                data.scroll = resolved_scroll
                 self.committed_states[tab] = data
+                is_active = tab is self.active_tab
 
+                # Inactive tabs are allowed to finish one last frame. Cache their
+                # snapshot for a future tab switch, but never disturb the visible
+                # tab's timer, dirty flags, chrome, or raster state.
                 if not is_active:
                     return True
-
-                self.active_tab_scroll = resolved_scroll
 
                 chrome_changed = (
                     old_state is None
@@ -5760,7 +5845,9 @@ class BrowserWindow:
                 ):
                     self.discard_address_bar_edit_on_commit = True
 
-                # The active frame gate remains closed until Main Thread commits.
+                # The animation timer remains non-None from scheduling until the
+                # active tab commits. Clearing it here is the frame gate that
+                # prevents multiple rendering tasks from piling up.
                 self.animation_timer = None
 
                 self.needs_raster_and_draw = True
@@ -5808,7 +5895,6 @@ class BrowserWindow:
                         return
 
                     active_tab = self.active_tab
-                    browser_scroll = self.active_tab_scroll
                     # Consume this request, but deliberately keep animation_timer
                     # non-None. commit() clears it only after Main Thread finishes
                     # the frame, providing back pressure.
@@ -5820,7 +5906,7 @@ class BrowserWindow:
                     return
 
                 scheduled = active_tab.task_runner.schedule_task(
-                    Task(active_tab.run_animation_frame, browser_scroll)
+                    Task(active_tab.run_animation_frame)
                 )
                 if not scheduled:
                     with self.lock:
@@ -5851,7 +5937,6 @@ class BrowserWindow:
             # A commit arriving after this lock is released becomes next frame's
             # dirty work and cannot be mixed into the frame being presented now.
             self.frame_state = self.committed_states.get(self.active_tab)
-            self.frame_scroll = self.active_tab_scroll
 
         self.measure.time("raster_and_draw")
         try:
@@ -5877,7 +5962,6 @@ class BrowserWindow:
         finally:
             with self.lock:
                 self.frame_state = None
-                self.frame_scroll = None
             self.measure.stop("raster_and_draw")
 
 
@@ -5982,10 +6066,8 @@ class BrowserWindow:
         return float(surface_y) + float(self.interest_start)
 
     def active_scroll(self):
-        with self.lock:
-            if self.frame_scroll is not None:
-                return float(self.frame_scroll)
-            return float(self.active_tab_scroll)
+        state = self.page_state()
+        return float(state.scroll) if state is not None else 0.0
 
     def document_to_viewport_y(self, document_y):
         """Document coordinate -> page viewport coordinate."""
@@ -6023,7 +6105,7 @@ class BrowserWindow:
         if region_height <= 0:
             return False
 
-        viewport_top = self.active_scroll()
+        viewport_top = float(state.scroll)
         viewport_bottom = min(
             float(self.document_height()),
             viewport_top + float(self.tab_view_height()),
@@ -6054,7 +6136,7 @@ class BrowserWindow:
         # after it. This avoids rerastering again immediately after crossing
         # an old interest-region boundary.
         spare_height = max(0, region_height - viewport_height)
-        desired_start = self.active_scroll() - spare_height / 2.0
+        desired_start = float(state.scroll) - spare_height / 2.0
 
         max_start = max(0, document_height - region_height)
         return int(max(0, min(desired_start, max_start)))
@@ -6153,7 +6235,7 @@ class BrowserWindow:
 
         max_scroll = max(document_height - viewport_height, 1)
         max_bar_y = max(viewport_height - bar_height, 0.0)
-        bar_y = max_bar_y * self.active_scroll() / max_scroll
+        bar_y = max_bar_y * float(state.scroll) / max_scroll
 
         scrollbar = skia.Rect.MakeLTRB(
             self.width - SCROLLBAR_WIDTH,
@@ -6261,65 +6343,29 @@ class BrowserWindow:
 
         self.set_needs_raster_and_draw(chrome=True)
 
-    def scroll_active_tab(self, delta):
-        """Browser-Thread fast path for top-level scrolling."""
-        fallback_tab = None
-
+    def handle_down(self):
         with self.lock:
             tab = self.active_tab
-            state = self.committed_states.get(tab)
-            if tab is None or state is None or state.document_height <= 0:
-                return False
-
-            if not state.threaded_scroll_safe:
-                # Nested overflow scrolling is encoded in the display list and
-                # remains a Main-Thread operation in this browser.
-                fallback_tab = tab
-            else:
-                old_scroll = self.active_tab_scroll
-                new_scroll = self.clamp_scroll(
-                    old_scroll + delta,
-                    state.document_height,
-                    state.tab_height,
-                )
-
-                if new_scroll == old_scroll:
-                    return False
-
-                self.active_tab_scroll = new_scroll
-                self.tab_scrolls[tab] = new_scroll
-
-                # Re-composite immediately using the Browser Thread's display-list
-                # copy. If the viewport exits the interest cache, raster_and_draw()
-                # upgrades this to a tab raster automatically.
-                self.needs_raster_and_draw = True
-
-                # Main Thread receives this new value asynchronously on its next
-                # animation frame for hit testing and future commits.
-                self.needs_animation_frame = True
-                return True
-
-        if fallback_tab is not None:
-            return self.schedule_tab_task(
-                fallback_tab,
-                fallback_tab.scroll_by,
-                delta,
-            )
-
-        return False
-
-    def handle_down(self):
-        self.scroll_active_tab(SCROLL_STEP)
+        if tab is not None:
+            self.schedule_tab_task(tab, tab.scroll_by, SCROLL_STEP)
 
     def handle_up(self):
-        self.scroll_active_tab(-SCROLL_STEP)
+        with self.lock:
+            tab = self.active_tab
+        if tab is not None:
+            self.schedule_tab_task(tab, tab.scroll_by, -SCROLL_STEP)
 
     def handle_mousewheel(self, delta):
         if delta == 0:
             return
 
+        with self.lock:
+            tab = self.active_tab
+        if tab is None:
+            return
+
         scroll_delta = -SCROLL_STEP if delta > 0 else SCROLL_STEP
-        self.scroll_active_tab(scroll_delta)
+        self.schedule_tab_task(tab, tab.scroll_by, scroll_delta)
 
 
     def handle_primary_activation(self, x, y, touch_radius=None):
@@ -6368,7 +6414,7 @@ class BrowserWindow:
         if state is None or not state.url_string:
             return None
 
-        document_y = float(y) + self.active_scroll()
+        document_y = float(y) + float(state.scroll)
         cmd = hit_test_paint_commands(state.display_list, x, document_y)
         if cmd is None or not hasattr(cmd, "layout_object"):
             return None
