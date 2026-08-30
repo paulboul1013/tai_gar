@@ -373,22 +373,55 @@ class MeasureTime:
 
 
 class Task:
-    """A deferred function call plus its arguments."""
-    def __init__(self, task_code, *args):
+    """A deferred function call plus its arguments, with task-level tracing."""
+    def __init__(self, task_code, *args, trace_name=None):
         self.task_code = task_code
         self.args = args
+        self.trace_name = trace_name or self._default_trace_name(task_code)
 
-    def run(self):
+    @staticmethod
+    def _default_trace_name(task_code):
+        """Return a stable, human-readable name for Perfetto/Chrome traces."""
+        if task_code is None:
+            return "Task.<empty>"
+
+        # __qualname__ keeps the owning class, which is more informative than
+        # __name__ alone: JSContext.dispatch_setinterval instead of
+        # dispatch_setinterval, Tab.run_animation_frame instead of
+        # run_animation_frame, and so on.
+        name = (
+            getattr(task_code, "__qualname__", None)
+            or getattr(task_code, "__name__", None)
+        )
+
+        if not name:
+            name = task_code.__class__.__name__
+
+        return "Task: {}".format(name)
+
+    def run(self, measure=None):
         task_code = self.task_code
         args = self.args
+        trace_name = self.trace_name
+        tracing = task_code is not None and measure is not None
+
+        if tracing:
+            measure.time(trace_name)
+
         try:
             if task_code is not None:
                 return task_code(*args)
         finally:
+            # Always close the task trace, even when task_code raises. This keeps
+            # Perfetto's begin/end stack balanced and makes failed tasks visible.
+            if tracing:
+                measure.stop(trace_name)
+
             # Release references after completion so completed tasks do not keep
             # pages, callbacks, or large response objects alive unnecessarily.
             self.task_code = None
             self.args = None
+            self.trace_name = None
 
 
 class TaskRunner:
@@ -439,7 +472,9 @@ class TaskRunner:
                 task = self.tasks.pop(0)
 
             # Never hold the queue lock while arbitrary page/JavaScript work runs.
-            task.run()
+            # Task.run wraps the complete task in a named trace span. Existing
+            # javascript/render/commit events remain nested inside that task.
+            task.run(self.tab.browser.measure)
 
     def clear_pending_tasks(self):
         with self.condition:
