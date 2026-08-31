@@ -1795,12 +1795,13 @@ class BrowserApp:
                 while sdl2.SDL_PollEvent(ctypes.byref(event)) != 0:
                     self.dispatch_event(event)
 
-                # Tab TaskRunner queues are now consumed by their own dedicated
-                # main threads. The browser thread only composites/presents frames
-                # and schedules future animation-frame tasks.
+                # Arm the next Main-Thread animation deadline before raster/draw.
+                # BrowserWindow.raster_and_draw() latches the current CommitData
+                # snapshot, so the Browser Thread may raster frame N while the Tab
+                # Main Thread independently builds frame N+1.
                 for browser_window in list(self.windows):
-                    browser_window.raster_and_draw()
                     browser_window.schedule_animation_frame()
+                    browser_window.raster_and_draw()
         finally:
             for browser_window in list(self.windows):
                 browser_window.close()
@@ -5657,6 +5658,13 @@ class BrowserWindow:
         self.frame_state = None
 
         self.animation_timer = None
+
+        # Chapter 12-3: animation frames follow one absolute monotonic clock.
+        # This stores the deadline after the one currently being scheduled. Keeping
+        # the grid independent of frame completion time prevents per-frame work from
+        # being added to REFRESH_RATE_SEC and causing cadence drift.
+        self.next_frame_deadline = None
+
         self.needs_animation_frame = True
         self.needs_raster_and_draw = False
         self.needs_chrome_raster = False
@@ -5721,6 +5729,7 @@ class BrowserWindow:
             if self.animation_timer is not None:
                 self.animation_timer.cancel()
                 self.animation_timer = None
+            self.next_frame_deadline = None
 
         # Wake every sleeping Tab main thread and ask it to terminate.
         for tab in tabs:
@@ -5775,6 +5784,10 @@ class BrowserWindow:
             if self.animation_timer is not None:
                 self.animation_timer.cancel()
                 self.animation_timer = None
+
+            # A newly active tab starts a fresh frame-clock epoch instead of
+            # inheriting the previous tab's absolute deadline grid.
+            self.next_frame_deadline = None
 
             # The existing surface belongs to the previous active tab.
             self.tab_surface = None
@@ -5912,16 +5925,36 @@ class BrowserWindow:
             self.needs_animation_frame = True
 
     def schedule_animation_frame(self):
-        """Schedule at most one in-flight animation frame for this window."""
+        """Schedule one Main-Thread frame on an absolute monotonic 33 ms grid."""
+        timer = None
+
         with self.lock:
             if (
                 self._closed
                 or self.active_tab is None
                 or not self.needs_animation_frame
                 or self.animation_timer is not None
-                or self.needs_raster_and_draw
             ):
                 return
+
+            now = time.perf_counter()
+
+            # The first requested frame establishes the clock. Afterwards, deadlines
+            # advance from the previous absolute deadline, never from frame completion
+            # time. If work ran past one or more deadlines, skip those missed slots
+            # instead of queueing a burst of catch-up animation frames.
+            if self.next_frame_deadline is None:
+                deadline = now + REFRESH_RATE_SEC
+            else:
+                deadline = self.next_frame_deadline
+                if deadline <= now:
+                    missed = math.floor(
+                        (now - deadline) / REFRESH_RATE_SEC
+                    ) + 1
+                    deadline += missed * REFRESH_RATE_SEC
+
+            delay = max(0.0, deadline - now)
+            self.next_frame_deadline = deadline + REFRESH_RATE_SEC
 
             def callback():
                 with self.lock:
@@ -5932,7 +5965,8 @@ class BrowserWindow:
                     active_tab = self.active_tab
                     # Consume this request, but deliberately keep animation_timer
                     # non-None. commit() clears it only after Main Thread finishes
-                    # the frame, providing back pressure.
+                    # the frame, providing back pressure so only one frame task is
+                    # in flight for this window.
                     self.needs_animation_frame = False
 
                 if active_tab is None:
@@ -5947,11 +5981,13 @@ class BrowserWindow:
                     with self.lock:
                         self.animation_timer = None
 
-            timer = threading.Timer(REFRESH_RATE_SEC, callback)
+            timer = threading.Timer(delay, callback)
             timer.daemon = True
             self.animation_timer = timer
 
-        # Starting a Timer can create a thread, so do it after releasing Browser lock.
+        # Arming the deadline before Browser Thread raster/draw is intentional:
+        # when the timer fires, the Tab Main Thread can build frame N+1 while the
+        # Browser Thread is still rasterizing the latched CommitData for frame N.
         timer.start()
 
     def raster_and_draw(self):
