@@ -227,6 +227,18 @@ RAF_JS = "runRAFHandlers()"
 INTERVAL_TIMING_DEBUG = os.environ.get("BROWSER_INTERVAL_TIMING", "0") == "1"
 
 
+# The main document still loads synchronously because its HTML must be parsed
+# before subresource URLs are known. Once discovered, external scripts and
+# stylesheets are fetched in parallel. BROWSER_THREADED_LOADING=0 preserves
+# the old serial network behavior for A/B performance tests.
+THREADED_LOADING = (
+    os.environ.get("BROWSER_THREADED_LOADING", "1")
+    .strip()
+    .casefold()
+    not in ["0", "false", "no", "off"]
+)
+
+
 # Chapter 12-4 scheduler policy.
 #
 # Priority is the default exercise behavior. FIFO remains available as an A/B
@@ -5049,6 +5061,199 @@ class Tab:
         self.task_runner.clear_pending_tasks()
         return self.load(url, payload, add_to_history)
 
+    def _collect_page_resources(self, page_url):
+        """Collect external subresources and inline styles in DOM source order.
+
+        External script/style entries receive a URL and are fetched by worker
+        threads. Inline <style> entries already contain their body and only
+        participate in the ordered processing phase.
+
+        Keeping one source-ordered list is important: network completion order
+        must not change CSS cascade order or script scheduling order.
+        """
+        resources = []
+
+        for node in tree_to_list(self.nodes, []):
+            kind = None
+            source = None
+            resource_url = None
+            body = None
+
+            if (
+                isinstance(node, Element)
+                and node.tag == "script"
+                and "src" in node.attributes
+            ):
+                kind = "script"
+                source = node.attributes["src"]
+                resource_url = page_url.resolve(source)
+
+            elif (
+                isinstance(node, Element)
+                and node.tag == "link"
+                and node.attributes.get("rel") == "stylesheet"
+                and "href" in node.attributes
+            ):
+                kind = "style"
+                source = node.attributes["href"]
+                resource_url = page_url.resolve(source)
+
+            elif isinstance(node, Element) and node.tag == "style":
+                kind = "inline_style"
+                source = "<style>"
+                body = style_tag_text(node)
+
+            else:
+                continue
+
+            # Malformed/unresolvable external URLs behave like the old loader:
+            # ignore that resource and continue loading the rest of the page.
+            if kind in ["script", "style"] and resource_url is None:
+                continue
+
+            if kind in ["script", "style"] and not self.allowed_request(resource_url):
+                print(
+                    "Blocked {} {}".format(kind, source),
+                    "due to CSP",
+                )
+                continue
+
+            resources.append({
+                "index": len(resources),
+                "kind": kind,
+                "source": source,
+                "url": resource_url,
+                "headers": None,
+                "body": body,
+                "error": None,
+            })
+
+        return resources
+
+    def _fetch_one_page_resource(self, resource, page_url):
+        """Fetch one external resource without mutating DOM/CSS/JS page state."""
+        measure = self.browser.measure
+        trace_name = "resource_fetch[{}]: {}".format(
+            resource["index"],
+            resource["kind"],
+        )
+
+        # Each loader gets a distinct trace lane/name, making real overlap visible
+        # in Perfetto while MeasureTime remains shared and thread-safe.
+        if hasattr(measure, "thread_name"):
+            measure.thread_name(threading.current_thread().name)
+
+        measure.time(trace_name)
+        try:
+            resource["headers"], resource["body"] = resource["url"].request(
+                page_url,
+                referrer_policy=self.referrer_policy,
+            )
+        except Exception as error:
+            # Store failure in this resource's private result slot. Processing later
+            # skips only this item; one failed request must not kill sibling workers.
+            resource["error"] = error
+        finally:
+            measure.stop(trace_name)
+
+    def _fetch_page_resources(self, resources, page_url):
+        """Fetch every external script/style, in parallel when 12-5 is enabled."""
+        external = [
+            resource
+            for resource in resources
+            if resource["kind"] in ["script", "style"]
+        ]
+
+        if not external:
+            return
+
+        measure = self.browser.measure
+        mode = "threaded" if THREADED_LOADING else "serial"
+        batch_started = time.perf_counter()
+
+        if hasattr(measure, "instant"):
+            measure.instant("resource_fetch_batch_start", {
+                "mode": mode,
+                "count": len(external),
+            })
+
+        if THREADED_LOADING:
+            # IMPORTANT: start ALL workers first. Calling join() inside this loop
+            # would accidentally preserve the old serial-loading behavior.
+            threads = []
+            for resource in external:
+                thread = threading.Thread(
+                    target=self._fetch_one_page_resource,
+                    args=(resource, page_url),
+                    name="Loader {} {}".format(
+                        resource["kind"],
+                        resource["index"],
+                    ),
+                    daemon=True,
+                )
+                threads.append(thread)
+
+            for thread in threads:
+                thread.start()
+
+            # Only after every request has been sent do we wait for completion.
+            # join() blocks this Tab's Main Thread, but all network I/O overlaps.
+            for thread in threads:
+                thread.join()
+
+        else:
+            # A/B baseline matching the previous serial request behavior.
+            for resource in external:
+                self._fetch_one_page_resource(resource, page_url)
+
+        if hasattr(measure, "instant"):
+            measure.instant("resource_fetch_batch_done", {
+                "mode": mode,
+                "count": len(external),
+                "elapsed_ms": (
+                    time.perf_counter() - batch_started
+                ) * 1000.0,
+            })
+
+    def _process_page_resources(self, resources):
+        """Apply fetched results strictly in the original DOM source order."""
+        rules = DEFAULT_STYLE_SHEET.copy()
+
+        # resources was constructed by one pre-order DOM traversal. Iterating this
+        # exact list restores deterministic processing even if worker completion
+        # order was style-2, script-1, style-1, ...
+        for resource in resources:
+            kind = resource["kind"]
+
+            if resource["error"] is not None:
+                continue
+
+            if hasattr(self.browser.measure, "instant"):
+                self.browser.measure.instant("resource_process", {
+                    "index": resource["index"],
+                    "kind": kind,
+                    "source": str(resource["source"]),
+                })
+
+            if kind == "script":
+                # JavaScript still executes only on this Tab's serialized Main Thread.
+                # Tasks are enqueued here in source order after all network joins.
+                task = Task(
+                    self.js.run,
+                    resource["source"],
+                    resource["body"],
+                    priority=TaskPriority.NORMAL,
+                    source="load:script",
+                )
+                self.task_runner.schedule_task(task)
+
+            elif kind in ["style", "inline_style"]:
+                # External and inline styles now share one DOM-ordered stream, so
+                # parallel completion cannot reorder the CSS cascade.
+                rules.extend(CSSParser(resource["body"]).parse())
+
+        return rules
+
     def load(self, url,payload=None,add_to_history=True):
         if self.js is not None:
             self.js.discard()
@@ -5056,7 +5261,7 @@ class Tab:
 
         referrer=self.url #old url
         referrer_policy=self.referrer_policy #old url referrer policy
-        
+
         self.url=url # new url to come
         self.scroll=0
 
@@ -5076,17 +5281,20 @@ class Tab:
             self.history.append(url)
             self.history_index+=1
 
-        
-
         if self.is_internal_page(url): # bookmarks page
             headers = {}
             body = self.request_internal_page(url)
             self.nodes=HTMLParser(body).parse()
-        
+
         else: # normal web page
             try:
-                # request with referrer and referrer policy
-                headers,body = url.request(referrer,payload,referrer_policy=referrer_policy)
+                # The main document remains synchronous. Its HTML must arrive before
+                # the browser can discover the script/style URLs to parallelize.
+                headers,body = url.request(
+                    referrer,
+                    payload,
+                    referrer_policy=referrer_policy,
+                )
 
                 # request finished without certificate error
                 self.secure=(url.scheme=="https")
@@ -5102,19 +5310,15 @@ class Tab:
                 self.secure = False
 
             if url.view_source:
-                # execute syntax highlight: make raw html turn into highlighted html
                 highlighted_body=ViewSourceParser(body).handle_view_source()
-                # after highlight html feed standard Parser make DOM tree
                 self.nodes=HTMLParser(highlighted_body).parse()
-            
             else:
                 self.nodes=HTMLParser(body).parse()
-
 
         # read new page referrer-policy
         self.referrer_policy = normalize_referrer_policy(headers)
 
-        #CSP(content-security-policy)
+        # CSP(content-security-policy)
         self.allowed_origins = None
 
         if "content-security-policy" in headers:
@@ -5129,80 +5333,17 @@ class Tab:
                     self.allowed_origins.append(
                         URL(origin).origin()
                     )
-            
-        scripts = [
-            node.attributes["src"]
-            for node in tree_to_list(self.nodes,[])
-            if isinstance(node,Element)
-            and node.tag=="script"
-            and "src" in node.attributes
-        ]
 
         self.js = JSContext(self)
-        
-        for script in scripts:
-            script_url = url.resolve(script)
 
-            if script_url is None:
-                continue
-
-            if not self.allowed_request(script_url):
-                print(
-                    "Blocked script",
-                    script,
-                    "du to CSP"
-                )
-                continue
-
-            try:
-                headers, body = script_url.request(url,referrer_policy=self.referrer_policy)
-            except Exception:
-                continue
-
-            task = Task(self.js.run, script, body)
-            self.task_runner.schedule_task(task)
-
-
-        rules=DEFAULT_STYLE_SHEET.copy()
-
-        links = [node.attributes["href"]
-                for node in tree_to_list(self.nodes,[])
-                if isinstance(node,Element)
-                and node.tag=="link"
-                and node.attributes.get("rel")=="stylesheet"
-                and "href" in node.attributes]
-
-        for link in links:
-            style_url=url.resolve(link)
-
-            if style_url is None:
-                continue
-
-            if not self.allowed_request(style_url):
-                print(
-                    "Blocked style",
-                    link,
-                    "due to SCP"
-                )
-                continue
-
-            try:
-                headers, body = style_url.request(url,referrer_policy=self.referrer_policy)
-            except Exception:
-                continue
-                
-            rules.extend(CSSParser(body).parse())
-
-        # deal with <style>..</style> inline stylesheet
-        style_nodes = [node
-                      for node in tree_to_list(self.nodes,[])
-                      if isinstance(node,Element)
-                      and node.tag=="style"]
-
-        for style_node in style_nodes:
-            css_text=style_tag_text(style_node)
-            rules.extend(CSSParser(css_text).parse())
-
+        # Chapter 12-5:
+        #   1. discover external scripts/styles once, in DOM source order;
+        #   2. send every allowed network request in parallel;
+        #   3. join all workers;
+        #   4. process the completed bodies in original source order.
+        resources = self._collect_page_resources(url)
+        self._fetch_page_resources(resources, url)
+        rules = self._process_page_resources(resources)
 
         self.rules=sorted(rules,key=cascade_priority)
 
@@ -5218,6 +5359,7 @@ class Tab:
         # self.display_list=[]
         # paint_tree(self.document,self.display_list)
         # self.draw()
+
 
     def allowed_request(self,url):
         return (
