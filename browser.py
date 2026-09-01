@@ -16,6 +16,8 @@ import skia
 import ctypes
 import threading
 import json
+from collections import deque
+from enum import IntEnum
 
 # emolji cache
 # key: character (e.g. "😀")
@@ -225,6 +227,49 @@ RAF_JS = "runRAFHandlers()"
 INTERVAL_TIMING_DEBUG = os.environ.get("BROWSER_INTERVAL_TIMING", "0") == "1"
 
 
+# Chapter 12-4 scheduler policy.
+#
+# Priority is the default exercise behavior. FIFO remains available as an A/B
+# baseline so the exact same stress page can compare the two schedulers.
+SCHEDULER_MODE = os.environ.get("BROWSER_SCHEDULER", "priority").strip().casefold()
+if SCHEDULER_MODE not in ["fifo", "priority"]:
+    SCHEDULER_MODE = "priority"
+
+def _scheduler_env_float(name, default, minimum=0.0):
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = float(default)
+    if not math.isfinite(value):
+        value = float(default)
+    return max(float(minimum), value)
+
+def _scheduler_env_int(name, default, minimum=1):
+    try:
+        value = int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        value = int(default)
+    return max(int(minimum), value)
+
+# A low-priority timer that has waited this long becomes a must-run candidate.
+SCHEDULER_STARVATION_SEC = _scheduler_env_float(
+    "BROWSER_SCHEDULER_STARVATION_MS", 120.0
+) / 1000.0
+
+# Even without hard aging, periodically grant one low-priority timer a slot.
+SCHEDULER_MAX_FOREGROUND_BURST = _scheduler_env_int(
+    "BROWSER_SCHEDULER_FOREGROUND_BURST", 8
+)
+
+# Do not start a new low-priority JavaScript timer this close to an armed frame.
+# Tasks are run-to-completion, so a timer started inside this guard could cross
+# the 33 ms frame deadline before the rendering task can run.
+SCHEDULER_FRAME_GUARD_SEC = _scheduler_env_float(
+    "BROWSER_SCHEDULER_FRAME_GUARD_MS", 3.0
+) / 1000.0
+
+
+
 class MeasureTime:
     """Write thread-aware Chrome/Perfetto JSON trace events."""
     def __init__(self, filename="browser.trace"):
@@ -335,6 +380,20 @@ class MeasureTime:
             "tid": threading.get_ident(),
         })
 
+    def instant(self, name, args=None):
+        """Write one thread-scoped instant event for scheduler diagnostics."""
+        self.ensure_thread_name()
+        self.write_event({
+            "ph": "i",
+            "s": "t",
+            "cat": "_",
+            "name": str(name),
+            "ts": self.timestamp_us(),
+            "pid": 1,
+            "tid": threading.get_ident(),
+            "args": dict(args or {}),
+        })
+
     def finish(self):
         """Finish a valid trace while preserving names for all known threads."""
         with self.lock:
@@ -372,12 +431,34 @@ class MeasureTime:
             self.finished = True
 
 
+class TaskPriority(IntEnum):
+    """Chapter 12-4 task classes; lower values are more urgent."""
+    RENDER = 0
+    INPUT = 1
+    NORMAL = 2
+    JS_TIMER = 3
+
+
 class Task:
-    """A deferred function call plus its arguments, with task-level tracing."""
-    def __init__(self, task_code, *args, trace_name=None):
+    """A deferred function call plus scheduling metadata and task-level tracing."""
+    def __init__(
+        self,
+        task_code,
+        *args,
+        trace_name=None,
+        priority=TaskPriority.NORMAL,
+        source=None,
+    ):
         self.task_code = task_code
         self.args = args
         self.trace_name = trace_name or self._default_trace_name(task_code)
+
+        # Priority is assigned explicitly by the producer that knows why this task
+        # exists. TaskRunner stamps enqueue time/sequence at the actual queue boundary.
+        self.priority = TaskPriority(priority)
+        self.source = source or self.trace_name
+        self.enqueued_at = None
+        self.sequence = None
 
     @staticmethod
     def _default_trace_name(task_code):
@@ -417,21 +498,35 @@ class Task:
             if tracing:
                 measure.stop(trace_name)
 
-            # Release references after completion so completed tasks do not keep
-            # pages, callbacks, or large response objects alive unnecessarily.
+            # Release potentially large callback/page references after completion.
             self.task_code = None
             self.args = None
             self.trace_name = None
+            self.source = None
 
 
 class TaskRunner:
-    """One Tab's task queue plus the Tab's dedicated main thread."""
+    """One Tab's multi-level priority queues plus its dedicated main thread."""
+
+    PRIORITY_ORDER = (
+        TaskPriority.RENDER,
+        TaskPriority.INPUT,
+        TaskPriority.NORMAL,
+        TaskPriority.JS_TIMER,
+    )
+
     def __init__(self, tab):
         self.tab = tab
-        self.tasks = []
+        self.queues = {
+            priority: deque()
+            for priority in self.PRIORITY_ORDER
+        }
         self.condition = threading.Condition()
         self.needs_quit = False
         self.started = False
+        self.sequence_counter = 0
+        self.foreground_burst = 0
+        self.scheduler_mode = SCHEDULER_MODE
         self.main_thread = threading.Thread(
             target=self.run,
             name="Main thread",
@@ -447,38 +542,188 @@ class TaskRunner:
             self.started = True
         self.main_thread.start()
 
+    def _has_tasks_locked(self):
+        return any(self.queues[p] for p in self.PRIORITY_ORDER)
+
+    def _stamp_task_locked(self, task):
+        task.enqueued_at = time.perf_counter()
+        task.sequence = self.sequence_counter
+        self.sequence_counter += 1
+
     def schedule_task(self, task):
         with self.condition:
             if self.needs_quit:
                 return False
-            self.tasks.append(task)
+
+            self._stamp_task_locked(task)
+            self.queues[task.priority].append(task)
             self.condition.notify()
         return True
 
+    def _pop_priority_locked(self, priority, reason):
+        task = self.queues[priority].popleft()
+        if priority == TaskPriority.JS_TIMER:
+            self.foreground_burst = 0
+        else:
+            self.foreground_burst += 1
+        return task, reason
+
+    def _pick_fifo_locked(self):
+        """A/B baseline: preserve global enqueue order across all queue levels."""
+        heads = [
+            (queue[0].sequence, priority)
+            for priority, queue in self.queues.items()
+            if queue
+        ]
+        if not heads:
+            return None
+        _, priority = min(heads)
+        return self._pop_priority_locked(priority, "fifo")
+
+    def _frame_guard_active(self, now):
+        """Whether starting a low-priority timer could invade an armed frame."""
+        # BrowserWindow writes this scalar under its own lock. Reading it here is
+        # deliberately lock-free: this is a scheduling heuristic, and avoiding the
+        # opposite lock order (TaskRunner condition -> BrowserWindow lock) keeps the
+        # queue path free of deadlock cycles.
+        deadline = getattr(self.tab.browser, "armed_frame_deadline", None)
+        if deadline is None:
+            return False
+        return deadline - now <= SCHEDULER_FRAME_GUARD_SEC
+
+    def _oldest_timer_wait_locked(self, now):
+        queue = self.queues[TaskPriority.JS_TIMER]
+        if not queue:
+            return 0.0
+        enqueued_at = queue[0].enqueued_at
+        if enqueued_at is None:
+            return 0.0
+        return max(0.0, now - enqueued_at)
+
+    def _pick_priority_locked(self, now):
+        """Balance rendering/input latency against low-priority timer fairness."""
+        # 1. A ready rendering task always wins. This protects the absolute frame
+        #    cadence established in Chapter 12-3.
+        if self.queues[TaskPriority.RENDER]:
+            return self._pop_priority_locked(
+                TaskPriority.RENDER, "render_ready"
+            )
+
+        # The guard affects only low-priority JS timers. Input stays responsive,
+        # and normal browser/page work keeps its ordinary priority.
+        frame_guard = self._frame_guard_active(now)
+
+        # 2. User input is latency-sensitive and therefore outranks background work,
+        #    including an aged timer.
+        if self.queues[TaskPriority.INPUT]:
+            return self._pop_priority_locked(
+                TaskPriority.INPUT, "input_ready"
+            )
+
+        timer_queue = self.queues[TaskPriority.JS_TIMER]
+
+        # 3. Hard aging: a timer that waited too long temporarily outranks NORMAL.
+        if (
+            timer_queue
+            and not frame_guard
+            and self._oldest_timer_wait_locked(now) >= SCHEDULER_STARVATION_SEC
+        ):
+            return self._pop_priority_locked(
+                TaskPriority.JS_TIMER, "timer_aging"
+            )
+
+        # 4. Fairness quota: periodically give timers forward progress even before
+        #    they hit the hard starvation limit.
+        if (
+            timer_queue
+            and not frame_guard
+            and self.foreground_burst >= SCHEDULER_MAX_FOREGROUND_BURST
+        ):
+            return self._pop_priority_locked(
+                TaskPriority.JS_TIMER, "timer_fairness"
+            )
+
+        # 5. Ordinary browser/page work.
+        if self.queues[TaskPriority.NORMAL]:
+            return self._pop_priority_locked(
+                TaskPriority.NORMAL, "normal_ready"
+            )
+
+        # 6. Low-priority timers run whenever there is no more urgent work and the
+        #    next armed frame is not inside the deadline guard.
+        if timer_queue and not frame_guard:
+            return self._pop_priority_locked(
+                TaskPriority.JS_TIMER, "timer_background"
+            )
+
+        # A timer can be intentionally held for a few milliseconds while an armed
+        # frame is imminent. The run loop waits for the frame timer to enqueue P0.
+        return None
+
+    def _pick_next_task_locked(self, now):
+        if self.scheduler_mode == "fifo":
+            return self._pick_fifo_locked()
+        return self._pick_priority_locked(now)
+
+    def _emit_scheduler_pick(self, task, reason, now):
+        measure = self.tab.browser.measure
+        if not hasattr(measure, "instant"):
+            return
+
+        queue_wait_ms = 0.0
+        if task.enqueued_at is not None:
+            queue_wait_ms = max(0.0, now - task.enqueued_at) * 1000.0
+
+        measure.instant("scheduler_pick", {
+            "task": task.trace_name or "Task.<completed>",
+            "priority": task.priority.name,
+            "priority_value": int(task.priority),
+            "source": str(task.source or ""),
+            "sequence": int(task.sequence if task.sequence is not None else -1),
+            "queue_wait_ms": queue_wait_ms,
+            "reason": reason,
+            "mode": self.scheduler_mode,
+        })
+
     def run(self):
         # Each Tab owns exactly one serialized DOM/JavaScript execution thread.
-        # Tasks still obey run-to-completion; only raster/draw now runs in parallel.
+        # Scheduling is non-preemptive: priority chooses only the NEXT task.
         if hasattr(self.tab.browser.measure, "thread_name"):
             self.tab.browser.measure.thread_name(threading.current_thread().name)
 
         while True:
             with self.condition:
-                while not self.tasks and not self.needs_quit:
+                while not self._has_tasks_locked() and not self.needs_quit:
                     self.condition.wait()
 
                 if self.needs_quit:
                     return
 
-                task = self.tasks.pop(0)
+                now = time.perf_counter()
+                picked = self._pick_next_task_locked(now)
+
+                if picked is None:
+                    # Usually means only P3 timers are queued inside FRAME_GUARD.
+                    # Wake periodically as a safety net; the frame-timer callback
+                    # normally notifies this condition when it enqueues P0.
+                    self.condition.wait(
+                        timeout=max(0.001, SCHEDULER_FRAME_GUARD_SEC)
+                    )
+                    continue
+
+                task, reason = picked
 
             # Never hold the queue lock while arbitrary page/JavaScript work runs.
-            # Task.run wraps the complete task in a named trace span. Existing
-            # javascript/render/commit events remain nested inside that task.
+            # The instant event records queue waiting time and WHY this task won.
+            dispatch_at = time.perf_counter()
+            self._emit_scheduler_pick(task, reason, dispatch_at)
             task.run(self.tab.browser.measure)
 
     def clear_pending_tasks(self):
         with self.condition:
-            self.tasks.clear()
+            for queue in self.queues.values():
+                queue.clear()
+            self.foreground_burst = 0
 
     def clear_tasks(self):
         # Backward-compatible alias used by existing navigation/discard code.
@@ -487,7 +732,9 @@ class TaskRunner:
     def set_needs_quit(self):
         with self.condition:
             self.needs_quit = True
-            self.tasks.clear()
+            for queue in self.queues.values():
+                queue.clear()
+            self.foreground_burst = 0
             self.condition.notify_all()
 
     def join_thread(self, timeout=1.0):
@@ -3618,7 +3865,12 @@ class JSContext:
         def run_callback():
             if self.discarded:
                 return
-            task = Task(self.dispatch_settimeout, handle)
+            task = Task(
+                self.dispatch_settimeout,
+                handle,
+                priority=TaskPriority.JS_TIMER,
+                source="js:setTimeout",
+            )
             self.tab.task_runner.schedule_task(task)
 
         timer = threading.Timer(self._timer_delay_seconds(time_delta), run_callback)
@@ -3695,6 +3947,8 @@ class JSContext:
                     next_deadline,
                     timer_fired_at,
                     tick,
+                    priority=TaskPriority.JS_TIMER,
+                    source="js:setInterval",
                 )
                 if not self.tab.task_runner.schedule_task(task):
                     self.clearInterval(handle)
@@ -5665,6 +5919,10 @@ class BrowserWindow:
         # being added to REFRESH_RATE_SEC and causing cadence drift.
         self.next_frame_deadline = None
 
+        # Exact deadline of the currently armed threading.Timer. TaskRunner reads
+        # this lock-free only as a short frame-guard heuristic for low-priority work.
+        self.armed_frame_deadline = None
+
         self.needs_animation_frame = True
         self.needs_raster_and_draw = False
         self.needs_chrome_raster = False
@@ -5729,6 +5987,7 @@ class BrowserWindow:
             if self.animation_timer is not None:
                 self.animation_timer.cancel()
                 self.animation_timer = None
+            self.armed_frame_deadline = None
             self.next_frame_deadline = None
 
         # Wake every sleeping Tab main thread and ask it to terminate.
@@ -5784,6 +6043,7 @@ class BrowserWindow:
             if self.animation_timer is not None:
                 self.animation_timer.cancel()
                 self.animation_timer = None
+            self.armed_frame_deadline = None
 
             # A newly active tab starts a fresh frame-clock epoch instead of
             # inheriting the previous tab's absolute deadline grid.
@@ -5796,12 +6056,27 @@ class BrowserWindow:
             self.needs_chrome_raster = True
             self.needs_tab_raster = True
 
-    def schedule_tab_task(self, tab, task_code, *args, clear_pending=False):
+    def schedule_tab_task(
+        self,
+        tab,
+        task_code,
+        *args,
+        clear_pending=False,
+        priority=TaskPriority.NORMAL,
+        source=None,
+    ):
         if tab is None:
             return False
         if clear_pending:
             tab.task_runner.clear_pending_tasks()
-        return tab.task_runner.schedule_task(Task(task_code, *args))
+        return tab.task_runner.schedule_task(
+            Task(
+                task_code,
+                *args,
+                priority=priority,
+                source=source,
+            )
+        )
 
     def schedule_load(self, url, body=None, tab=None, add_to_history=True):
         if tab is None:
@@ -5897,6 +6172,7 @@ class BrowserWindow:
                 # active tab commits. Clearing it here is the frame gate that
                 # prevents multiple rendering tasks from piling up.
                 self.animation_timer = None
+                self.armed_frame_deadline = None
 
                 self.needs_raster_and_draw = True
                 if chrome_changed:
@@ -5955,11 +6231,13 @@ class BrowserWindow:
 
             delay = max(0.0, deadline - now)
             self.next_frame_deadline = deadline + REFRESH_RATE_SEC
+            self.armed_frame_deadline = deadline
 
             def callback():
                 with self.lock:
                     if self._closed:
                         self.animation_timer = None
+                        self.armed_frame_deadline = None
                         return
 
                     active_tab = self.active_tab
@@ -5972,13 +6250,21 @@ class BrowserWindow:
                 if active_tab is None:
                     with self.lock:
                         self.animation_timer = None
+                        self.armed_frame_deadline = None
                     return
 
                 scheduled = active_tab.task_runner.schedule_task(
-                    Task(active_tab.run_animation_frame)
+                    Task(
+                        active_tab.run_animation_frame,
+                        priority=TaskPriority.RENDER,
+                        source="render:animation_frame",
+                    )
                 )
-                if not scheduled:
-                    with self.lock:
+                with self.lock:
+                    # Once P0 has crossed the queue boundary, the frame guard no
+                    # longer needs the timer deadline: strict P0 priority protects it.
+                    self.armed_frame_deadline = None
+                    if not scheduled:
                         self.animation_timer = None
 
             timer = threading.Timer(delay, callback)
@@ -6418,13 +6704,19 @@ class BrowserWindow:
         with self.lock:
             tab = self.active_tab
         if tab is not None:
-            self.schedule_tab_task(tab, tab.scroll_by, SCROLL_STEP)
+            self.schedule_tab_task(
+                tab, tab.scroll_by, SCROLL_STEP,
+                priority=TaskPriority.INPUT, source="input:scroll",
+            )
 
     def handle_up(self):
         with self.lock:
             tab = self.active_tab
         if tab is not None:
-            self.schedule_tab_task(tab, tab.scroll_by, -SCROLL_STEP)
+            self.schedule_tab_task(
+                tab, tab.scroll_by, -SCROLL_STEP,
+                priority=TaskPriority.INPUT, source="input:scroll",
+            )
 
     def handle_mousewheel(self, delta):
         if delta == 0:
@@ -6436,7 +6728,10 @@ class BrowserWindow:
             return
 
         scroll_delta = -SCROLL_STEP if delta > 0 else SCROLL_STEP
-        self.schedule_tab_task(tab, tab.scroll_by, scroll_delta)
+        self.schedule_tab_task(
+            tab, tab.scroll_by, scroll_delta,
+            priority=TaskPriority.INPUT, source="input:scroll",
+        )
 
 
     def handle_primary_activation(self, x, y, touch_radius=None):
@@ -6448,7 +6743,10 @@ class BrowserWindow:
                 old_tab = self.active_tab
 
             if old_tab is not None:
-                self.schedule_tab_task(old_tab, old_tab.blur)
+                self.schedule_tab_task(
+                    old_tab, old_tab.blur,
+                    priority=TaskPriority.INPUT, source="input:blur",
+                )
 
             # Chrome hit testing and controls belong to the Browser Thread.
             self.chrome.click(x, y, touch_radius=touch_radius)
@@ -6465,7 +6763,10 @@ class BrowserWindow:
             return
 
         tab_y = y - self.chrome.bottom
-        self.schedule_tab_task(tab, tab.click, x, tab_y, touch_radius)
+        self.schedule_tab_task(
+            tab, tab.click, x, tab_y, touch_radius,
+            priority=TaskPriority.INPUT, source="input:click",
+        )
 
         if chrome_was_focused:
             self.set_needs_raster_and_draw(chrome=True)
@@ -6510,7 +6811,10 @@ class BrowserWindow:
             return
 
         if y < self.chrome.bottom:
-            self.schedule_tab_task(tab, tab.blur)
+            self.schedule_tab_task(
+                tab, tab.blur,
+                priority=TaskPriority.INPUT, source="input:blur",
+            )
             self.set_needs_raster_and_draw(chrome=True)
             return
 
@@ -6546,7 +6850,10 @@ class BrowserWindow:
             with self.lock:
                 tab = self.active_tab
             if tab is not None:
-                self.schedule_tab_task(tab, tab.keypress, text)
+                self.schedule_tab_task(
+                    tab, tab.keypress, text,
+                    priority=TaskPriority.INPUT, source="input:keypress",
+                )
 
     def handle_enter(self):
         if self.chrome.focus == "address bar":
@@ -6558,7 +6865,10 @@ class BrowserWindow:
             with self.lock:
                 tab = self.active_tab
             if tab is not None:
-                self.schedule_tab_task(tab, tab.enter)
+                self.schedule_tab_task(
+                    tab, tab.enter,
+                    priority=TaskPriority.INPUT, source="input:enter",
+                )
 
     def handle_backspace(self):
         if self.chrome.focus == "address bar":
@@ -6570,7 +6880,10 @@ class BrowserWindow:
             with self.lock:
                 tab = self.active_tab
             if tab is not None:
-                self.schedule_tab_task(tab, tab.backspace)
+                self.schedule_tab_task(
+                    tab, tab.backspace,
+                    priority=TaskPriority.INPUT, source="input:backspace",
+                )
 
     def handle_left(self):
         if self.chrome.focus == "address bar":
@@ -6582,7 +6895,10 @@ class BrowserWindow:
             with self.lock:
                 tab = self.active_tab
             if tab is not None:
-                self.schedule_tab_task(tab, tab.left)
+                self.schedule_tab_task(
+                    tab, tab.left,
+                    priority=TaskPriority.INPUT, source="input:left",
+                )
 
     def handle_right(self):
         if self.chrome.focus == "address bar":
@@ -6594,7 +6910,10 @@ class BrowserWindow:
             with self.lock:
                 tab = self.active_tab
             if tab is not None:
-                self.schedule_tab_task(tab, tab.right)
+                self.schedule_tab_task(
+                    tab, tab.right,
+                    priority=TaskPriority.INPUT, source="input:right",
+                )
 
 
     def handle_new_window(self):
