@@ -758,6 +758,304 @@ class TaskRunner:
             self.main_thread.join(timeout=timeout)
 
 
+
+class NetworkTask:
+    """One unit of network/I/O work owned by the Networking Thread."""
+
+    def __init__(
+        self,
+        work,
+        on_complete=None,
+        trace_name=None,
+        source=None,
+    ):
+        self.work = work
+        self.on_complete = on_complete
+        self.trace_name = trace_name or "Network I/O"
+        self.source = source or self.trace_name
+        self.enqueued_at = None
+        self.sequence = None
+
+
+class NetworkTaskRunner:
+    """Process-wide networking coordinator with parallel blocking-I/O workers.
+
+    The dedicated Networking Thread owns the request queue, dispatch order, and
+    completion routing. Blocking socket/file I/O itself runs on short-lived helper
+    workers so Chapter 12-5's parallel subresource fetching is not regressed.
+    """
+
+    def __init__(self, measure):
+        self.measure = measure
+        self.condition = threading.Condition()
+        self.pending = deque()
+        self.completions = deque()
+        self.sequence_counter = 0
+        self.worker_counter = 0
+        self.active_workers = set()
+        self.needs_quit = False
+        self.started = False
+        self.network_thread = threading.Thread(
+            target=self.run,
+            name="Networking thread",
+            daemon=True,
+        )
+
+    def start_thread(self):
+        with self.condition:
+            if self.started:
+                return
+            self.started = True
+        self.network_thread.start()
+
+    def schedule_task(self, task):
+        with self.condition:
+            if self.needs_quit:
+                return False
+            task.enqueued_at = time.perf_counter()
+            task.sequence = self.sequence_counter
+            self.sequence_counter += 1
+            self.pending.append(task)
+            self.condition.notify()
+        return True
+
+    def submit(
+        self,
+        work,
+        on_complete=None,
+        trace_name=None,
+        source=None,
+    ):
+        return self.schedule_task(
+            NetworkTask(
+                work,
+                on_complete=on_complete,
+                trace_name=trace_name,
+                source=source,
+            )
+        )
+
+    def _emit(self, name, args=None):
+        if hasattr(self.measure, "instant"):
+            self.measure.instant(name, args or {})
+
+    def _worker_entry(self, task, worker_name):
+        if hasattr(self.measure, "thread_name"):
+            self.measure.thread_name(worker_name)
+
+        self.measure.time(task.trace_name)
+        result = None
+        error = None
+        try:
+            result = task.work()
+        except BaseException as exc:
+            error = exc
+        finally:
+            self.measure.stop(task.trace_name)
+
+        with self.condition:
+            self.active_workers.discard(threading.current_thread())
+            if not self.needs_quit:
+                self.completions.append((task, result, error))
+            self.condition.notify_all()
+
+    def _dispatch_task(self, task):
+        now = time.perf_counter()
+        queue_wait_ms = 0.0
+        if task.enqueued_at is not None:
+            queue_wait_ms = max(0.0, now - task.enqueued_at) * 1000.0
+
+        self._emit("network_task_dispatch", {
+            "sequence": int(task.sequence if task.sequence is not None else -1),
+            "source": str(task.source),
+            "queue_wait_ms": queue_wait_ms,
+        })
+
+        with self.condition:
+            worker_id = self.worker_counter
+            self.worker_counter += 1
+
+        worker_name = "Network I/O worker {}".format(worker_id)
+        worker = threading.Thread(
+            target=self._worker_entry,
+            args=(task, worker_name),
+            name=worker_name,
+            daemon=True,
+        )
+
+        with self.condition:
+            if self.needs_quit:
+                return
+            self.active_workers.add(worker)
+
+        worker.start()
+
+    def _finish_task(self, task, result, error):
+        self._emit("network_task_complete", {
+            "sequence": int(task.sequence if task.sequence is not None else -1),
+            "source": str(task.source),
+            "ok": error is None,
+        })
+
+        if task.on_complete is None:
+            return
+
+        try:
+            # Completion routing happens on the dedicated Networking Thread.
+            # Callbacks must only publish immutable/result data or enqueue work
+            # back to a Tab Main Thread; they must not mutate DOM/JS state here.
+            task.on_complete(result, error)
+        except Exception as exc:
+            print("Network completion callback crashed", exc)
+
+    def run(self):
+        if hasattr(self.measure, "thread_name"):
+            self.measure.thread_name("Networking thread")
+
+        while True:
+            action = None
+
+            with self.condition:
+                while (
+                    not self.pending
+                    and not self.completions
+                    and not self.needs_quit
+                ):
+                    self.condition.wait()
+
+                if self.needs_quit:
+                    return
+
+                # Route completed requests before dispatching more work. This keeps
+                # completions responsive without sacrificing request parallelism.
+                if self.completions:
+                    action = ("complete",) + self.completions.popleft()
+                elif self.pending:
+                    action = ("dispatch", self.pending.popleft())
+
+            if action[0] == "complete":
+                _, task, result, error = action
+                self._finish_task(task, result, error)
+            else:
+                _, task = action
+                self._dispatch_task(task)
+
+    def run_sync(
+        self,
+        work,
+        trace_name="Network I/O: synchronous request",
+        source="sync",
+    ):
+        """Run network work through the networking subsystem and block the caller."""
+        done = threading.Event()
+        box = {}
+
+        def complete(result, error):
+            box["result"] = result
+            box["error"] = error
+            done.set()
+
+        if not self.submit(
+            work,
+            on_complete=complete,
+            trace_name=trace_name,
+            source=source,
+        ):
+            raise RuntimeError("Networking thread is shutting down")
+
+        done.wait()
+
+        if box.get("error") is not None:
+            raise box["error"]
+        return box.get("result")
+
+    def schedule_batch(
+        self,
+        items,
+        work,
+        on_complete,
+        *,
+        parallel=True,
+        trace_name=None,
+        source=None,
+    ):
+        """Schedule a source-ordered batch while allowing parallel completion.
+
+        on_complete receives a list of (result, error) tuples in INPUT order,
+        regardless of which request actually finishes first.
+        """
+        items = list(items)
+        if not items:
+            on_complete([])
+            return True
+
+        results = [None] * len(items)
+        state = {"remaining": len(items)}
+
+        def finish_one(index, result, error):
+            results[index] = (result, error)
+            state["remaining"] -= 1
+            if state["remaining"] == 0:
+                on_complete(results)
+
+        def item_trace(index, item):
+            if callable(trace_name):
+                return str(trace_name(index, item))
+            if trace_name:
+                return "{}[{}]".format(trace_name, index)
+            return "Network I/O batch[{}]".format(index)
+
+        def item_source(index, item):
+            if callable(source):
+                return str(source(index, item))
+            if source:
+                return "{}[{}]".format(source, index)
+            return item_trace(index, item)
+
+        def submit_index(index):
+            item = items[index]
+
+            def item_work():
+                return work(item)
+
+            def item_done(result, error):
+                finish_one(index, result, error)
+                if not parallel and index + 1 < len(items):
+                    submit_index(index + 1)
+
+            return self.submit(
+                item_work,
+                on_complete=item_done,
+                trace_name=item_trace(index, item),
+                source=item_source(index, item),
+            )
+
+        if parallel:
+            ok = True
+            for index in range(len(items)):
+                ok = submit_index(index) and ok
+            return ok
+
+        # Serial A/B baseline still goes through the Networking Thread queue;
+        # the next request is submitted only after the previous completion.
+        return submit_index(0)
+
+    def set_needs_quit(self):
+        with self.condition:
+            self.needs_quit = True
+            self.pending.clear()
+            self.completions.clear()
+            self.condition.notify_all()
+
+    def join_thread(self, timeout=1.0):
+        if (
+            self.started
+            and self.network_thread.is_alive()
+            and threading.current_thread() is not self.network_thread
+        ):
+            self.network_thread.join(timeout=timeout)
+
+
 # CSS font-size -> Skia font-size conversion.
 #
 # The old Tkinter-era code multiplied CSS px by 0.75 (16px -> 12pt).
@@ -1815,6 +2113,11 @@ class BrowserApp:
         self.measure = MeasureTime()
         self.measure.thread_name(threading.current_thread().name)
 
+        # Chapter 12-6: one process-wide Networking Thread owns all network
+        # task submission, dispatch, and completion routing.
+        self.network = NetworkTaskRunner(self.measure)
+        self.network.start_thread()
+
         self.windows = []
         self.windows_by_id = {}
         self.visited_urls = set()
@@ -2064,6 +2367,11 @@ class BrowserApp:
         finally:
             for browser_window in list(self.windows):
                 browser_window.close()
+
+            # Stop networking before closing the shared trace so no completion
+            # can enqueue new page work after BrowserApp shutdown begins.
+            self.network.set_needs_quit()
+            self.network.join_thread(timeout=1.0)
 
             self.measure.finish()
             sdl2.SDL_StopTextInput()
@@ -4076,8 +4384,8 @@ class JSContext:
             print("XMLHttpRequest onload crashed", e)
 
     def XMLHttpRequest_send(self, method, url, body, isasync=False, handle=None):
-        # Capture the source-document state before a worker thread starts. A later
-        # navigation may replace tab.url/referrer_policy while the request is live.
+        # Capture source-document state before the network request leaves the Main
+        # Thread. A later navigation can replace tab.url/referrer_policy.
         source_url = self.tab.url
         referrer_policy = self.tab.referrer_policy
         full_url = source_url.resolve(url)
@@ -4088,6 +4396,7 @@ class JSContext:
         page_origin = source_url.origin()
         is_cross_origin = full_url.origin() != page_origin
         request_origin = page_origin if is_cross_origin else None
+        network = self.tab.browser.app.network
 
         def perform_request():
             response_headers, out = full_url.request(
@@ -4106,24 +4415,42 @@ class JSContext:
 
             return out
 
+        source = "xhr:{} {}".format(method, full_url)
+
         if not isasync:
-            return perform_request()
+            # Synchronous XHR still blocks JavaScript by definition, but the actual
+            # network I/O is owned/dispatched by the Networking Thread subsystem.
+            return network.run_sync(
+                perform_request,
+                trace_name="Network I/O: synchronous XHR",
+                source=source,
+            )
 
-        def run_load():
-            try:
-                out = perform_request()
-            except Exception as e:
-                print("Async XMLHttpRequest failed", e)
+        def request_complete(out, error):
+            # This callback executes on the Networking Thread and only routes the
+            # completed result back to this Tab's serialized Main Thread.
+            if error is not None:
+                print("Async XMLHttpRequest failed", error)
                 return
-
             if self.discarded:
                 return
-            task = Task(self.dispatch_xhr_onload, out, handle)
-            self.tab.task_runner.schedule_task(task)
 
-        thread = threading.Thread(target=run_load)
-        thread.daemon = True
-        thread.start()
+            self.tab.task_runner.schedule_task(
+                Task(
+                    self.dispatch_xhr_onload,
+                    out,
+                    handle,
+                    priority=TaskPriority.NORMAL,
+                    source="network:xhr_onload",
+                )
+            )
+
+        network.submit(
+            perform_request,
+            on_complete=request_complete,
+            trace_name="Network I/O: asynchronous XHR",
+            source=source,
+        )
         return None
 
     def querySelectorAll(self,selector_text):
@@ -4985,6 +5312,10 @@ class Tab:
         self.js = None
         self.pending_fragment = None
 
+        # Chapter 12-6: asynchronous network completions carry this generation.
+        # A completion from an older navigation must never overwrite a newer page.
+        self.navigation_generation = 0
+
     def set_needs_render(self):
         self.needs_render = True
         self.browser.set_needs_animation_frame(self)
@@ -5057,20 +5388,12 @@ class Tab:
         return "\n".join(out)
 
     def navigate(self, url, payload=None, add_to_history=True):
-        """Navigate from inside the Tab main thread and invalidate older queued work."""
+        """Start a new navigation without performing network I/O on the Main Thread."""
         self.task_runner.clear_pending_tasks()
         return self.load(url, payload, add_to_history)
 
     def _collect_page_resources(self, page_url):
-        """Collect external subresources and inline styles in DOM source order.
-
-        External script/style entries receive a URL and are fetched by worker
-        threads. Inline <style> entries already contain their body and only
-        participate in the ordered processing phase.
-
-        Keeping one source-ordered list is important: network completion order
-        must not change CSS cascade order or script scheduling order.
-        """
+        """Collect scripts/styles once, preserving DOM source order."""
         resources = []
 
         for node in tree_to_list(self.nodes, []):
@@ -5106,8 +5429,6 @@ class Tab:
             else:
                 continue
 
-            # Malformed/unresolvable external URLs behave like the old loader:
-            # ignore that resource and continue loading the rest of the page.
             if kind in ["script", "style"] and resource_url is None:
                 continue
 
@@ -5130,98 +5451,10 @@ class Tab:
 
         return resources
 
-    def _fetch_one_page_resource(self, resource, page_url):
-        """Fetch one external resource without mutating DOM/CSS/JS page state."""
-        measure = self.browser.measure
-        trace_name = "resource_fetch[{}]: {}".format(
-            resource["index"],
-            resource["kind"],
-        )
-
-        # Each loader gets a distinct trace lane/name, making real overlap visible
-        # in Perfetto while MeasureTime remains shared and thread-safe.
-        if hasattr(measure, "thread_name"):
-            measure.thread_name(threading.current_thread().name)
-
-        measure.time(trace_name)
-        try:
-            resource["headers"], resource["body"] = resource["url"].request(
-                page_url,
-                referrer_policy=self.referrer_policy,
-            )
-        except Exception as error:
-            # Store failure in this resource's private result slot. Processing later
-            # skips only this item; one failed request must not kill sibling workers.
-            resource["error"] = error
-        finally:
-            measure.stop(trace_name)
-
-    def _fetch_page_resources(self, resources, page_url):
-        """Fetch every external script/style, in parallel when 12-5 is enabled."""
-        external = [
-            resource
-            for resource in resources
-            if resource["kind"] in ["script", "style"]
-        ]
-
-        if not external:
-            return
-
-        measure = self.browser.measure
-        mode = "threaded" if THREADED_LOADING else "serial"
-        batch_started = time.perf_counter()
-
-        if hasattr(measure, "instant"):
-            measure.instant("resource_fetch_batch_start", {
-                "mode": mode,
-                "count": len(external),
-            })
-
-        if THREADED_LOADING:
-            # IMPORTANT: start ALL workers first. Calling join() inside this loop
-            # would accidentally preserve the old serial-loading behavior.
-            threads = []
-            for resource in external:
-                thread = threading.Thread(
-                    target=self._fetch_one_page_resource,
-                    args=(resource, page_url),
-                    name="Loader {} {}".format(
-                        resource["kind"],
-                        resource["index"],
-                    ),
-                    daemon=True,
-                )
-                threads.append(thread)
-
-            for thread in threads:
-                thread.start()
-
-            # Only after every request has been sent do we wait for completion.
-            # join() blocks this Tab's Main Thread, but all network I/O overlaps.
-            for thread in threads:
-                thread.join()
-
-        else:
-            # A/B baseline matching the previous serial request behavior.
-            for resource in external:
-                self._fetch_one_page_resource(resource, page_url)
-
-        if hasattr(measure, "instant"):
-            measure.instant("resource_fetch_batch_done", {
-                "mode": mode,
-                "count": len(external),
-                "elapsed_ms": (
-                    time.perf_counter() - batch_started
-                ) * 1000.0,
-            })
-
     def _process_page_resources(self, resources):
-        """Apply fetched results strictly in the original DOM source order."""
+        """Apply network results strictly in original DOM source order."""
         rules = DEFAULT_STYLE_SHEET.copy()
 
-        # resources was constructed by one pre-order DOM traversal. Iterating this
-        # exact list restores deterministic processing even if worker completion
-        # order was style-2, script-1, style-1, ...
         for resource in resources:
             kind = resource["kind"]
 
@@ -5236,99 +5469,162 @@ class Tab:
                 })
 
             if kind == "script":
-                # JavaScript still executes only on this Tab's serialized Main Thread.
-                # Tasks are enqueued here in source order after all network joins.
-                task = Task(
-                    self.js.run,
-                    resource["source"],
-                    resource["body"],
-                    priority=TaskPriority.NORMAL,
-                    source="load:script",
+                # JavaScript execution stays on this Tab's serialized Main Thread.
+                self.task_runner.schedule_task(
+                    Task(
+                        self.js.run,
+                        resource["source"],
+                        resource["body"],
+                        priority=TaskPriority.NORMAL,
+                        source="load:script",
+                    )
                 )
-                self.task_runner.schedule_task(task)
 
             elif kind in ["style", "inline_style"]:
-                # External and inline styles now share one DOM-ordered stream, so
-                # parallel completion cannot reorder the CSS cascade.
                 rules.extend(CSSParser(resource["body"]).parse())
 
         return rules
 
-    def load(self, url,payload=None,add_to_history=True):
-        if self.js is not None:
-            self.js.discard()
-        self.pending_fragment = None
+    def _finish_page_resources(self, generation, resources):
+        """Main-Thread completion point for a subresource network batch."""
+        if generation != self.navigation_generation:
+            return
 
-        referrer=self.url #old url
-        referrer_policy=self.referrer_policy #old url referrer policy
+        rules = self._process_page_resources(resources)
+        self.rules = sorted(rules, key=cascade_priority)
 
-        self.url=url # new url to come
-        self.scroll=0
+        self.focus = None
+        self.pending_fragment = self.url.fragment or None
+        self.set_needs_render()
 
-        # every navigation starts as unverified
-        self.secure = False
+    def _schedule_page_resources(self, generation, page_url, resources):
+        """Submit every external page resource to the Networking Thread."""
+        external = [
+            resource
+            for resource in resources
+            if resource["kind"] in ["script", "style"]
+        ]
 
-        self.visited_urls.add(str(url))
+        if not external:
+            self._finish_page_resources(generation, resources)
+            return
 
-        if add_to_history:
-            # if current page in the history，not last page
-            #　represent user click back button
-            # if click new link or enter new URL
-            # forward history will be clear
-            if self.history_index < len(self.history)-1:
-                self.history=self.history[:self.history_index+1]
+        network = self.browser.app.network
+        page_referrer_policy = self.referrer_policy
+        batch_started = time.perf_counter()
+        mode = "threaded" if THREADED_LOADING else "serial"
 
-            self.history.append(url)
-            self.history_index+=1
+        if hasattr(self.browser.measure, "instant"):
+            self.browser.measure.instant("resource_fetch_batch_start", {
+                "mode": mode,
+                "owner": "Networking thread",
+                "count": len(external),
+            })
 
-        if self.is_internal_page(url): # bookmarks page
+        def fetch_resource(resource):
+            # This function is executed only by a Network I/O worker dispatched by
+            # the dedicated Networking Thread. It does not mutate DOM/JS state.
+            return resource["url"].request(
+                page_url,
+                referrer_policy=page_referrer_policy,
+            )
+
+        def batch_complete(results):
+            # Runs on the Networking Thread. Populate only the transport result
+            # objects, then enqueue one ordered processing task back to Main Thread.
+            if hasattr(self.browser.measure, "instant"):
+                self.browser.measure.instant("resource_fetch_batch_done", {
+                    "mode": mode,
+                    "owner": "Networking thread",
+                    "count": len(external),
+                    "elapsed_ms": (
+                        time.perf_counter() - batch_started
+                    ) * 1000.0,
+                })
+
+            for resource, (result, error) in zip(external, results):
+                resource["error"] = error
+                if error is None:
+                    resource["headers"], resource["body"] = result
+
+            self.task_runner.schedule_task(
+                Task(
+                    self._finish_page_resources,
+                    generation,
+                    resources,
+                    priority=TaskPriority.NORMAL,
+                    source="network:subresources_complete",
+                )
+            )
+
+        network.schedule_batch(
+            external,
+            fetch_resource,
+            batch_complete,
+            parallel=THREADED_LOADING,
+            trace_name=lambda _, resource: (
+                "resource_fetch[{}]: {}".format(
+                    resource["index"],
+                    resource["kind"],
+                )
+            ),
+            source=lambda _, resource: (
+                "subresource:{}:{}:{}".format(
+                    resource["index"],
+                    resource["kind"],
+                    resource["source"],
+                )
+            ),
+        )
+
+    def _finish_document_load(
+        self,
+        generation,
+        url,
+        result,
+        error,
+    ):
+        """Consume the main-document response on the Tab Main Thread."""
+        if generation != self.navigation_generation:
+            return
+
+        if isinstance(error, ssl.SSLCertVerificationError):
             headers = {}
-            body = self.request_internal_page(url)
-            self.nodes=HTMLParser(body).parse()
+            body = self.certificate_error_page(url, error)
+            self.secure = False
+        elif error is not None:
+            headers = {}
+            self.secure = False
+            body = """
+            <html>
+            <body>
+                <h1>Network Error</h1>
+                <p>{}</p>
+                <pre>{}</pre>
+            </body>
+            </html>
+            """.format(
+                escape(str(url)),
+                escape(str(error)),
+            )
+        else:
+            headers, body = result
+            self.secure = (url.scheme == "https")
 
-        else: # normal web page
-            try:
-                # The main document remains synchronous. Its HTML must arrive before
-                # the browser can discover the script/style URLs to parallelize.
-                headers,body = url.request(
-                    referrer,
-                    payload,
-                    referrer_policy=referrer_policy,
-                )
+        if url.view_source:
+            highlighted_body = ViewSourceParser(body).handle_view_source()
+            self.nodes = HTMLParser(highlighted_body).parse()
+        else:
+            self.nodes = HTMLParser(body).parse()
 
-                # request finished without certificate error
-                self.secure=(url.scheme=="https")
-
-            except ssl.SSLCertVerificationError as e:
-                headers = {}
-
-                body = self.certificate_error_page(
-                    url,
-                    e
-                )
-
-                self.secure = False
-
-            if url.view_source:
-                highlighted_body=ViewSourceParser(body).handle_view_source()
-                self.nodes=HTMLParser(highlighted_body).parse()
-            else:
-                self.nodes=HTMLParser(body).parse()
-
-        # read new page referrer-policy
         self.referrer_policy = normalize_referrer_policy(headers)
 
         # CSP(content-security-policy)
         self.allowed_origins = None
-
         if "content-security-policy" in headers:
-            csp = headers[
-                "content-security-policy"
-            ].split()
-
-            if len(csp) > 0 and csp[0]=="default-src":
+            csp = headers["content-security-policy"].split()
+            if len(csp) > 0 and csp[0] == "default-src":
                 self.allowed_origins = []
-
                 for origin in csp[1:]:
                     self.allowed_origins.append(
                         URL(origin).origin()
@@ -5336,29 +5632,79 @@ class Tab:
 
         self.js = JSContext(self)
 
-        # Chapter 12-5:
-        #   1. discover external scripts/styles once, in DOM source order;
-        #   2. send every allowed network request in parallel;
-        #   3. join all workers;
-        #   4. process the completed bodies in original source order.
         resources = self._collect_page_resources(url)
-        self._fetch_page_resources(resources, url)
-        rules = self._process_page_resources(resources)
+        self._schedule_page_resources(
+            generation,
+            url,
+            resources,
+        )
 
-        self.rules=sorted(rules,key=cascade_priority)
+    def load(self, url, payload=None, add_to_history=True):
+        """Begin navigation; network I/O is asynchronous and centrally owned."""
+        self.navigation_generation += 1
+        generation = self.navigation_generation
 
-        self.focus=None
-        self.pending_fragment = self.url.fragment or None
-        self.set_needs_render()
+        if self.js is not None:
+            self.js.discard()
+        self.pending_fragment = None
 
-        # URL/history/security become Browser-Thread-visible at the next commit.
+        referrer = self.url
+        referrer_policy = self.referrer_policy
 
-        # self.document=DocumentLayout(self.nodes)
-        # self.document.layout()
+        self.url = url
+        self.scroll = 0
+        self.secure = False
+        self.visited_urls.add(str(url))
 
-        # self.display_list=[]
-        # paint_tree(self.document,self.display_list)
-        # self.draw()
+        if add_to_history:
+            if self.history_index < len(self.history) - 1:
+                self.history = self.history[:self.history_index + 1]
+            self.history.append(url)
+            self.history_index += 1
+
+        # Pure browser-internal pages do not perform network/I/O and therefore can
+        # stay on the Main Thread.
+        if self.is_internal_page(url):
+            body = self.request_internal_page(url)
+            self._finish_document_load(
+                generation,
+                url,
+                ({}, body),
+                None,
+            )
+            return
+
+        network = self.browser.app.network
+
+        def request_document():
+            return url.request(
+                referrer,
+                payload,
+                referrer_policy=referrer_policy,
+            )
+
+        def document_complete(result, error):
+            # Runs on Networking Thread; never parse HTML or mutate page state here.
+            self.task_runner.schedule_task(
+                Task(
+                    self._finish_document_load,
+                    generation,
+                    url,
+                    result,
+                    error,
+                    priority=TaskPriority.NORMAL,
+                    source="network:document_complete",
+                )
+            )
+
+        network.submit(
+            request_document,
+            on_complete=document_complete,
+            trace_name="Network I/O: document",
+            source="document:{}".format(url),
+        )
+        # Crucially, the Tab Main Thread returns immediately instead of waiting
+        # inside URL.request() or Thread.join().
 
 
     def allowed_request(self,url):
