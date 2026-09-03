@@ -281,6 +281,292 @@ SCHEDULER_FRAME_GUARD_SEC = _scheduler_env_float(
 ) / 1000.0
 
 
+# Chapter 12-7 adaptive frame scheduling.
+#
+# "fixed" preserves the Chapter 12-3 absolute 33 ms clock for A/B testing.
+# "adaptive" estimates how much time the frame pipeline can actually sustain
+# and chooses a stable cadence in integer multiples of REFRESH_RATE_SEC.
+FRAME_SCHEDULER_MODE = (
+    os.environ.get("BROWSER_FRAME_SCHEDULER", "adaptive")
+    .strip()
+    .casefold()
+)
+if FRAME_SCHEDULER_MODE not in ["fixed", "adaptive"]:
+    FRAME_SCHEDULER_MODE = "adaptive"
+
+FRAME_ESTIMATOR_ALPHA = _scheduler_env_float(
+    "BROWSER_FRAME_ESTIMATOR_ALPHA", 0.25, minimum=0.01
+)
+FRAME_ESTIMATOR_ALPHA = min(1.0, FRAME_ESTIMATOR_ALPHA)
+
+# A sample must exceed the current cadence by a small tolerance before it is
+# considered overloaded. This prevents 33.1 ms noise from immediately forcing
+# a 66 ms cadence.
+FRAME_ESTIMATOR_OVERLOAD_TOLERANCE = _scheduler_env_float(
+    "BROWSER_FRAME_OVERLOAD_TOLERANCE", 1.05, minimum=1.0
+)
+
+# Require repeated overload before slowing down, so one isolated long frame
+# cannot permanently lower the page's frame rate.
+FRAME_ESTIMATOR_OVERLOAD_STREAK = _scheduler_env_int(
+    "BROWSER_FRAME_OVERLOAD_STREAK", 2, minimum=1
+)
+
+# Recovery is deliberately slower than overload response. This hysteresis keeps
+# the cadence stable instead of oscillating 33 -> 66 -> 33 around the boundary.
+FRAME_ESTIMATOR_RECOVERY_STREAK = _scheduler_env_int(
+    "BROWSER_FRAME_RECOVERY_STREAK", 8, minimum=1
+)
+FRAME_ESTIMATOR_RECOVERY_UTILIZATION = _scheduler_env_float(
+    "BROWSER_FRAME_RECOVERY_UTILIZATION", 0.92, minimum=0.1
+)
+FRAME_ESTIMATOR_RECOVERY_UTILIZATION = min(
+    1.0, FRAME_ESTIMATOR_RECOVERY_UTILIZATION
+)
+
+FRAME_ESTIMATOR_MAX_SLOTS = _scheduler_env_int(
+    "BROWSER_FRAME_MAX_SLOTS", 8, minimum=1
+)
+
+# Chapter 12-7 v2: where the NEXT frame timer is armed after a frame finishes.
+#
+# browser_loop:
+#     Preserve the first 12-7 implementation for A/B comparison. commit() releases
+#     the frame gate and BrowserApp.run() eventually schedules again after its SDL
+#     wait/poll cycle (up to ~16 ms in this browser).
+#
+# direct:
+#     Release the gate only after the current Main-Thread frame has been measured,
+#     then immediately arm the next absolute deadline from that Main Thread. This
+#     removes Browser-loop wake-up latency from the critical frame cadence path.
+FRAME_REARM_MODE = (
+    os.environ.get("BROWSER_FRAME_REARM", "direct")
+    .strip()
+    .casefold()
+)
+if FRAME_REARM_MODE not in ["browser_loop", "direct"]:
+    FRAME_REARM_MODE = "direct"
+
+
+class FrameTimeEstimator:
+    """Estimate a sustainable frame cadence from recent pipeline costs.
+
+    Main-Thread RAF/render/commit work and Browser-Thread raster/draw can overlap,
+    so pipeline throughput is bounded by the slower stage, not by their sum.
+    The estimator therefore tracks a separate EWMA for each stage and uses
+    max(main_ema, raster_ema) as the effective frame cost.
+
+    Cadence is quantized to integer refresh slots:
+        1 slot = 33 ms, 2 slots = 66 ms, 3 slots = 99 ms, ...
+    This is intentional: a 50 ms page should settle at a stable ~66 ms cadence
+    instead of randomly alternating between missed 33 ms deadlines.
+    """
+
+    def __init__(self, base_interval=REFRESH_RATE_SEC):
+        self.base_interval = max(0.001, float(base_interval))
+        self.lock = threading.Lock()
+        self.reset()
+
+    def reset(self):
+        with getattr(self, "lock", threading.Lock()):
+            self.main_ema_sec = None
+            self.raster_ema_sec = None
+            self.last_main_sample_sec = None
+            self.last_raster_sample_sec = None
+            self.cadence_slots = 1
+            self.overload_streak = 0
+            self.recovery_streak = 0
+            self.sample_count = 0
+
+    def _ema(self, previous, sample):
+        sample = max(0.0, float(sample))
+        if previous is None:
+            return sample
+        alpha = FRAME_ESTIMATOR_ALPHA
+        return previous * (1.0 - alpha) + sample * alpha
+
+    def _effective_cost_locked(self):
+        return max(
+            float(self.main_ema_sec or 0.0),
+            float(self.raster_ema_sec or 0.0),
+        )
+
+    def _raw_effective_cost_locked(self):
+        return max(
+            float(self.last_main_sample_sec or 0.0),
+            float(self.last_raster_sample_sec or 0.0),
+        )
+
+    def _snapshot_locked(self, changed=False, direction="steady"):
+        effective = self._effective_cost_locked()
+        return {
+            "main_ema_sec": float(self.main_ema_sec or 0.0),
+            "raster_ema_sec": float(self.raster_ema_sec or 0.0),
+            "effective_cost_sec": effective,
+            "cadence_slots": int(self.cadence_slots),
+            "cadence_sec": self.cadence_slots * self.base_interval,
+            "sample_count": int(self.sample_count),
+            "overload_streak": int(self.overload_streak),
+            "recovery_streak": int(self.recovery_streak),
+            "changed": bool(changed),
+            "direction": str(direction),
+        }
+
+    def snapshot(self):
+        with self.lock:
+            return self._snapshot_locked()
+
+    def observe_raster(self, elapsed_sec):
+        """Record Browser-Thread raster/draw cost for the most recent frame."""
+        sample = max(0.0, float(elapsed_sec))
+        with self.lock:
+            self.last_raster_sample_sec = sample
+            self.raster_ema_sec = self._ema(self.raster_ema_sec, sample)
+            return self._snapshot_locked()
+
+    def observe_main(self, elapsed_sec):
+        """Record Main-Thread frame cost and possibly change cadence."""
+        sample = max(0.0, float(elapsed_sec))
+
+        with self.lock:
+            self.last_main_sample_sec = sample
+            self.main_ema_sec = self._ema(self.main_ema_sec, sample)
+            self.sample_count += 1
+
+            effective = self._effective_cost_locked()
+            raw_effective = self._raw_effective_cost_locked()
+            current_slots = self.cadence_slots
+
+            # The tolerance lets a frame use a few percent more than its nominal
+            # budget without immediately moving to another refresh slot.
+            slot_capacity = (
+                self.base_interval * FRAME_ESTIMATOR_OVERLOAD_TOLERANCE
+            )
+            desired_slots = max(
+                1,
+                int(math.ceil(effective / slot_capacity))
+                if effective > 0.0
+                else 1,
+            )
+            desired_slots = min(
+                FRAME_ESTIMATOR_MAX_SLOTS,
+                desired_slots,
+            )
+
+            changed = False
+            direction = "steady"
+
+            if (
+                desired_slots > current_slots
+                and raw_effective
+                > current_slots
+                * self.base_interval
+                * FRAME_ESTIMATOR_OVERLOAD_TOLERANCE
+            ):
+                self.overload_streak += 1
+                self.recovery_streak = 0
+
+                if (
+                    self.overload_streak
+                    >= FRAME_ESTIMATOR_OVERLOAD_STREAK
+                ):
+                    self.cadence_slots = desired_slots
+                    self.overload_streak = 0
+                    changed = True
+                    direction = "slower"
+
+            elif desired_slots < current_slots:
+                # To recover from 66 -> 33 ms, for example, the measured pipeline
+                # must fit comfortably inside one 33 ms slot for several frames.
+                lower_slots = max(1, current_slots - 1)
+                recovery_limit = (
+                    lower_slots
+                    * self.base_interval
+                    * FRAME_ESTIMATOR_RECOVERY_UTILIZATION
+                )
+
+                if (
+                    effective <= recovery_limit
+                    and raw_effective <= recovery_limit
+                ):
+                    self.recovery_streak += 1
+                    self.overload_streak = 0
+
+                    if (
+                        self.recovery_streak
+                        >= FRAME_ESTIMATOR_RECOVERY_STREAK
+                    ):
+                        # Recover one level at a time to avoid a sudden oscillation.
+                        self.cadence_slots = lower_slots
+                        self.recovery_streak = 0
+                        changed = True
+                        direction = "faster"
+                else:
+                    self.recovery_streak = 0
+                    self.overload_streak = 0
+
+            else:
+                self.overload_streak = 0
+                self.recovery_streak = 0
+
+            return self._snapshot_locked(changed, direction)
+
+
+class AdaptiveFrameClock:
+    """Absolute monotonic deadline clock whose interval may change safely."""
+
+    def __init__(self, base_interval=REFRESH_RATE_SEC):
+        self.base_interval = max(0.001, float(base_interval))
+        self.reset()
+
+    def reset(self):
+        self.last_deadline = None
+        self.next_deadline = None
+        self.interval_sec = None
+
+    def schedule(self, now, interval_sec):
+        """Return (deadline, missed_slots, cadence_changed).
+
+        Deadlines remain anchored to the prior absolute deadline, not frame
+        completion time. When cadence changes, the new grid is rebased from the
+        last deadline so 33 -> 66 ms becomes a stable 66 ms start-to-start gap
+        instead of "finish + 66 ms" drift.
+        """
+        now = float(now)
+        interval = max(self.base_interval, float(interval_sec))
+        cadence_changed = (
+            self.interval_sec is not None
+            and not math.isclose(
+                interval,
+                self.interval_sec,
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            )
+        )
+
+        if self.last_deadline is None:
+            deadline = now + interval
+        elif cadence_changed:
+            deadline = self.last_deadline + interval
+        elif self.next_deadline is not None:
+            deadline = self.next_deadline
+        else:
+            deadline = self.last_deadline + interval
+
+        missed_slots = 0
+        if deadline <= now:
+            # Skip old target slots instead of queueing catch-up frames.
+            missed_slots = (
+                math.floor((now - deadline) / interval) + 1
+            )
+            deadline += missed_slots * interval
+
+        self.last_deadline = deadline
+        self.next_deadline = deadline + interval
+        self.interval_sec = interval
+        return deadline, int(missed_slots), cadence_changed
+
+
 
 class MeasureTime:
     """Write thread-aware Chrome/Perfetto JSON trace events."""
@@ -2362,7 +2648,9 @@ class BrowserApp:
                 # snapshot, so the Browser Thread may raster frame N while the Tab
                 # Main Thread independently builds frame N+1.
                 for browser_window in list(self.windows):
-                    browser_window.schedule_animation_frame()
+                    browser_window.schedule_animation_frame(
+                        trigger="browser_loop"
+                    )
                     browser_window.raster_and_draw()
         finally:
             for browser_window in list(self.windows):
@@ -5312,6 +5600,10 @@ class Tab:
         self.js = None
         self.pending_fragment = None
 
+        # Chapter 12-7: each Tab learns its own sustainable frame cadence.
+        # A heavy page in one tab must not slow a lightweight page in another.
+        self.frame_time_estimator = FrameTimeEstimator()
+
         # Chapter 12-6: asynchronous network completions carry this generation.
         # A completion from an older navigation must never overwrite a newer page.
         self.navigation_generation = 0
@@ -5644,6 +5936,9 @@ class Tab:
         self.navigation_generation += 1
         generation = self.navigation_generation
 
+        # A new document may have a completely different rendering cost.
+        self.frame_time_estimator.reset()
+
         if self.js is not None:
             self.js.discard()
         self.pending_fragment = None
@@ -5790,55 +6085,90 @@ class Tab:
 
     def run_animation_frame(self):
         """Run one frame on the Tab Main Thread and commit its rendering snapshot."""
-        # RAF belongs to the frame boundary. render() is intentionally reusable by
-        # hit testing and other synchronous Main-Thread paths and therefore does
-        # not commit by itself.
-        if self.js is not None and not self.js.discarded:
-            try:
-                self.js.evaljs(RAF_JS)
-            except dukpy.JSRuntimeError as e:
-                print("requestAnimationFrame callback crashed", e)
+        frame_started = time.perf_counter()
+        accepted = False
 
-        self.render()
+        try:
+            # RAF belongs to the frame boundary. render() is intentionally reusable by
+            # hit testing and other synchronous Main-Thread paths and therefore does
+            # not commit by itself.
+            if self.js is not None and not self.js.discarded:
+                try:
+                    self.js.evaljs(RAF_JS)
+                except dukpy.JSRuntimeError as e:
+                    print("requestAnimationFrame callback crashed", e)
 
-        document_height = (
-            max(1.0, float(self.document.height + 2 * VSTEP))
-            if self.document is not None
-            else 0.0
-        )
+            self.render()
 
-        # Only a display list produced by render/relayout crosses the ownership
-        # boundary. A scroll-only frame sends None so BrowserWindow can reuse the
-        # previously committed display list.
-        committed_display_list = (
-            self.display_list
-            if self.display_list_needs_commit
-            else None
-        )
+            document_height = (
+                max(1.0, float(self.document.height + 2 * VSTEP))
+                if self.document is not None
+                else 0.0
+            )
 
-        data = CommitData(
-            self.url,
-            self.scroll,
-            document_height,
-            committed_display_list,
-            title=self.get_title(),
-            secure=self.secure,
-            can_go_back=self.can_go_back(),
-            can_go_forward=self.can_go_forward(),
-            width=self.width,
-            tab_height=self.tab_height,
-        )
+            # Only a display list produced by render/relayout crosses the ownership
+            # boundary. A scroll-only frame sends None so BrowserWindow can reuse the
+            # previously committed display list.
+            committed_display_list = (
+                self.display_list
+                if self.display_list_needs_commit
+                else None
+            )
 
-        accepted = self.browser.commit(self, data)
+            data = CommitData(
+                self.url,
+                self.scroll,
+                document_height,
+                committed_display_list,
+                title=self.get_title(),
+                secure=self.secure,
+                can_go_back=self.can_go_back(),
+                can_go_forward=self.can_go_forward(),
+                width=self.width,
+                tab_height=self.tab_height,
+            )
 
-        if accepted and committed_display_list is not None:
-            # Ownership moved only after BrowserWindow accepted this snapshot.
-            # If the window rejects a commit (for example during shutdown), keep
-            # the local list so it is not silently lost.
-            self.display_list = None
-            self.display_list_needs_commit = False
+            accepted = self.browser.commit(self, data)
 
-        return accepted
+            if accepted and committed_display_list is not None:
+                # Ownership moved only after BrowserWindow accepted this snapshot.
+                # If the window rejects a commit (for example during shutdown), keep
+                # the local list so it is not silently lost.
+                self.display_list = None
+                self.display_list_needs_commit = False
+
+            return accepted
+
+        finally:
+            elapsed = max(0.0, time.perf_counter() - frame_started)
+            snapshot = self.frame_time_estimator.observe_main(elapsed)
+
+            if hasattr(self.browser.measure, "instant"):
+                self.browser.measure.instant("frame_time_estimate", {
+                    "stage": "main",
+                    "sample_ms": elapsed * 1000.0,
+                    "main_ema_ms": snapshot["main_ema_sec"] * 1000.0,
+                    "raster_ema_ms": snapshot["raster_ema_sec"] * 1000.0,
+                    "effective_cost_ms": (
+                        snapshot["effective_cost_sec"] * 1000.0
+                    ),
+                    "cadence_ms": snapshot["cadence_sec"] * 1000.0,
+                    "cadence_slots": snapshot["cadence_slots"],
+                    "changed": snapshot["changed"],
+                    "direction": snapshot["direction"],
+                    "mode": FRAME_SCHEDULER_MODE,
+                })
+
+            # Chapter 12-7 v2:
+            # The old implementation released animation_timer inside commit().
+            # BrowserApp.run() then had to wake from SDL_WaitEventTimeout before it
+            # could arm the next frame, adding ~16 ms to the cadence path.
+            #
+            # Release the gate only AFTER this frame has been measured, so a cadence
+            # transition learned from this exact frame (33 -> 66, for example) is
+            # visible to the very next schedule operation.
+            self.browser.finish_animation_frame(self)
+
 
     def render(self):
         """Update style, layout, and paint when the Tab is dirty; never commit."""
@@ -6401,11 +6731,16 @@ class BrowserWindow:
 
         self.animation_timer = None
 
-        # Chapter 12-3: animation frames follow one absolute monotonic clock.
-        # This stores the deadline after the one currently being scheduled. Keeping
-        # the grid independent of frame completion time prevents per-frame work from
-        # being added to REFRESH_RATE_SEC and causing cadence drift.
+        # Chapter 12-7 keeps Chapter 12-3's absolute monotonic clock, but the
+        # interval is selected by the active Tab's FrameTimeEstimator.
+        self.frame_clock = AdaptiveFrameClock(REFRESH_RATE_SEC)
+
+        # Compatibility/debug mirror of frame_clock.next_deadline.
         self.next_frame_deadline = None
+
+        # The Browser Thread records raster cost only for raster work triggered by
+        # an accepted animation-frame commit, not arbitrary chrome/window repaints.
+        self.pending_frame_raster_tab = None
 
         # Exact deadline of the currently armed threading.Timer. TaskRunner reads
         # this lock-free only as a short frame-guard heuristic for low-priority work.
@@ -6476,7 +6811,9 @@ class BrowserWindow:
                 self.animation_timer.cancel()
                 self.animation_timer = None
             self.armed_frame_deadline = None
+            self.frame_clock.reset()
             self.next_frame_deadline = None
+            self.pending_frame_raster_tab = None
 
         # Wake every sleeping Tab main thread and ask it to terminate.
         for tab in tabs:
@@ -6534,8 +6871,11 @@ class BrowserWindow:
             self.armed_frame_deadline = None
 
             # A newly active tab starts a fresh frame-clock epoch instead of
-            # inheriting the previous tab's absolute deadline grid.
+            # inheriting the previous tab's deadline phase. Its per-Tab estimator
+            # is preserved, so switching back restores the page's learned cadence.
+            self.frame_clock.reset()
             self.next_frame_deadline = None
+            self.pending_frame_raster_tab = None
 
             # The existing surface belongs to the previous active tab.
             self.tab_surface = None
@@ -6656,13 +6996,19 @@ class BrowserWindow:
                 ):
                     self.discard_address_bar_edit_on_commit = True
 
-                # The animation timer remains non-None from scheduling until the
-                # active tab commits. Clearing it here is the frame gate that
-                # prevents multiple rendering tasks from piling up.
-                self.animation_timer = None
+                # Keep animation_timer non-None through the rest of
+                # Tab.run_animation_frame(). Chapter 12-7 v2 releases this gate in
+                # finish_animation_frame(), after the estimator has observed the
+                # current frame. This prevents BrowserApp.run() from racing ahead and
+                # re-arming with a stale cadence between commit() and frame teardown.
                 self.armed_frame_deadline = None
 
                 self.needs_raster_and_draw = True
+
+                # The next raster/draw is part of this accepted frame. This tag lets
+                # raster_and_draw feed only real frame cost into the estimator.
+                self.pending_frame_raster_tab = tab
+
                 if chrome_changed:
                     self.needs_chrome_raster = True
                 if has_new_display_list:
@@ -6688,8 +7034,52 @@ class BrowserWindow:
                 return
             self.needs_animation_frame = True
 
-    def schedule_animation_frame(self):
-        """Schedule one Main-Thread frame on an absolute monotonic 33 ms grid."""
+    def finish_animation_frame(self, tab):
+        """Release one in-flight frame and optionally re-arm immediately.
+
+        animation_timer is also the one-frame-in-flight gate. Keeping it set until
+        this point guarantees:
+          1. commit() cannot let BrowserApp.run() schedule using a stale estimate;
+          2. the frame's final Main-Thread duration is observed first;
+          3. direct mode can arm the next absolute deadline without waiting for the
+             Browser Thread's up-to-16-ms SDL idle wait.
+
+        The Timer itself has already fired; the reference remains non-None only as
+        back pressure until this function releases it.
+        """
+        should_rearm = False
+
+        with self.lock:
+            if self._closed:
+                self.animation_timer = None
+                self.armed_frame_deadline = None
+                return False
+
+            # set_active_tab() already cancels/releases the old tab's timer. An
+            # in-flight frame from an inactive tab must not disturb the new tab.
+            if tab is not self.active_tab:
+                return False
+
+            self.animation_timer = None
+            self.armed_frame_deadline = None
+            should_rearm = (
+                FRAME_REARM_MODE == "direct"
+                and self.needs_animation_frame
+            )
+
+        if hasattr(self.measure, "instant"):
+            self.measure.instant("frame_gate_release", {
+                "rearm_mode": FRAME_REARM_MODE,
+                "needs_next_frame": bool(should_rearm),
+            })
+
+        if should_rearm:
+            return self.schedule_animation_frame(trigger="frame_end")
+
+        return False
+
+    def schedule_animation_frame(self, trigger="browser_loop"):
+        """Schedule one frame on an absolute grid with an estimated cadence."""
         timer = None
 
         with self.lock:
@@ -6699,27 +7089,46 @@ class BrowserWindow:
                 or not self.needs_animation_frame
                 or self.animation_timer is not None
             ):
-                return
+                return False
 
             now = time.perf_counter()
+            active_tab = self.active_tab
+            estimate = active_tab.frame_time_estimator.snapshot()
 
-            # The first requested frame establishes the clock. Afterwards, deadlines
-            # advance from the previous absolute deadline, never from frame completion
-            # time. If work ran past one or more deadlines, skip those missed slots
-            # instead of queueing a burst of catch-up animation frames.
-            if self.next_frame_deadline is None:
-                deadline = now + REFRESH_RATE_SEC
+            if FRAME_SCHEDULER_MODE == "adaptive":
+                cadence_sec = estimate["cadence_sec"]
+                cadence_slots = estimate["cadence_slots"]
             else:
-                deadline = self.next_frame_deadline
-                if deadline <= now:
-                    missed = math.floor(
-                        (now - deadline) / REFRESH_RATE_SEC
-                    ) + 1
-                    deadline += missed * REFRESH_RATE_SEC
+                cadence_sec = REFRESH_RATE_SEC
+                cadence_slots = 1
+
+            # AdaptiveFrameClock preserves Chapter 12-3's absolute monotonic
+            # deadlines. Work completion time does not get added to the interval.
+            # If cadence changes (33 -> 66 ms), the new grid is rebased from the
+            # previous absolute deadline instead of from "now".
+            deadline, missed, cadence_changed = self.frame_clock.schedule(
+                now,
+                cadence_sec,
+            )
 
             delay = max(0.0, deadline - now)
-            self.next_frame_deadline = deadline + REFRESH_RATE_SEC
+            self.next_frame_deadline = self.frame_clock.next_deadline
             self.armed_frame_deadline = deadline
+
+            if hasattr(self.measure, "instant"):
+                self.measure.instant("frame_schedule", {
+                    "mode": FRAME_SCHEDULER_MODE,
+                    "cadence_ms": cadence_sec * 1000.0,
+                    "cadence_slots": cadence_slots,
+                    "estimated_cost_ms": (
+                        estimate["effective_cost_sec"] * 1000.0
+                    ),
+                    "delay_ms": delay * 1000.0,
+                    "missed_slots": int(missed),
+                    "cadence_changed": bool(cadence_changed),
+                    "trigger": str(trigger),
+                    "rearm_mode": FRAME_REARM_MODE,
+                })
 
             def callback():
                 with self.lock:
@@ -6759,15 +7168,19 @@ class BrowserWindow:
             timer.daemon = True
             self.animation_timer = timer
 
-        # Arming the deadline before Browser Thread raster/draw is intentional:
-        # when the timer fires, the Tab Main Thread can build frame N+1 while the
-        # Browser Thread is still rasterizing the latched CommitData for frame N.
+        # Arming the deadline before Browser Thread raster/draw is intentional.
+        # In direct re-arm mode this happens immediately at Main-Thread frame end,
+        # so Browser Thread raster for frame N can overlap the wait/build of N+1.
         timer.start()
+        return True
+
 
     def raster_and_draw(self):
         # Consume the current dirty batch before doing expensive work. If a Main
         # Thread commits again while raster is running, its new dirty bits survive
         # for the next browser-loop iteration instead of being cleared accidentally.
+        estimator_tab = None
+
         with self.lock:
             if not self.needs_raster_and_draw or self._closed:
                 return False
@@ -6783,6 +7196,11 @@ class BrowserWindow:
             # dirty work and cannot be mixed into the frame being presented now.
             self.frame_state = self.committed_states.get(self.active_tab)
 
+            # Only a raster caused by an accepted animation-frame commit is sampled.
+            estimator_tab = self.pending_frame_raster_tab
+            self.pending_frame_raster_tab = None
+
+        raster_started = time.perf_counter()
         self.measure.time("raster_and_draw")
         try:
             # A scroll-only commit normally reuses the cached interest region.
@@ -6804,9 +7222,33 @@ class BrowserWindow:
 
             self.draw()
             return True
+
         finally:
+            elapsed = max(0.0, time.perf_counter() - raster_started)
+
             with self.lock:
                 self.frame_state = None
+
+            if estimator_tab is not None:
+                snapshot = estimator_tab.frame_time_estimator.observe_raster(
+                    elapsed
+                )
+
+                if hasattr(self.measure, "instant"):
+                    self.measure.instant("frame_raster_sample", {
+                        "sample_ms": elapsed * 1000.0,
+                        "main_ema_ms": snapshot["main_ema_sec"] * 1000.0,
+                        "raster_ema_ms": (
+                            snapshot["raster_ema_sec"] * 1000.0
+                        ),
+                        "effective_cost_ms": (
+                            snapshot["effective_cost_sec"] * 1000.0
+                        ),
+                        "cadence_ms": snapshot["cadence_sec"] * 1000.0,
+                        "cadence_slots": snapshot["cadence_slots"],
+                        "mode": FRAME_SCHEDULER_MODE,
+                    })
+
             self.measure.stop("raster_and_draw")
 
 
