@@ -3,6 +3,7 @@ import ssl
 import sys
 import time 
 import gzip
+import hashlib
 from urllib.parse import unquote, quote_plus, quote
 from html import unescape,escape
 import webbrowser
@@ -348,10 +349,45 @@ if FRAME_REARM_MODE not in ["browser_loop", "direct"]:
     FRAME_REARM_MODE = "direct"
 
 
+# Chapter 12-8 raster/draw execution mode.
+#
+# sync:
+#     A/B baseline. Raster + Skia composition run synchronously on Browser Thread,
+#     reproducing the pre-12-8 input-blocking architecture.
+# threaded:
+#     Exercise 12-8 implementation. Raster + Skia composition run on one
+#     process-wide Raster-and-draw Thread; Browser Thread only prepares snapshots
+#     and performs SDL presentation.
+RASTER_EXECUTION_MODE = (
+    os.environ.get("BROWSER_RASTER_MODE", "threaded")
+    .strip()
+    .casefold()
+)
+if RASTER_EXECUTION_MODE not in ["sync", "threaded"]:
+    RASTER_EXECUTION_MODE = "threaded"
+
+# Test-only stress knob used by the A/B validation harness. Keeping it at zero has
+# no effect on normal browser behavior. The sleep occurs inside the measured
+# raster_and_draw stage, so sync mode blocks Browser Thread while threaded mode
+# blocks only Raster-and-draw Thread.
+RASTER_TEST_DELAY_SEC = _scheduler_env_float(
+    "BROWSER_RASTER_TEST_DELAY_MS", 0.0
+) / 1000.0
+
+# Let validation runs write separate trace files without moving/renaming them.
+BROWSER_TRACE_FILE = os.environ.get("BROWSER_TRACE_FILE", "browser.trace")
+TRACE_FRAME_HASH = (
+    os.environ.get("BROWSER_TRACE_FRAME_HASH", "0")
+    .strip()
+    .casefold()
+    in ["1", "true", "yes", "on"]
+)
+
+
 class FrameTimeEstimator:
     """Estimate a sustainable frame cadence from recent pipeline costs.
 
-    Main-Thread RAF/render/commit work and Browser-Thread raster/draw can overlap,
+    Main-Thread RAF/render/commit work and the raster stage can overlap,
     so pipeline throughput is bounded by the slower stage, not by their sum.
     The estimator therefore tracks a separate EWMA for each stage and uses
     max(main_ema, raster_ema) as the effective frame cost.
@@ -417,7 +453,7 @@ class FrameTimeEstimator:
             return self._snapshot_locked()
 
     def observe_raster(self, elapsed_sec):
-        """Record Browser-Thread raster/draw cost for the most recent frame."""
+        """Record raster/draw cost for the most recent frame, regardless of mode."""
         sample = max(0.0, float(elapsed_sec))
         with self.lock:
             self.last_raster_sample_sec = sample
@@ -2390,14 +2426,23 @@ class BrowserApp:
                 error = error.decode("utf8", errors="replace")
             raise RuntimeError("SDL_Init failed: {}".format(error))
 
-        # The process starts on the browser/compositor-style thread. SDL, browser
-        # chrome, raster, draw, and native-window presentation stay on this thread.
+        # SDL event handling, browser/chrome state, and every direct SDL call stay
+        # on this process-starting Browser Thread. Chapter 12-8 moves only Skia
+        # raster/composition to Raster-and-draw Thread.
         threading.current_thread().name = "Browser thread"
 
-        # One process-wide trace shared by every native BrowserWindow. Keeping
-        # ownership here avoids multiple windows overwriting browser.trace.
-        self.measure = MeasureTime()
+        # One process-wide trace shared by every native BrowserWindow.
+        self.measure = MeasureTime(BROWSER_TRACE_FILE)
         self.measure.thread_name(threading.current_thread().name)
+
+        # Chapter 12-8: one process-wide raster coordinator. In sync A/B mode it
+        # executes the same render implementation inline on Browser Thread.
+        self.raster = RasterAndDrawRunner(
+            self.measure,
+            mode=RASTER_EXECUTION_MODE,
+        )
+        self.raster.start_thread()
+        self._raster_window_counter = 0
 
         # Chapter 12-6: one process-wide Networking Thread owns all network
         # task submission, dispatch, and completion routing.
@@ -2416,6 +2461,11 @@ class BrowserApp:
         self.active_touches = {}
 
         sdl2.SDL_StartTextInput()
+
+    def allocate_raster_window_id(self):
+        raster_id = self._raster_window_counter
+        self._raster_window_counter += 1
+        return raster_id
 
     def new_window(self, url=None):
         if url is None:
@@ -2469,8 +2519,41 @@ class BrowserApp:
             int(event.tfinger.fingerId),
         )
 
+    def trace_input_dispatch_latency(self, event):
+        """Record SDL queue -> Browser Thread dispatch latency for user input."""
+        event_type = int(event.type)
+        input_types = {
+            int(sdl2.SDL_MOUSEBUTTONUP),
+            int(sdl2.SDL_MOUSEWHEEL),
+            int(sdl2.SDL_KEYDOWN),
+            int(sdl2.SDL_TEXTINPUT),
+            int(getattr(sdl2, "SDL_FINGERDOWN", -1)),
+            int(getattr(sdl2, "SDL_FINGERMOTION", -1)),
+            int(getattr(sdl2, "SDL_FINGERUP", -1)),
+        }
+        if event_type not in input_types:
+            return
+
+        timestamp = int(getattr(event.common, "timestamp", 0) or 0)
+        if timestamp == 0:
+            return
+
+        now = int(sdl2.SDL_GetTicks()) & 0xFFFFFFFF
+        latency_ms = (now - timestamp) & 0xFFFFFFFF
+        # Ignore impossible wrap/stale values rather than polluting p95 statistics.
+        if latency_ms > 10 * 60 * 1000:
+            return
+
+        if hasattr(self.measure, "instant"):
+            self.measure.instant("input_dispatch_latency", {
+                "event_type": event_type,
+                "latency_ms": float(latency_ms),
+                "raster_execution": RASTER_EXECUTION_MODE,
+            })
+
     def dispatch_event(self, event):
         event_type = event.type
+        self.trace_input_dispatch_latency(event)
 
         if event_type == sdl2.SDL_QUIT:
             self.running = False
@@ -2643,18 +2726,22 @@ class BrowserApp:
                 while sdl2.SDL_PollEvent(ctypes.byref(event)) != 0:
                     self.dispatch_event(event)
 
-                # Arm the next Main-Thread animation deadline before raster/draw.
-                # BrowserWindow.raster_and_draw() latches the current CommitData
-                # snapshot, so the Browser Thread may raster frame N while the Tab
-                # Main Thread independently builds frame N+1.
+                # Browser Thread first consumes completed pixels (SDL only), then
+                # arms the next Main-Thread frame, then submits at most one raster
+                # snapshot per window. threaded mode returns immediately from submit.
                 for browser_window in list(self.windows):
+                    browser_window.poll_raster_result()
                     browser_window.schedule_animation_frame(
                         trigger="browser_loop"
                     )
-                    browser_window.raster_and_draw()
+                    browser_window.maybe_start_raster_and_draw()
         finally:
             for browser_window in list(self.windows):
                 browser_window.close()
+
+            # No worker may write trace events after MeasureTime.finish().
+            self.raster.set_needs_quit()
+            self.raster.join_thread(timeout=1.0)
 
             # Stop networking before closing the shared trace so no completion
             # can enqueue new page work after BrowserApp shutdown begins.
@@ -6709,6 +6796,536 @@ class Tab:
 
 
 
+class RasterWork:
+    """Immutable-by-convention snapshot sent from Browser Thread to raster stage."""
+    __slots__ = (
+        "raster_id",
+        "window_id",
+        "scene_epoch",
+        "active_tab_key",
+        "page_state",
+        "chrome_display_list",
+        "width",
+        "height",
+        "chrome_bottom",
+        "chrome_raster",
+        "tab_raster",
+        "estimator_tab",
+        "title",
+    )
+
+    def __init__(
+        self,
+        *,
+        raster_id,
+        window_id,
+        scene_epoch,
+        active_tab_key,
+        page_state,
+        chrome_display_list,
+        width,
+        height,
+        chrome_bottom,
+        chrome_raster,
+        tab_raster,
+        estimator_tab,
+        title,
+    ):
+        self.raster_id = int(raster_id)
+        self.window_id = int(window_id)
+        self.scene_epoch = int(scene_epoch)
+        self.active_tab_key = active_tab_key
+        self.page_state = page_state
+        self.chrome_display_list = tuple(chrome_display_list or ())
+        self.width = max(1, int(width))
+        self.height = max(1, int(height))
+        self.chrome_bottom = max(0.0, float(chrome_bottom))
+        self.chrome_raster = bool(chrome_raster)
+        self.tab_raster = bool(tab_raster)
+        self.estimator_tab = estimator_tab
+        self.title = str(title or "Tai Gar")
+
+
+class RasterResult:
+    """Pixel buffer returned to Browser Thread; SDL presentation happens there."""
+    __slots__ = (
+        "raster_id",
+        "window_id",
+        "scene_epoch",
+        "pixels",
+        "width",
+        "height",
+        "title",
+        "elapsed_sec",
+    )
+
+    def __init__(
+        self,
+        *,
+        raster_id,
+        window_id,
+        scene_epoch,
+        pixels,
+        width,
+        height,
+        title,
+        elapsed_sec=0.0,
+    ):
+        self.raster_id = int(raster_id)
+        self.window_id = int(window_id)
+        self.scene_epoch = int(scene_epoch)
+        self.pixels = pixels
+        self.width = int(width)
+        self.height = int(height)
+        self.title = str(title or "Tai Gar")
+        self.elapsed_sec = max(0.0, float(elapsed_sec))
+
+
+class RasterFailure:
+    """Worker-side failure routed back so BrowserWindow cannot stay in-flight forever."""
+    __slots__ = ("raster_id", "window_id", "scene_epoch", "error")
+
+    def __init__(self, work, error):
+        self.raster_id = int(work.raster_id)
+        self.window_id = int(work.window_id)
+        self.scene_epoch = int(work.scene_epoch)
+        self.error = error
+
+
+class RasterWindowState:
+    """Skia-only cache owned exclusively by the raster execution context.
+
+    In threaded mode only Raster-and-draw Thread touches this object. In sync A/B
+    mode the same code runs on Browser Thread, which reproduces the old blocking
+    architecture while keeping rendering logic identical between both modes.
+    """
+
+    def __init__(self):
+        self.width = 0
+        self.height = 0
+        self.active_tab_key = None
+        self.root_surface = None
+        self.chrome_surface = None
+        self.tab_surface = None
+        self.interest_start = 0
+        self.interest_height = 1
+
+    def _sync_scene(self, work):
+        resized = self.width != work.width or self.height != work.height
+        tab_changed = self.active_tab_key != work.active_tab_key
+
+        if resized:
+            self.width = work.width
+            self.height = work.height
+            self.root_surface = make_skia_surface(work.width, work.height)
+            self.chrome_surface = None
+            self.tab_surface = None
+            self.interest_start = 0
+            self.interest_height = max(
+                1,
+                INTEREST_REGION_MULTIPLIER * work.height,
+            )
+
+        if tab_changed:
+            self.active_tab_key = work.active_tab_key
+            self.tab_surface = None
+            self.interest_start = 0
+
+        if self.root_surface is None:
+            self.root_surface = make_skia_surface(work.width, work.height)
+
+        return resized, tab_changed
+
+    @staticmethod
+    def _document_height(work):
+        state = work.page_state
+        if state is None:
+            return 0
+        return max(0, int(math.ceil(state.document_height)))
+
+    @staticmethod
+    def _active_scroll(work):
+        state = work.page_state
+        return float(state.scroll) if state is not None else 0.0
+
+    def _tab_view_height(self, work):
+        return max(1, int(math.ceil(work.height - work.chrome_bottom)))
+
+    def _interest_surface_height(self, work):
+        document_height = self._document_height(work)
+        if document_height <= 0:
+            return 0
+        return max(
+            1,
+            min(document_height, int(math.ceil(self.interest_height))),
+        )
+
+    def _viewport_inside_interest_region(self, work):
+        state = work.page_state
+        if state is None or state.document_height <= 0:
+            return False
+
+        region_height = self._interest_surface_height(work)
+        if region_height <= 0:
+            return False
+
+        viewport_top = self._active_scroll(work)
+        viewport_bottom = min(
+            float(self._document_height(work)),
+            viewport_top + float(self._tab_view_height(work)),
+        )
+        region_top = float(self.interest_start)
+        region_bottom = region_top + float(region_height)
+
+        return (
+            viewport_top >= region_top
+            and viewport_bottom <= region_bottom
+        )
+
+    def _choose_interest_start(self, work):
+        state = work.page_state
+        if state is None or state.document_height <= 0:
+            return 0
+
+        document_height = self._document_height(work)
+        region_height = self._interest_surface_height(work)
+        if region_height >= document_height:
+            return 0
+
+        viewport_height = self._tab_view_height(work)
+        viewport_top = self._active_scroll(work)
+        desired_start = viewport_top - (region_height - viewport_height) / 2.0
+        max_start = max(0, document_height - region_height)
+        return int(max(0, min(desired_start, max_start)))
+
+    def _raster_chrome(self, work):
+        chrome_height = max(1, int(math.ceil(work.chrome_bottom)))
+        if (
+            self.chrome_surface is None
+            or self.chrome_surface.width() != work.width
+            or self.chrome_surface.height() != chrome_height
+        ):
+            self.chrome_surface = make_skia_surface(work.width, chrome_height)
+
+        canvas = self.chrome_surface.getCanvas()
+        canvas.clear(skia.ColorWHITE)
+        for cmd in work.chrome_display_list:
+            cmd.execute(canvas)
+
+    def _raster_tab(self, work):
+        state = work.page_state
+        if state is None or state.document_height <= 0:
+            self.tab_surface = None
+            self.interest_start = 0
+            return
+
+        if not self._viewport_inside_interest_region(work):
+            self.interest_start = self._choose_interest_start(work)
+
+        region_height = self._interest_surface_height(work)
+        region_end = self.interest_start + region_height
+
+        if (
+            self.tab_surface is None
+            or self.tab_surface.width() != work.width
+            or self.tab_surface.height() != region_height
+        ):
+            self.tab_surface = make_skia_surface(work.width, region_height)
+
+        canvas = self.tab_surface.getCanvas()
+        canvas.clear(skia.ColorWHITE)
+
+        surface_clip = skia.Rect.MakeLTRB(
+            0, 0, work.width, region_height
+        )
+        document_interest_rect = skia.Rect.MakeLTRB(
+            0,
+            self.interest_start,
+            work.width,
+            region_end,
+        )
+
+        canvas.save()
+        canvas.clipRect(surface_clip)
+        canvas.translate(0, -self.interest_start)
+
+        for item in state.display_list:
+            if hasattr(item, "rect"):
+                if (
+                    item.rect.bottom() <= document_interest_rect.top()
+                    or item.rect.top() >= document_interest_rect.bottom()
+                ):
+                    continue
+            item.execute(canvas)
+
+        canvas.restore()
+
+    def _draw_scrollbar(self, canvas, work):
+        state = work.page_state
+        if state is None or state.document_height <= 0:
+            return
+
+        viewport_height = max(1, work.height - work.chrome_bottom)
+        document_height = max(1.0, float(state.document_height))
+        if document_height <= viewport_height:
+            return
+
+        bar_height = viewport_height * viewport_height / document_height
+        bar_height = max(20.0, min(float(viewport_height), bar_height))
+
+        max_scroll = max(document_height - viewport_height, 1)
+        max_bar_y = max(viewport_height - bar_height, 0.0)
+        bar_y = max_bar_y * float(state.scroll) / max_scroll
+
+        scrollbar = skia.Rect.MakeLTRB(
+            work.width - SCROLLBAR_WIDTH,
+            work.chrome_bottom + bar_y,
+            work.width,
+            work.chrome_bottom + bar_y + bar_height,
+        )
+        canvas.drawRect(
+            scrollbar,
+            skia.Paint(Color=parse_color("blue")),
+        )
+
+    def _compose_pixels(self, work):
+        canvas = self.root_surface.getCanvas()
+        canvas.clear(skia.ColorWHITE)
+
+        if work.page_state is not None and self.tab_surface is not None:
+            tab_rect = skia.Rect.MakeLTRB(
+                0,
+                work.chrome_bottom,
+                work.width,
+                work.height,
+            )
+            tab_offset = (
+                float(work.chrome_bottom)
+                + float(self.interest_start)
+                - self._active_scroll(work)
+            )
+
+            canvas.save()
+            canvas.clipRect(tab_rect)
+            canvas.translate(0, tab_offset)
+            self.tab_surface.draw(canvas, 0, 0)
+            canvas.restore()
+            self._draw_scrollbar(canvas, work)
+
+        if self.chrome_surface is not None:
+            chrome_rect = skia.Rect.MakeLTRB(
+                0,
+                0,
+                work.width,
+                work.chrome_bottom,
+            )
+            canvas.save()
+            canvas.clipRect(chrome_rect)
+            self.chrome_surface.draw(canvas, 0, 0)
+            canvas.restore()
+
+        return self.root_surface.makeImageSnapshot().tobytes()
+
+    def render(self, work):
+        resized, tab_changed = self._sync_scene(work)
+
+        chrome_raster = (
+            work.chrome_raster
+            or resized
+            or self.chrome_surface is None
+        )
+        tab_raster = (
+            work.tab_raster
+            or resized
+            or tab_changed
+        )
+
+        # Scroll-only frames reuse the bounded tab cache until the viewport leaves it.
+        if (
+            not tab_raster
+            and work.page_state is not None
+            and (
+                self.tab_surface is None
+                or not self._viewport_inside_interest_region(work)
+            )
+        ):
+            tab_raster = True
+
+        if RASTER_TEST_DELAY_SEC > 0.0:
+            time.sleep(RASTER_TEST_DELAY_SEC)
+
+        if chrome_raster:
+            self._raster_chrome(work)
+        if tab_raster:
+            self._raster_tab(work)
+
+        pixels = self._compose_pixels(work)
+        return RasterResult(
+            raster_id=work.raster_id,
+            window_id=work.window_id,
+            scene_epoch=work.scene_epoch,
+            pixels=pixels,
+            width=work.width,
+            height=work.height,
+            title=work.title,
+        )
+
+
+class RasterAndDrawRunner:
+    """One process-wide raster coordinator used by both sync and threaded A/B modes."""
+
+    def __init__(self, measure, mode=RASTER_EXECUTION_MODE):
+        self.measure = measure
+        self.mode = str(mode)
+        self.condition = threading.Condition()
+        self.pending = deque()
+        self.completed = {}
+        self.states = {}
+        self.discarded = set()
+        self.needs_quit = False
+        self.started = False
+        self.thread = threading.Thread(
+            target=self.run,
+            name="Raster-and-draw thread",
+            daemon=True,
+        )
+
+    def start_thread(self):
+        if self.mode != "threaded":
+            return False
+        with self.condition:
+            if self.started:
+                return True
+            self.started = True
+        self.thread.start()
+        return True
+
+    def submit(self, work):
+        if self.mode != "threaded":
+            raise RuntimeError("submit() is only valid in threaded raster mode")
+        with self.condition:
+            if self.needs_quit or work.raster_id in self.discarded:
+                return False
+            self.pending.append(work)
+            self.condition.notify()
+        return True
+
+    def take_result(self, raster_id):
+        with self.condition:
+            return self.completed.pop(int(raster_id), None)
+
+    def discard_window(self, raster_id):
+        raster_id = int(raster_id)
+        with self.condition:
+            self.discarded.add(raster_id)
+            self.states.pop(raster_id, None)
+            self.completed.pop(raster_id, None)
+            self.pending = deque(
+                work for work in self.pending
+                if work.raster_id != raster_id
+            )
+            self.condition.notify_all()
+
+    def _state_for(self, raster_id):
+        with self.condition:
+            state = self.states.get(raster_id)
+            if state is None:
+                state = RasterWindowState()
+                self.states[raster_id] = state
+            return state
+
+    def _emit_raster_sample(self, work, elapsed):
+        if work.estimator_tab is None:
+            return
+
+        snapshot = work.estimator_tab.frame_time_estimator.observe_raster(elapsed)
+        if hasattr(self.measure, "instant"):
+            self.measure.instant("frame_raster_sample", {
+                "sample_ms": elapsed * 1000.0,
+                "main_ema_ms": snapshot["main_ema_sec"] * 1000.0,
+                "raster_ema_ms": snapshot["raster_ema_sec"] * 1000.0,
+                "effective_cost_ms": (
+                    snapshot["effective_cost_sec"] * 1000.0
+                ),
+                "cadence_ms": snapshot["cadence_sec"] * 1000.0,
+                "cadence_slots": snapshot["cadence_slots"],
+                "mode": FRAME_SCHEDULER_MODE,
+                "raster_execution": self.mode,
+            })
+
+    def _render_work(self, work):
+        started = time.perf_counter()
+        result = None
+        self.measure.time("raster_and_draw")
+        try:
+            state = self._state_for(work.raster_id)
+            result = state.render(work)
+            return result
+        finally:
+            elapsed = max(0.0, time.perf_counter() - started)
+            if result is not None:
+                result.elapsed_sec = elapsed
+            self._emit_raster_sample(work, elapsed)
+            self.measure.stop("raster_and_draw")
+
+    def render_sync(self, work):
+        if self.mode != "sync":
+            raise RuntimeError("render_sync() is only valid in sync raster mode")
+        return self._render_work(work)
+
+    def run(self):
+        if hasattr(self.measure, "thread_name"):
+            self.measure.thread_name("Raster-and-draw thread")
+
+        while True:
+            with self.condition:
+                while not self.pending and not self.needs_quit:
+                    self.condition.wait()
+
+                if self.needs_quit:
+                    return
+
+                work = self.pending.popleft()
+                if work.raster_id in self.discarded:
+                    continue
+
+            try:
+                result = self._render_work(work)
+            except BaseException as exc:
+                if hasattr(self.measure, "instant"):
+                    self.measure.instant("raster_worker_error", {
+                        "window_id": work.window_id,
+                        "error": repr(exc),
+                    })
+                result = RasterFailure(work, exc)
+
+            with self.condition:
+                if work.raster_id in self.discarded:
+                    # close() may race a currently executing Skia job. The local
+                    # RasterWindowState remains safe to finish, then is forgotten.
+                    self.states.pop(work.raster_id, None)
+                elif not self.needs_quit:
+                    # BrowserWindow allows only one in-flight job, so one completion
+                    # per raster_id is sufficient and bounds memory naturally.
+                    self.completed[work.raster_id] = result
+                self.condition.notify_all()
+
+    def set_needs_quit(self):
+        with self.condition:
+            self.needs_quit = True
+            self.pending.clear()
+            self.completed.clear()
+            self.condition.notify_all()
+
+    def join_thread(self, timeout=1.0):
+        if (
+            self.started
+            and self.thread.is_alive()
+            and threading.current_thread() is not self.thread
+        ):
+            self.thread.join(timeout=timeout)
+
+
 class BrowserWindow:
     """One native SDL window containing many browser tabs."""
     def __init__(self, app, width=WIDTH, height=HEIGHT):
@@ -6722,12 +7339,17 @@ class BrowserWindow:
         self.focus = None
         self._closed = False
 
+        # Unique raster identity is process-local and never reused, even if SDL
+        # recycles a native window id after close().
+        self.raster_id = app.allocate_raster_window_id()
+        self.scene_epoch = 0
+        self.raster_in_flight = False
+
         # One BrowserWindow lock protects every piece of state shared by the
         # Browser Thread, Timer callbacks, and Tab Main Threads. RLock keeps helper
         # methods composable without introducing self-deadlocks.
         self.lock = threading.RLock()
         self.committed_states = {}
-        self.frame_state = None
 
         self.animation_timer = None
 
@@ -6738,8 +7360,8 @@ class BrowserWindow:
         # Compatibility/debug mirror of frame_clock.next_deadline.
         self.next_frame_deadline = None
 
-        # The Browser Thread records raster cost only for raster work triggered by
-        # an accepted animation-frame commit, not arbitrary chrome/window repaints.
+        # Raster cost is sampled only for work triggered by an accepted animation-
+        # frame commit, not arbitrary chrome/window repaints.
         self.pending_frame_raster_tab = None
 
         # Exact deadline of the currently armed threading.Timer. TaskRunner reads
@@ -6768,22 +7390,9 @@ class BrowserWindow:
             raise RuntimeError("SDL_CreateWindow failed: {}".format(error))
 
         self.window_id = int(sdl2.SDL_GetWindowID(self.sdl_window))
-        self.root_surface = make_skia_surface(self.width, self.height)
 
-        # Browser compositing surfaces. Chrome has a small fixed-height surface.
-        # tab_surface is now a bounded interest-region cache instead of a
-        # full-document bitmap, so very long pages do not allocate huge surfaces.
-        self.chrome_surface = None
-        self.tab_surface = None
-
-        # Document coordinate represented by tab_surface y=0.
-        self.interest_start = 0
-
-        # Maximum cached height. The actual surface is smaller for short pages.
-        self.interest_height = max(
-            1,
-            INTEREST_REGION_MULTIPLIER * self.height,
-        )
+        # All Skia raster surfaces/caches live in RasterWindowState. BrowserWindow
+        # owns only logical browser state plus the native SDL window.
 
         if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
             self.RED_MASK = 0xff000000
@@ -6797,7 +7406,9 @@ class BrowserWindow:
             self.ALPHA_MASK = 0xff000000
 
         self.chrome = Chrome(self)
-        self.raster_chrome()
+        self.needs_raster_and_draw = True
+        self.needs_chrome_raster = True
+        self.needs_tab_raster = True
 
     def close(self):
         with self.lock:
@@ -6822,6 +7433,9 @@ class BrowserWindow:
         for tab in tabs:
             tab.task_runner.join_thread(timeout=1.0)
 
+        # Drop queued/completed raster work. An already-running job is allowed to
+        # finish in isolation, but RasterAndDrawRunner will discard its result.
+        self.app.raster.discard_window(self.raster_id)
         self.app.unregister_window(self)
 
         if self.sdl_window:
@@ -6845,10 +7459,8 @@ class BrowserWindow:
             return self.committed_states.get(tab)
 
     def page_state(self):
-        # During raster/draw, latch one commit so a concurrent Main Thread commit
-        # cannot mix two different page snapshots inside a single presented frame.
-        if self.frame_state is not None:
-            return self.frame_state
+        # Browser-side helpers read the latest committed snapshot. Raster work never
+        # calls this method: its CommitData reference is captured in RasterWork.
         return self.active_committed_state()
 
     def set_active_tab(self, tab):
@@ -6877,9 +7489,10 @@ class BrowserWindow:
             self.next_frame_deadline = None
             self.pending_frame_raster_tab = None
 
-            # The existing surface belongs to the previous active tab.
-            self.tab_surface = None
-            self.interest_start = 0
+            # Invalidate any in-flight pixel result from the old visible scene.
+            # RasterWindowState notices the active_tab_key change and drops only its
+            # tab cache; Browser Thread never mutates Skia surfaces directly.
+            self.scene_epoch += 1
             self.needs_raster_and_draw = True
             self.needs_chrome_raster = True
             self.needs_tab_raster = True
@@ -7168,429 +7781,198 @@ class BrowserWindow:
             timer.daemon = True
             self.animation_timer = timer
 
-        # Arming the deadline before Browser Thread raster/draw is intentional.
-        # In direct re-arm mode this happens immediately at Main-Thread frame end,
-        # so Browser Thread raster for frame N can overlap the wait/build of N+1.
+        # Arm the next absolute deadline before raster submission. In threaded mode
+        # frame N raster can overlap Browser input handling and Main-Thread frame N+1.
         timer.start()
         return True
 
 
-    def raster_and_draw(self):
-        # Consume the current dirty batch before doing expensive work. If a Main
-        # Thread commits again while raster is running, its new dirty bits survive
-        # for the next browser-loop iteration instead of being cleared accidentally.
-        estimator_tab = None
+    def _take_raster_work(self):
+        """Consume one dirty batch and snapshot everything the raster stage needs.
 
+        Browser Thread owns Chrome state/layout. The expensive Skia execution of the
+        resulting Chrome display list is deferred to RasterWindowState.
+        """
         with self.lock:
-            if not self.needs_raster_and_draw or self._closed:
-                return False
+            if (
+                self._closed
+                or self.raster_in_flight
+                or not self.needs_raster_and_draw
+            ):
+                return None
 
             chrome_raster = self.needs_chrome_raster
             tab_raster = self.needs_tab_raster
+
+            # Consume only the batch that becomes this RasterWork. New commits/input
+            # arriving after this point set fresh dirty bits for the next batch.
             self.needs_raster_and_draw = False
             self.needs_chrome_raster = False
             self.needs_tab_raster = False
 
-            # Dirty bits and committed data must belong to the same version.
-            # A commit arriving after this lock is released becomes next frame's
-            # dirty work and cannot be mixed into the frame being presented now.
-            self.frame_state = self.committed_states.get(self.active_tab)
+            if self.discard_address_bar_edit_on_commit:
+                self.chrome.discard_address_bar_edit()
+                self.discard_address_bar_edit_on_commit = False
+                chrome_raster = True
 
-            # Only a raster caused by an accepted animation-frame commit is sampled.
+            if chrome_raster:
+                # Chrome layout/hit-testing state stays Browser-Thread-owned. Only
+                # executing these paint commands on Skia surfaces moves to worker.
+                self.chrome.render()
+
+            active_tab = self.active_tab
+            page_state = self.committed_states.get(active_tab)
             estimator_tab = self.pending_frame_raster_tab
             self.pending_frame_raster_tab = None
 
-        raster_started = time.perf_counter()
-        self.measure.time("raster_and_draw")
-        try:
-            # A scroll-only commit normally reuses the cached interest region.
-            # Crossing its boundary upgrades this frame to a tab raster.
-            if (
-                not tab_raster
-                and self.frame_state is not None
-                and (
-                    self.tab_surface is None
-                    or not self.viewport_inside_interest_region()
-                )
-            ):
-                tab_raster = True
-
-            if chrome_raster:
-                self.raster_chrome()
-            if tab_raster:
-                self.raster_tab()
-
-            self.draw()
-            return True
-
-        finally:
-            elapsed = max(0.0, time.perf_counter() - raster_started)
-
-            with self.lock:
-                self.frame_state = None
-
-            if estimator_tab is not None:
-                snapshot = estimator_tab.frame_time_estimator.observe_raster(
-                    elapsed
-                )
-
-                if hasattr(self.measure, "instant"):
-                    self.measure.instant("frame_raster_sample", {
-                        "sample_ms": elapsed * 1000.0,
-                        "main_ema_ms": snapshot["main_ema_sec"] * 1000.0,
-                        "raster_ema_ms": (
-                            snapshot["raster_ema_sec"] * 1000.0
-                        ),
-                        "effective_cost_ms": (
-                            snapshot["effective_cost_sec"] * 1000.0
-                        ),
-                        "cadence_ms": snapshot["cadence_sec"] * 1000.0,
-                        "cadence_slots": snapshot["cadence_slots"],
-                        "mode": FRAME_SCHEDULER_MODE,
-                    })
-
-            self.measure.stop("raster_and_draw")
-
-
-    def present_surface(self):
-        skia_image = self.root_surface.makeImageSnapshot()
-        skia_bytes = skia_image.tobytes()
-
-        depth = 32
-        pitch = 4 * self.width
-        sdl_surface = sdl2.SDL_CreateRGBSurfaceFrom(
-            skia_bytes,
-            self.width,
-            self.height,
-            depth,
-            pitch,
-            self.RED_MASK,
-            self.GREEN_MASK,
-            self.BLUE_MASK,
-            self.ALPHA_MASK,
-        )
-        if not sdl_surface:
-            raise RuntimeError("SDL_CreateRGBSurfaceFrom failed")
-
-        try:
-            window_surface = sdl2.SDL_GetWindowSurface(self.sdl_window)
-            rect = sdl2.SDL_Rect(0, 0, self.width, self.height)
-            sdl2.SDL_BlitSurface(
-                sdl_surface,
-                ctypes.byref(rect),
-                window_surface,
-                ctypes.byref(rect),
+            title = page_state.title if page_state is not None else "Tai Gar"
+            work = RasterWork(
+                raster_id=self.raster_id,
+                window_id=self.window_id,
+                scene_epoch=self.scene_epoch,
+                active_tab_key=(id(active_tab) if active_tab is not None else None),
+                page_state=page_state,
+                chrome_display_list=self.chrome.paint(),
+                width=self.width,
+                height=self.height,
+                chrome_bottom=self.chrome.bottom,
+                chrome_raster=chrome_raster,
+                tab_raster=tab_raster,
+                estimator_tab=estimator_tab,
+                title=title,
             )
-            sdl2.SDL_UpdateWindowSurface(self.sdl_window)
-        finally:
-            sdl2.SDL_FreeSurface(sdl_surface)
+            self.raster_in_flight = True
+            return work
 
-    def raster_chrome(self):
-        """Raster browser chrome only when Chrome state/layout changes."""
+    def _restore_failed_raster_work(self, work):
+        """Restore consumed dirty bits if shutdown rejected a queued work item."""
         with self.lock:
-            discard_edit = self.discard_address_bar_edit_on_commit
-            self.discard_address_bar_edit_on_commit = False
+            self.raster_in_flight = False
+            if self._closed:
+                return
+            self.needs_raster_and_draw = True
+            self.needs_chrome_raster = (
+                self.needs_chrome_raster or work.chrome_raster
+            )
+            self.needs_tab_raster = self.needs_tab_raster or work.tab_raster
+            if work.estimator_tab is not None and self.pending_frame_raster_tab is None:
+                self.pending_frame_raster_tab = work.estimator_tab
 
-        if discard_edit:
-            self.chrome.discard_address_bar_edit()
+    def maybe_start_raster_and_draw(self):
+        """Start one raster batch without blocking in threaded mode.
 
-        self.chrome.render()
-        chrome_height = max(1, math.ceil(self.chrome.bottom))
-
-        if (
-            self.chrome_surface is None
-            or self.chrome_surface.width() != self.width
-            or self.chrome_surface.height() != chrome_height
-        ):
-            self.chrome_surface = make_skia_surface(self.width, chrome_height)
-
-        canvas = self.chrome_surface.getCanvas()
-        canvas.clear(skia.ColorWHITE)
-        for cmd in self.chrome.paint():
-            cmd.execute(canvas)
-
-
-    def tab_view_height(self):
-        """Height of the visible page viewport below browser chrome."""
-        return max(1, int(math.ceil(self.height - self.chrome.bottom)))
-
-    def document_height(self):
-        """Full committed page height in document coordinates."""
-        state = self.page_state()
-        if state is None:
-            return 0
-        return max(0, int(math.ceil(state.document_height)))
-
-    def interest_surface_height(self):
-        """Actual bounded raster-cache height for the current page."""
-        document_height = self.document_height()
-        if document_height <= 0:
-            return 0
-
-        return max(
-            1,
-            min(document_height, int(math.ceil(self.interest_height))),
-        )
-
-    def interest_end(self):
-        """Document-space end coordinate represented by tab_surface."""
-        return min(
-            self.document_height(),
-            self.interest_start + self.interest_surface_height(),
-        )
-
-    # --- Coordinate-system helpers ---------------------------------------
-    # Document: positions produced by layout/display-list commands.
-    # Surface:  pixels stored in the bounded interest-region tab_surface.
-    # Viewport: positions visible inside the page area after scrolling.
-
-    def document_to_surface_y(self, document_y):
-        """Document coordinate -> interest-surface coordinate."""
-        return float(document_y) - float(self.interest_start)
-
-    def surface_to_document_y(self, surface_y):
-        """Interest-surface coordinate -> document coordinate."""
-        return float(surface_y) + float(self.interest_start)
-
-    def active_scroll(self):
-        state = self.page_state()
-        return float(state.scroll) if state is not None else 0.0
-
-    def document_to_viewport_y(self, document_y):
-        """Document coordinate -> page viewport coordinate."""
-        return float(document_y) - self.active_scroll()
-
-    def viewport_to_document_y(self, viewport_y):
-        """Page viewport coordinate -> document coordinate."""
-        return float(viewport_y) + self.active_scroll()
-
-    def surface_to_viewport_y(self, surface_y):
-        """Interest-surface coordinate -> page viewport coordinate."""
-        return self.document_to_viewport_y(
-            self.surface_to_document_y(surface_y)
-        )
-
-    def tab_surface_root_offset(self):
-        """Root-canvas y offset used when compositing tab_surface."""
-        # surface y=0 represents document y=interest_start. Convert that point
-        # into viewport coordinates, then place the viewport below Chrome.
-        return (
-            float(self.chrome.bottom)
-            + float(self.interest_start)
-            - self.active_scroll()
-        )
-
-    # --- Interest-region management -------------------------------------
-
-    def viewport_inside_interest_region(self):
-        """Return True when the complete committed viewport is cached."""
-        state = self.page_state()
-        if state is None or state.document_height <= 0:
+        sync mode intentionally executes the exact same render implementation on
+        Browser Thread and therefore serves as the pre-12-8 A/B baseline.
+        """
+        work = self._take_raster_work()
+        if work is None:
             return False
 
-        region_height = self.interest_surface_height()
-        if region_height <= 0:
-            return False
-
-        viewport_top = float(state.scroll)
-        viewport_bottom = min(
-            float(self.document_height()),
-            viewport_top + float(self.tab_view_height()),
-        )
-
-        region_top = float(self.interest_start)
-        region_bottom = region_top + float(region_height)
-
-        return (
-            viewport_top >= region_top
-            and viewport_bottom <= region_bottom
-        )
-
-    def choose_interest_start(self):
-        """Center the committed viewport inside a new bounded cache."""
-        state = self.page_state()
-        if state is None or state.document_height <= 0:
-            return 0
-
-        document_height = self.document_height()
-        viewport_height = self.tab_view_height()
-        region_height = self.interest_surface_height()
-
-        if region_height >= document_height:
-            return 0
-
-        # Put half of the extra cached pixels before the viewport and half
-        # after it. This avoids rerastering again immediately after crossing
-        # an old interest-region boundary.
-        spare_height = max(0, region_height - viewport_height)
-        desired_start = float(state.scroll) - spare_height / 2.0
-
-        max_start = max(0, document_height - region_height)
-        return int(max(0, min(desired_start, max_start)))
-
-    def reposition_interest_region(self):
-        """Move the raster-cache window without changing page layout."""
-        self.interest_start = self.choose_interest_start()
-
-    def ensure_interest_region(self):
-        """Reraster only when committed scrolling leaves the cached region."""
-        state = self.page_state()
-        if state is None or state.document_height <= 0:
-            self.tab_surface = None
-            self.interest_start = 0
-            return False
-
-        if self.tab_surface is None or not self.viewport_inside_interest_region():
-            self.reposition_interest_region()
-            self.set_needs_raster_and_draw(tab=True)
+        if RASTER_EXECUTION_MODE == "sync":
+            result = self.app.raster.render_sync(work)
+            self._accept_raster_result(result)
             return True
 
-        return False
+        if not self.app.raster.submit(work):
+            self._restore_failed_raster_work(work)
+            return False
+        return True
 
-    def raster_tab(self):
-        """Raster the active Tab's committed display-list snapshot.
+    def poll_raster_result(self):
+        """Browser Thread consumes a completed worker result, if one exists."""
+        if RASTER_EXECUTION_MODE != "threaded":
+            return False
+        result = self.app.raster.take_result(self.raster_id)
+        if result is None:
+            return False
+        if isinstance(result, RasterFailure):
+            with self.lock:
+                self.raster_in_flight = False
+            print("Raster-and-draw worker crashed", repr(result.error))
+            return False
+        self._accept_raster_result(result)
+        return True
 
-        Browser Thread never calls Tab.render()/Tab.raster() here. The Main Thread
-        already produced this display list and handed it across commit().
-        """
-        state = self.page_state()
-        if state is None or state.document_height <= 0:
-            self.tab_surface = None
-            self.interest_start = 0
-            return
+    def _accept_raster_result(self, result):
+        with self.lock:
+            self.raster_in_flight = False
+            valid = (
+                not self._closed
+                and self.sdl_window is not None
+                and result.scene_epoch == self.scene_epoch
+                and result.width == self.width
+                and result.height == self.height
+            )
 
-        # Keep the viewport fully covered. Page edits/navigations can change
-        # document height or scroll position even when this is not a scroll event.
-        if not self.viewport_inside_interest_region():
-            self.reposition_interest_region()
+        if not valid:
+            if hasattr(self.measure, "instant"):
+                self.measure.instant("raster_result_drop", {
+                    "window_id": self.window_id,
+                    "result_epoch": result.scene_epoch,
+                    "current_epoch": self.scene_epoch,
+                })
+            return False
 
-        region_height = self.interest_surface_height()
-        region_end = self.interest_start + region_height
+        self.present_raster_result(result)
+        return True
 
-        if (
-            self.tab_surface is None
-            or self.tab_surface.width() != self.width
-            or self.tab_surface.height() != region_height
-        ):
-            self.tab_surface = make_skia_surface(self.width, region_height)
-
-        canvas = self.tab_surface.getCanvas()
-        canvas.clear(skia.ColorWHITE)
-
-        surface_clip = skia.Rect.MakeLTRB(
-            0,
-            0,
-            self.width,
-            region_height,
-        )
-        document_interest_rect = skia.Rect.MakeLTRB(
-            0,
-            self.interest_start,
-            self.width,
-            region_end,
-        )
-
-        canvas.save()
-        canvas.clipRect(surface_clip)
-        canvas.translate(0, -self.interest_start)
-
-        for item in state.display_list:
-            if hasattr(item, "rect"):
-                if (
-                    item.rect.bottom() <= document_interest_rect.top()
-                    or item.rect.top() >= document_interest_rect.bottom()
-                ):
-                    continue
-            item.execute(canvas)
-
-        canvas.restore()
-
-
-    def draw_scrollbar(self, canvas):
-        """Draw the viewport scrollbar from committed state."""
-        state = self.page_state()
-        if state is None or state.document_height <= 0:
-            return
-
-        viewport_height = max(1, self.height - self.chrome.bottom)
-        document_height = max(1.0, float(state.document_height))
-        if document_height <= viewport_height:
-            return
-
-        bar_height = viewport_height * viewport_height / document_height
-        bar_height = max(20.0, min(float(viewport_height), bar_height))
-
-        max_scroll = max(document_height - viewport_height, 1)
-        max_bar_y = max(viewport_height - bar_height, 0.0)
-        bar_y = max_bar_y * float(state.scroll) / max_scroll
-
-        scrollbar = skia.Rect.MakeLTRB(
-            self.width - SCROLLBAR_WIDTH,
-            self.chrome.bottom + bar_y,
-            self.width,
-            self.chrome.bottom + bar_y + bar_height,
-        )
-        canvas.drawRect(
-            scrollbar,
-            skia.Paint(Color=parse_color("blue")),
-        )
-
-    def draw(self):
-        """Composite cached tab/chrome surfaces and present them through SDL."""
+    def present_raster_result(self, result):
+        """The only post-raster stage: native SDL presentation on Browser Thread."""
         if self._closed or not self.sdl_window:
-            return
+            return False
 
-        self.update_title()
-
-        canvas = self.root_surface.getCanvas()
-        canvas.clear(skia.ColorWHITE)
-
-        # Page surface: clip to the content viewport and translate by the
-        # committed scroll offset.
-        if self.page_state() is not None and self.tab_surface is not None:
-            tab_rect = skia.Rect.MakeLTRB(
-                0,
-                self.chrome.bottom,
-                self.width,
-                self.height,
+        self.measure.time("sdl_present")
+        try:
+            sdl2.SDL_SetWindowTitle(
+                self.sdl_window,
+                result.title.encode("utf8", errors="replace"),
             )
-            # tab_surface y=0 is no longer document y=0. It represents
-            # document y=interest_start, so composite with the third coordinate
-            # conversion: surface -> viewport/root.
-            tab_offset = self.tab_surface_root_offset()
 
-            canvas.save()
-            canvas.clipRect(tab_rect)
-            canvas.translate(0, tab_offset)
-            self.tab_surface.draw(canvas, 0, 0)
-            canvas.restore()
-
-            # The scrollbar is viewport-relative, so it is cheap to redraw here.
-            self.draw_scrollbar(canvas)
-
-        # Chrome surface is composited last so page pixels never cover it.
-        if self.chrome_surface is not None:
-            chrome_rect = skia.Rect.MakeLTRB(
-                0,
-                0,
-                self.width,
-                self.chrome.bottom,
+            depth = 32
+            pitch = 4 * result.width
+            sdl_surface = sdl2.SDL_CreateRGBSurfaceFrom(
+                result.pixels,
+                result.width,
+                result.height,
+                depth,
+                pitch,
+                self.RED_MASK,
+                self.GREEN_MASK,
+                self.BLUE_MASK,
+                self.ALPHA_MASK,
             )
-            canvas.save()
-            canvas.clipRect(chrome_rect)
-            self.chrome_surface.draw(canvas, 0, 0)
-            canvas.restore()
+            if not sdl_surface:
+                raise RuntimeError("SDL_CreateRGBSurfaceFrom failed")
 
-        self.present_surface()
+            try:
+                window_surface = sdl2.SDL_GetWindowSurface(self.sdl_window)
+                rect = sdl2.SDL_Rect(0, 0, result.width, result.height)
+                sdl2.SDL_BlitSurface(
+                    sdl_surface,
+                    ctypes.byref(rect),
+                    window_surface,
+                    ctypes.byref(rect),
+                )
+                sdl2.SDL_UpdateWindowSurface(self.sdl_window)
+            finally:
+                sdl2.SDL_FreeSurface(sdl_surface)
 
-    def update_title(self):
-        state = self.page_state()
-        title = state.title if state is not None else "Tai Gar"
+            if TRACE_FRAME_HASH and hasattr(self.measure, "instant"):
+                self.measure.instant("frame_presented", {
+                    "sha256": hashlib.sha256(result.pixels).hexdigest(),
+                    "scene_epoch": result.scene_epoch,
+                    "raster_execution": RASTER_EXECUTION_MODE,
+                })
+        finally:
+            self.measure.stop("sdl_present")
 
-        sdl2.SDL_SetWindowTitle(
-            self.sdl_window,
-            title.encode("utf8", errors="replace"),
-        )
+        return True
+
+    # Backward-compatible name used by older local experiments. In Chapter 12-8
+    # this method submits work instead of necessarily doing the work itself.
+    def raster_and_draw(self):
+        return self.maybe_start_raster_and_draw()
+
 
     def active_url_string(self):
         state = self.active_committed_state()
@@ -7857,32 +8239,26 @@ class BrowserWindow:
 
         if width <= 10 or height <= 10:
             return
-        if self.width == width and self.height == height:
-            return
 
-        self.width = width
-        self.height = height
-        self.root_surface = make_skia_surface(width, height)
-        self.chrome_surface = None
-        self.tab_surface = None
+        with self.lock:
+            if self._closed or (self.width == width and self.height == height):
+                return
 
-        self.interest_height = max(
-            1,
-            INTEREST_REGION_MULTIPLIER * self.height,
-        )
-        self.interest_start = 0
+            self.width = width
+            self.height = height
+            self.scene_epoch += 1
 
-        # Chrome is Browser-Thread-owned and can be rebuilt immediately.
-        self.raster_chrome()
-        tab_height = max(1, height - self.chrome.bottom)
+            # Chrome DOM/layout/hit-testing data remains Browser-Thread-owned.
+            # Skia surfaces are resized lazily by RasterWindowState on next work.
+            self.chrome.render()
+            tab_height = max(1, height - self.chrome.bottom)
 
         # Layout belongs to each Tab Main Thread. A resize task marks that Tab
         # dirty; the next animation frame renders and commits a new display list.
         for tab in self.tabs_snapshot():
             self.schedule_tab_task(tab, tab.resize, width, tab_height)
 
-        # Present the resized chrome now; the page is filled in by the next commit.
-        self.set_needs_raster_and_draw()
+        self.set_needs_raster_and_draw(chrome=True, tab=True)
 
 
 
