@@ -4276,111 +4276,14 @@ def cascade_priority(rule):
     selector, body=rule
     return selector.priority
 
-RUNTIME_JS = open("runtime.js").read()
+RUNTIME_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "runtime.js",
+)
 
-# Chapter 12 APIs are layered on top of the existing runtime.js. Keeping this
-# small bridge here lets the scheduling implementation travel with browser.py
-# without replacing the rest of the project's DOM/event runtime.
-SCHEDULING_RUNTIME_JS = r"""
-// setTimeout and setInterval share one monotonically increasing handle source.
-// This avoids reusing an ID just because an earlier callback was deleted.
-NEXT_TIMER_HANDLE = 0;
-SET_TIMEOUT_REQUESTS = {};
-SET_INTERVAL_REQUESTS = {};
+with open(RUNTIME_PATH, "r", encoding="utf-8") as runtime_file:
+    RUNTIME_JS = runtime_file.read()
 
-function setTimeout(callback, time_delta) {
-    var handle = NEXT_TIMER_HANDLE++;
-    SET_TIMEOUT_REQUESTS[handle] = callback;
-    call_python("setTimeout", handle, time_delta);
-    return handle;
-}
-
-function runSetTimeout(handle) {
-    var callback = SET_TIMEOUT_REQUESTS[handle];
-    if (callback === undefined) return;
-
-    // A timeout is one-shot. Delete it before invoking user code so the callback
-    // can schedule another timer without retaining the completed callback.
-    delete SET_TIMEOUT_REQUESTS[handle];
-    callback();
-}
-
-function setInterval(callback, time_delta) {
-    var handle = NEXT_TIMER_HANDLE++;
-    SET_INTERVAL_REQUESTS[handle] = callback;
-    call_python("setInterval", handle, time_delta);
-    return handle;
-}
-
-function clearInterval(handle) {
-    // Deleting the JavaScript callback makes already-queued interval tasks safe:
-    // runSetInterval becomes a no-op even if one crossed the queue boundary.
-    delete SET_INTERVAL_REQUESTS[handle];
-    call_python("clearInterval", handle);
-}
-
-function runSetInterval(handle) {
-    var callback = SET_INTERVAL_REQUESTS[handle];
-    if (callback === undefined) return;
-    callback();
-}
-
-RAF_LISTENERS = [];
-
-function requestAnimationFrame(callback) {
-    RAF_LISTENERS.push(callback);
-    call_python("requestAnimationFrame");
-}
-
-function runRAFHandlers() {
-    // Move this frame's callbacks out before running them. A callback that
-    // requests another animation frame therefore lands in the fresh list and
-    // cannot run recursively in the current frame.
-    var handlers_copy = RAF_LISTENERS;
-    RAF_LISTENERS = [];
-
-    for (var i = 0; i < handlers_copy.length; i++) {
-        handlers_copy[i]();
-    }
-}
-
-XHR_REQUESTS = {};
-
-XMLHttpRequest = function() {
-    this.handle = Object.keys(XHR_REQUESTS).length;
-    XHR_REQUESTS[this.handle] = this;
-    this.is_async = false;
-    this.method = "GET";
-    this.url = "";
-    this.responseText = "";
-    this.onload = null;
-};
-
-XMLHttpRequest.prototype.open = function(method, url, is_async) {
-    this.is_async = !!is_async;
-    this.method = method;
-    this.url = url;
-};
-
-XMLHttpRequest.prototype.send = function(body) {
-    if (body === undefined) body = null;
-    var out = call_python(
-        "XMLHttpRequest_send",
-        this.method, this.url, body, this.is_async, this.handle
-    );
-    if (!this.is_async) this.responseText = out;
-    return out;
-};
-
-function runXHROnload(body, handle) {
-    var obj = XHR_REQUESTS[handle];
-    if (!obj) return;
-
-    var evt = new Event("load");
-    obj.responseText = body;
-    if (obj.onload) obj.onload(evt);
-}
-"""
 
 EVENT_DISPATCH_JS = \
     "dispatch_event_path(dukpy.type, dukpy.handles)"
@@ -4424,10 +4327,7 @@ class JSContext:
         self.interp.export_function(
             "requestAnimationFrame", self.requestAnimationFrame
         )
-
-
         self.evaljs(RUNTIME_JS)
-        self.evaljs(SCHEDULING_RUNTIME_JS)
 
         self.update_id_globals()
 

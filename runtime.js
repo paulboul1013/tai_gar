@@ -165,6 +165,19 @@ Object.defineProperty(Node.prototype, "id", {
     }
 });
 
+Object.defineProperty(Node.prototype, "style", {
+    get: function () {
+        return this.getAttribute("style");
+    },
+
+    set: function (value) {
+        this.setAttribute(
+            "style",
+            value.toString()
+        );
+    }
+});
+
 Node.prototype.appendChild = function (child) {
     call_python(
         "appendChild",
@@ -302,3 +315,31 @@ XMLHttpRequest.prototype.send = function (body) {
     );
 };
 
+//
+// requestAnimationFrame
+//
+
+var RAF_LISTENERS = [];
+
+function requestAnimationFrame(callback) {
+    RAF_LISTENERS.push(callback);
+
+    call_python(
+        "requestAnimationFrame"
+    );
+}
+
+function runRAFHandlers() {
+    // 取出這一 frame 要執行的 callbacks
+    var handlers = RAF_LISTENERS;
+
+    // 先清空。
+    //
+    // 如果 callback 裡再次呼叫 requestAnimationFrame，
+    // 新 callback 會留給下一個 frame，而不會在本 frame 遞迴執行。
+    RAF_LISTENERS = [];
+
+    for (var i = 0; i < handlers.length; i++) {
+        handlers[i]();
+    }
+}
