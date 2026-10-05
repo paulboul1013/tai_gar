@@ -9,6 +9,10 @@ from html import unescape,escape
 import webbrowser
 import os
 import math
+from gpu_evidence import load_config, EvidenceRecorder, classify_renderer
+
+RENDER_CONFIG = load_config(os.environ)
+
 import dukpy
 from datetime import datetime, timezone
 from email.utils import format_datetime,parsedate_to_datetime
@@ -295,6 +299,20 @@ FRAME_SCHEDULER_MODE = (
 if FRAME_SCHEDULER_MODE not in ["fixed", "adaptive"]:
     FRAME_SCHEDULER_MODE = "adaptive"
 
+# Browser Thread event-pump latency.
+#
+# During an active animation/raster sequence, poll SDL at 1 ms so a Main-Thread
+# commit cannot sit behind the old fixed 16 ms SDL wait. When no frame-sensitive
+# work exists, retain a 16 ms idle wait to avoid burning a CPU core. This avoids
+# cross-thread SDL_PushEvent wakeups, which are deliberately not used because the
+# WSLg + SDL2 + OpenGL/D3D12 stack can fail inside native code on some setups.
+BROWSER_ACTIVE_WAIT_MS = _scheduler_env_int(
+    "BROWSER_ACTIVE_WAIT_MS", 1, minimum=0
+)
+BROWSER_IDLE_WAIT_MS = _scheduler_env_int(
+    "BROWSER_IDLE_WAIT_MS", 16, minimum=1
+)
+
 FRAME_ESTIMATOR_ALPHA = _scheduler_env_float(
     "BROWSER_FRAME_ESTIMATOR_ALPHA", 0.25, minimum=0.01
 )
@@ -358,13 +376,27 @@ if FRAME_REARM_MODE not in ["browser_loop", "direct"]:
 #     Exercise 12-8 implementation. Raster + Skia composition run on one
 #     process-wide Raster-and-draw Thread; Browser Thread only prepares snapshots
 #     and performs SDL presentation.
-RASTER_EXECUTION_MODE = (
-    os.environ.get("BROWSER_RASTER_MODE", "threaded")
-    .strip()
-    .casefold()
-)
-if RASTER_EXECUTION_MODE not in ["sync", "threaded"]:
-    RASTER_EXECUTION_MODE = "threaded"
+RASTER_EXECUTION_MODE = RENDER_CONFIG.raster_mode
+RENDER_BACKEND = RENDER_CONFIG.backend
+
+_OPENGL_GL = None
+
+def get_opengl_gl():
+    """Import PyOpenGL only when the GPU backend is actually requested."""
+    global _OPENGL_GL
+    if _OPENGL_GL is not None:
+        return _OPENGL_GL
+
+    try:
+        import OpenGL.GL as gl
+    except ImportError as exc:
+        raise RuntimeError(
+            "GPU backend requires PyOpenGL. Install it with: "
+            "pip3 install PyOpenGL"
+        ) from exc
+
+    _OPENGL_GL = gl
+    return gl
 
 # Test-only stress knob used by the A/B validation harness. Keeping it at zero has
 # no effect on normal browser behavior. The sleep occurs inside the measured
@@ -609,6 +641,7 @@ class MeasureTime:
     def __init__(self, filename="browser.trace"):
         self.file = open(filename, "w", encoding="utf-8")
         self.finished = False
+        self.disabled = False
         self.lock = threading.Lock()
 
         # Remember thread names for the entire trace lifetime. Tab main threads
@@ -626,7 +659,7 @@ class MeasureTime:
             "name": "process_name",
             "ph": "M",
             "ts": self.timestamp_us(),
-            "pid": 1,
+            "pid": os.getpid(),
             "cat": "__metadata",
             "args": {"name": "Browser"},
         }, first=True)
@@ -638,7 +671,7 @@ class MeasureTime:
     def write_event(self, event, first=False):
         """Atomically append one trace event from any browser thread."""
         with self.lock:
-            if self.finished:
+            if self.finished or self.disabled:
                 return False
 
             if not first:
@@ -650,13 +683,13 @@ class MeasureTime:
 
     def thread_name(self, name=None):
         """Register and emit metadata for the calling thread exactly once."""
-        tid = threading.get_ident()
+        tid = threading.get_native_id()
         if name is None:
             name = threading.current_thread().name
         name = str(name)
 
         with self.lock:
-            if self.finished:
+            if self.finished or self.disabled:
                 return False
 
             self.thread_names[tid] = name
@@ -667,7 +700,7 @@ class MeasureTime:
                 "name": "thread_name",
                 "ph": "M",
                 "ts": self.timestamp_us(),
-                "pid": 1,
+                "pid": os.getpid(),
                 "tid": tid,
                 "cat": "__metadata",
                 "args": {"name": name},
@@ -680,7 +713,7 @@ class MeasureTime:
 
     def ensure_thread_name(self):
         """Automatically name a profiled thread even if its caller forgot."""
-        tid = threading.get_ident()
+        tid = threading.get_native_id()
 
         with self.lock:
             if self.finished:
@@ -698,8 +731,8 @@ class MeasureTime:
             "cat": "_",
             "name": str(name),
             "ts": self.timestamp_us(),
-            "pid": 1,
-            "tid": threading.get_ident(),
+            "pid": os.getpid(),
+            "tid": threading.get_native_id(),
         })
 
     def stop(self, name):
@@ -710,8 +743,8 @@ class MeasureTime:
             "cat": "_",
             "name": str(name),
             "ts": self.timestamp_us(),
-            "pid": 1,
-            "tid": threading.get_ident(),
+            "pid": os.getpid(),
+            "tid": threading.get_native_id(),
         })
 
     def instant(self, name, args=None):
@@ -723,8 +756,8 @@ class MeasureTime:
             "cat": "_",
             "name": str(name),
             "ts": self.timestamp_us(),
-            "pid": 1,
-            "tid": threading.get_ident(),
+            "pid": os.getpid(),
+            "tid": threading.get_native_id(),
             "args": dict(args or {}),
         })
 
@@ -738,7 +771,7 @@ class MeasureTime:
                 if thread.ident is None:
                     continue
                 self.thread_names.setdefault(
-                    int(thread.ident),
+                    int(thread.native_id),
                     str(thread.name),
                 )
 
@@ -750,7 +783,7 @@ class MeasureTime:
                     "name": "thread_name",
                     "ph": "M",
                     "ts": self.timestamp_us(),
-                    "pid": 1,
+                    "pid": os.getpid(),
                     "tid": tid,
                     "cat": "__metadata",
                     "args": {"name": name},
@@ -1808,6 +1841,7 @@ def parse_blur_filter(value):
 
 
 def make_skia_surface(width, height):
+    """Create the existing CPU-backed Skia raster surface."""
     width = max(1, int(width))
     height = max(1, int(height))
     info = skia.ImageInfo.Make(
@@ -1817,6 +1851,54 @@ def make_skia_surface(width, height):
         at=skia.kUnpremul_AlphaType,
     )
     return skia.Surface.MakeRaster(info)
+
+
+def make_gpu_root_surface(skia_context, width, height, samples=0, stencil=0):
+    """Wrap SDL's default OpenGL framebuffer in a Skia GPU surface.
+
+    Framebuffer 0 is valid. Counts come from SDL's negotiated attributes before
+    Skia creates its context; GL errors are never silently cleared.
+    """
+    gl = get_opengl_gl()
+    width = max(1, int(width))
+    height = max(1, int(height))
+
+    backend_target = skia.GrBackendRenderTarget(
+        width,
+        height,
+        samples,
+        stencil,
+        skia.GrGLFramebufferInfo(0, gl.GL_RGBA8),
+    )
+    surface = skia.Surface.MakeFromBackendRenderTarget(
+        skia_context,
+        backend_target,
+        skia.kBottomLeft_GrSurfaceOrigin,
+        skia.kRGBA_8888_ColorType,
+        skia.ColorSpace.MakeSRGB(),
+    )
+    if surface is None:
+        raise RuntimeError("Skia failed to wrap the OpenGL framebuffer")
+    return surface
+
+
+def make_gpu_render_target(skia_context, width, height):
+    """Create an off-screen GPU surface for tab/chrome raster caches."""
+    width = max(1, int(width))
+    height = max(1, int(height))
+    info = skia.ImageInfo.MakeN32Premul(
+        width,
+        height,
+        skia.ColorSpace.MakeSRGB(),
+    )
+    surface = skia.Surface.MakeRenderTarget(
+        skia_context,
+        skia.Budgeted.kNo,
+        info,
+    )
+    if surface is None:
+        raise RuntimeError("Skia failed to create a GPU render target")
+    return surface
 
 
 def centered_icon_rect(rect, size=ICON_DEFAULT_SIZE):
@@ -2419,16 +2501,23 @@ def is_checkbox_input(node):
 class BrowserApp:
     """Own SDL itself and route SDL events to the correct BrowserWindow."""
     def __init__(self):
+        self.evidence = EvidenceRecorder(RENDER_CONFIG)
+        self.inputs = {}
+        self.input_counter = 0
+        self.current_input_id = None
         init_flags = sdl2.SDL_INIT_VIDEO | sdl2.SDL_INIT_EVENTS
         if sdl2.SDL_Init(init_flags) != 0:
             error = sdl2.SDL_GetError()
             if isinstance(error, bytes):
                 error = error.decode("utf8", errors="replace")
+            self.evidence.fail("SDL_Init failed: {}".format(error))
+            self.evidence.write()
             raise RuntimeError("SDL_Init failed: {}".format(error))
 
-        # SDL event handling, browser/chrome state, and every direct SDL call stay
-        # on this process-starting Browser Thread. Chapter 12-8 moves only Skia
-        # raster/composition to Raster-and-draw Thread.
+        # SDL event handling and native presentation stay on this process-starting
+        # Browser Thread. Chapter 12-8 CPU mode may move Skia raster/composition to
+        # Raster-and-draw Thread; Chapter 13 GPU POC intentionally keeps the GL
+        # context and GPU raster on Browser Thread in sync mode.
         threading.current_thread().name = "Browser thread"
 
         # One process-wide trace shared by every native BrowserWindow.
@@ -2471,10 +2560,16 @@ class BrowserApp:
         if url is None:
             url = URL("https://browser.engineering/")
 
-        browser_window = BrowserWindow(self)
-        self.windows.append(browser_window)
-        self.windows_by_id[browser_window.window_id] = browser_window
-        browser_window.new_tab(url)
+        try:
+            browser_window = BrowserWindow(self)
+            self.windows.append(browser_window)
+            self.windows_by_id[browser_window.window_id] = browser_window
+            browser_window.new_tab(url)
+        except BaseException as exc:
+            if not any(item.get("kind") == "policy" for item in self.evidence.data["failures"]):
+                self.evidence.fail(str(exc))
+            self.evidence.write()
+            raise
         return browser_window
 
     def unregister_window(self, browser_window):
@@ -2552,6 +2647,29 @@ class BrowserApp:
             })
 
     def dispatch_event(self, event):
+        """Map SDL input time once and carry its identity through affected commits."""
+        input_types = {sdl2.SDL_MOUSEBUTTONUP, sdl2.SDL_MOUSEWHEEL,
+                       sdl2.SDL_KEYDOWN, sdl2.SDL_TEXTINPUT}
+        input_id = None
+        if int(event.type) in input_types and self.evidence.enabled:
+            timestamp = int(event.common.timestamp)
+            now_ticks = int(sdl2.SDL_GetTicks()) & 0xffffffff
+            age_ms = (now_ticks - timestamp) & 0xffffffff
+            self.input_counter += 1
+            input_id = self.input_counter
+            self.inputs[input_id] = {"input_id": input_id,
+                "event_ns": time.perf_counter_ns() - age_ms * 1000000,
+                "sdl_timestamp_ms": timestamp, "clock_mapped": age_ms < 600000,
+                "timestamp_source": "SDL event timestamp mapped with SDL_GetTicks",
+                "effect_included": False}
+            self.evidence.event("input", **self.inputs[input_id])
+        self.current_input_id = input_id
+        try:
+            return self._dispatch_event(event)
+        finally:
+            self.current_input_id = None
+
+    def _dispatch_event(self, event):
         event_type = event.type
         self.trace_input_dispatch_latency(event)
 
@@ -2566,6 +2684,12 @@ class BrowserApp:
 
             if event.window.event == sdl2.SDL_WINDOWEVENT_CLOSE:
                 browser_window.close()
+            elif event.window.event == sdl2.SDL_WINDOWEVENT_MINIMIZED:
+                browser_window.minimized = True
+            elif event.window.event in [sdl2.SDL_WINDOWEVENT_RESTORED, getattr(sdl2, "SDL_WINDOWEVENT_DISPLAY_CHANGED", -1)]:
+                browser_window.minimized = False
+                browser_window.refresh_drawable()
+                browser_window.set_needs_raster_and_draw(chrome=True, tab=True)
             elif event.window.event in [
                 sdl2.SDL_WINDOWEVENT_SIZE_CHANGED,
                 sdl2.SDL_WINDOWEVENT_RESIZED,
@@ -2574,6 +2698,7 @@ class BrowserApp:
                     int(event.window.data1),
                     int(event.window.data2),
                 )
+                browser_window.refresh_drawable()
             return
 
         if event_type == sdl2.SDL_MOUSEBUTTONUP:
@@ -2713,44 +2838,90 @@ class BrowserApp:
             if text:
                 browser_window.handle_key(text)
 
+    def _browser_wait_timeout_ms(self):
+        """Choose a low-latency SDL poll only while frame-sensitive work exists.
+
+        The previous unconditional 16 ms wait could phase-beat against the 33 ms
+        requestAnimationFrame clock: a commit might become ready just after SDL
+        began sleeping and would then wait almost another half-frame before raster
+        and presentation. During animation/raster work we cap that discovery delay
+        at BROWSER_ACTIVE_WAIT_MS (1 ms by default).
+
+        Idle windows retain the larger wait so the browser does not busy-spin.
+        """
+        for browser_window in list(self.windows):
+            if browser_window.needs_low_latency_browser_poll():
+                return BROWSER_ACTIVE_WAIT_MS
+        return BROWSER_IDLE_WAIT_MS
+
+    def _service_browser_work(self):
+        """Deliver completed frames and schedule the next frame on Browser Thread."""
+        for browser_window in list(self.windows):
+            if browser_window not in self.windows:
+                continue
+
+            # Preserve the Chapter 12 ordering:
+            #   present completed threaded pixels
+            #   -> arm RAF
+            #   -> raster the newest committed scene
+            browser_window.poll_raster_result()
+
+            if browser_window in self.windows:
+                browser_window.schedule_animation_frame(
+                    trigger="browser_loop"
+                )
+
+            if browser_window in self.windows:
+                browser_window.maybe_start_raster_and_draw()
+
     def run(self):
         self.running = True
         event = sdl2.SDL_Event()
 
         try:
             while self.running and self.windows:
-                # Wait briefly when idle so the loop does not consume a CPU core.
-                if sdl2.SDL_WaitEventTimeout(ctypes.byref(event), 16) != 0:
+                timeout_ms = self._browser_wait_timeout_ms()
+
+                if sdl2.SDL_WaitEventTimeout(
+                    ctypes.byref(event),
+                    timeout_ms,
+                ) != 0:
                     self.dispatch_event(event)
 
+                # Drain native input/window events before frame work. This keeps
+                # input responsive without injecting synthetic SDL events from
+                # background Python threads.
                 while sdl2.SDL_PollEvent(ctypes.byref(event)) != 0:
                     self.dispatch_event(event)
 
-                # Browser Thread first consumes completed pixels (SDL only), then
-                # arms the next Main-Thread frame, then submits at most one raster
-                # snapshot per window. threaded mode returns immediately from submit.
-                for browser_window in list(self.windows):
-                    browser_window.poll_raster_result()
-                    browser_window.schedule_animation_frame(
-                        trigger="browser_loop"
-                    )
-                    browser_window.maybe_start_raster_and_draw()
+                self._service_browser_work()
+        except BaseException as exc:
+            self.evidence.fail(str(exc))
+            raise
         finally:
-            for browser_window in list(self.windows):
+            self.shutdown()
+
+    def shutdown(self):
+        for browser_window in list(self.windows):
+            try:
                 browser_window.close()
+            except Exception as exc:
+                self.evidence.fail("Window cleanup failed: " + str(exc))
 
             # No worker may write trace events after MeasureTime.finish().
-            self.raster.set_needs_quit()
-            self.raster.join_thread(timeout=1.0)
+        self.raster.set_needs_quit()
+        self.raster.join_thread(timeout=1.0)
 
             # Stop networking before closing the shared trace so no completion
             # can enqueue new page work after BrowserApp shutdown begins.
-            self.network.set_needs_quit()
-            self.network.join_thread(timeout=1.0)
+        self.network.set_needs_quit()
+        self.network.join_thread(timeout=1.0)
 
-            self.measure.finish()
-            sdl2.SDL_StopTextInput()
-            sdl2.SDL_Quit()
+        self.measure.finish()
+        sdl2.SDL_StopTextInput()
+        sdl2.SDL_Quit()
+        self.evidence.finalize()
+        self.evidence.write()
 
 
 class DrawText:
@@ -5516,6 +5687,8 @@ class CommitData:
         "can_go_forward",
         "width",
         "tab_height",
+        "navigation_generation",
+        "input_ids",
     )
 
     def __init__(
@@ -5530,6 +5703,8 @@ class CommitData:
         can_go_forward=False,
         width=0,
         tab_height=0,
+        navigation_generation=0,
+        input_ids=(),
     ):
         # Everything needed by the Browser Thread is captured before commit().
         # display_list is intentionally not copied: ownership moves across the
@@ -5544,6 +5719,8 @@ class CommitData:
         self.can_go_forward = bool(can_go_forward)
         self.width = int(width)
         self.tab_height = int(tab_height)
+        self.navigation_generation = int(navigation_generation)
+        self.input_ids = tuple(input_ids)
 
     @property
     def url_string(self):
@@ -5587,6 +5764,7 @@ class Tab:
 
         self.task_runner = TaskRunner(self)
         self.needs_render = False
+        self.visual_effect_revision = 0
         self.js = None
         self.pending_fragment = None
 
@@ -5597,8 +5775,10 @@ class Tab:
         # Chapter 12-6: asynchronous network completions carry this generation.
         # A completion from an older navigation must never overwrite a newer page.
         self.navigation_generation = 0
+        self.applied_input_ids = []
 
     def set_needs_render(self):
+        self.visual_effect_revision += 1
         self.needs_render = True
         self.browser.set_needs_animation_frame(self)
 
@@ -5924,6 +6104,7 @@ class Tab:
     def load(self, url, payload=None, add_to_history=True):
         """Begin navigation; network I/O is asynchronous and centrally owned."""
         self.navigation_generation += 1
+        self.applied_input_ids = []
         generation = self.navigation_generation
 
         # A new document may have a completely different rendering cost.
@@ -6116,6 +6297,8 @@ class Tab:
                 can_go_forward=self.can_go_forward(),
                 width=self.width,
                 tab_height=self.tab_height,
+                navigation_generation=self.navigation_generation,
+                input_ids=self.applied_input_ids,
             )
 
             accepted = self.browser.commit(self, data)
@@ -6705,6 +6888,9 @@ class RasterWork:
         "raster_id",
         "window_id",
         "scene_epoch",
+        "frame_id",
+        "input_ids",
+        "navigation_generation",
         "active_tab_key",
         "page_state",
         "chrome_display_list",
@@ -6733,10 +6919,16 @@ class RasterWork:
         tab_raster,
         estimator_tab,
         title,
+        frame_id=0,
+        input_ids=(),
+        navigation_generation=0,
     ):
         self.raster_id = int(raster_id)
         self.window_id = int(window_id)
         self.scene_epoch = int(scene_epoch)
+        self.frame_id = int(frame_id)
+        self.input_ids = tuple(input_ids)
+        self.navigation_generation = int(navigation_generation)
         self.active_tab_key = active_tab_key
         self.page_state = page_state
         self.chrome_display_list = tuple(chrome_display_list or ())
@@ -6750,15 +6942,25 @@ class RasterWork:
 
 
 class RasterResult:
-    """Pixel buffer returned to Browser Thread; SDL presentation happens there."""
+    """Completed raster frame returned to BrowserWindow for presentation.
+
+    CPU frames carry a byte buffer. GPU frames already live in the OpenGL
+    framebuffer and therefore deliberately carry pixels=None to avoid a GPU->CPU
+    readback that would defeat the acceleration experiment.
+    """
     __slots__ = (
         "raster_id",
         "window_id",
         "scene_epoch",
+        "frame_id",
+        "input_ids",
+        "navigation_generation",
+        "active_tab_key",
         "pixels",
         "width",
         "height",
         "title",
+        "backend",
         "elapsed_sec",
     )
 
@@ -6772,15 +6974,25 @@ class RasterResult:
         width,
         height,
         title,
+        backend="cpu",
         elapsed_sec=0.0,
+        frame_id=0,
+        input_ids=(),
+        navigation_generation=0,
+        active_tab_key=None,
     ):
         self.raster_id = int(raster_id)
         self.window_id = int(window_id)
         self.scene_epoch = int(scene_epoch)
+        self.frame_id = int(frame_id)
+        self.input_ids = tuple(input_ids)
+        self.navigation_generation = int(navigation_generation)
+        self.active_tab_key = active_tab_key
         self.pixels = pixels
         self.width = int(width)
         self.height = int(height)
         self.title = str(title or "Tai Gar")
+        self.backend = str(backend or "cpu")
         self.elapsed_sec = max(0.0, float(elapsed_sec))
 
 
@@ -6812,6 +7024,13 @@ class RasterWindowState:
         self.tab_surface = None
         self.interest_start = 0
         self.interest_height = 1
+        self.backend = "cpu"
+
+    def _make_root_surface(self, width, height):
+        return make_skia_surface(width, height)
+
+    def _make_offscreen_surface(self, width, height):
+        return make_skia_surface(width, height)
 
     def _sync_scene(self, work):
         resized = self.width != work.width or self.height != work.height
@@ -6820,7 +7039,7 @@ class RasterWindowState:
         if resized:
             self.width = work.width
             self.height = work.height
-            self.root_surface = make_skia_surface(work.width, work.height)
+            self.root_surface = self._make_root_surface(work.width, work.height)
             self.chrome_surface = None
             self.tab_surface = None
             self.interest_start = 0
@@ -6835,7 +7054,7 @@ class RasterWindowState:
             self.interest_start = 0
 
         if self.root_surface is None:
-            self.root_surface = make_skia_surface(work.width, work.height)
+            self.root_surface = self._make_root_surface(work.width, work.height)
 
         return resized, tab_changed
 
@@ -6908,7 +7127,7 @@ class RasterWindowState:
             or self.chrome_surface.width() != work.width
             or self.chrome_surface.height() != chrome_height
         ):
-            self.chrome_surface = make_skia_surface(work.width, chrome_height)
+            self.chrome_surface = self._make_offscreen_surface(work.width, chrome_height)
 
         canvas = self.chrome_surface.getCanvas()
         canvas.clear(skia.ColorWHITE)
@@ -6933,7 +7152,7 @@ class RasterWindowState:
             or self.tab_surface.width() != work.width
             or self.tab_surface.height() != region_height
         ):
-            self.tab_surface = make_skia_surface(work.width, region_height)
+            self.tab_surface = self._make_offscreen_surface(work.width, region_height)
 
         canvas = self.tab_surface.getCanvas()
         canvas.clear(skia.ColorWHITE)
@@ -6991,7 +7210,7 @@ class RasterWindowState:
             skia.Paint(Color=parse_color("blue")),
         )
 
-    def _compose_pixels(self, work):
+    def _compose_scene(self, work):
         canvas = self.root_surface.getCanvas()
         canvas.clear(skia.ColorWHITE)
 
@@ -7027,6 +7246,8 @@ class RasterWindowState:
             self.chrome_surface.draw(canvas, 0, 0)
             canvas.restore()
 
+    def _compose_pixels(self, work):
+        self._compose_scene(work)
         return self.root_surface.makeImageSnapshot().tobytes()
 
     def render(self, work):
@@ -7067,11 +7288,88 @@ class RasterWindowState:
             raster_id=work.raster_id,
             window_id=work.window_id,
             scene_epoch=work.scene_epoch,
+            frame_id=work.frame_id,
+            input_ids=work.input_ids,
+            navigation_generation=work.navigation_generation,
+            active_tab_key=work.active_tab_key,
             pixels=pixels,
             width=work.width,
             height=work.height,
             title=work.title,
+            backend=self.backend,
         )
+
+
+class GpuRasterWindowState(RasterWindowState):
+    """Browser-Thread-owned Skia/OpenGL state for the Chapter 13 GPU POC."""
+
+    def __init__(self, skia_context, drawable_size=None, samples=0, stencil=0):
+        super().__init__()
+        self.skia_context = skia_context
+        self.backend = "gpu"
+        self.drawable_size = drawable_size
+        self.samples = samples
+        self.stencil = stencil
+
+    def _make_root_surface(self, width, height):
+        size = self.drawable_size or (width, height)
+        return make_gpu_root_surface(self.skia_context, *size,
+                                     samples=self.samples, stencil=self.stencil)
+
+    def _compose_scene(self, work):
+        canvas = self.root_surface.getCanvas()
+        canvas.save()
+        canvas.scale(self.root_surface.width() / work.width,
+                     self.root_surface.height() / work.height)
+        try:
+            super()._compose_scene(work)
+        finally:
+            canvas.restore()
+
+    def resource_evidence(self):
+        resources = {}
+        for name in ("root_surface", "chrome_surface", "tab_surface"):
+            surface = getattr(self, name)
+            if surface is None:
+                continue
+            access = skia.Surface.kFlushRead_BackendHandleAccess
+            target = surface.getBackendRenderTarget(access)
+            texture = surface.getBackendTexture(access)
+            resources[name] = {
+                "recording_context_matches": surface.recordingContext() == self.skia_context,
+                "render_target_valid": target.isValid(),
+                "texture_valid": texture.isValid(),
+                "size": [surface.width(), surface.height()],
+            }
+        return resources
+
+    def _make_offscreen_surface(self, width, height):
+        return make_gpu_render_target(self.skia_context, width, height)
+
+    def _compose_pixels(self, work):
+        # Compose directly into the OpenGL framebuffer. Never snapshot/read back
+        # to CPU memory; that copy is precisely what the GPU path is meant to avoid.
+        self._compose_scene(work)
+
+        if hasattr(self.root_surface, "flushAndSubmit"):
+            self.root_surface.flushAndSubmit()
+        elif hasattr(self.skia_context, "flushAndSubmit"):
+            self.skia_context.flushAndSubmit()
+        else:
+            # Older skia-python builds expose flush() on Surface. Keep a narrow
+            # compatibility fallback while still failing loudly if nothing exists.
+            flush = getattr(self.root_surface, "flush", None)
+            if flush is None:
+                raise RuntimeError("Skia GPU surface has no flush API")
+            flush()
+
+        return None
+
+    def release(self):
+        # Drop GPU-backed surfaces while their OpenGL context is still current.
+        self.root_surface = None
+        self.chrome_surface = None
+        self.tab_surface = None
 
 
 class RasterAndDrawRunner:
@@ -7154,14 +7452,16 @@ class RasterAndDrawRunner:
                 "cadence_slots": snapshot["cadence_slots"],
                 "mode": FRAME_SCHEDULER_MODE,
                 "raster_execution": self.mode,
+                "render_backend": RENDER_BACKEND,
             })
 
-    def _render_work(self, work):
+    def _render_work(self, work, state=None):
         started = time.perf_counter()
         result = None
         self.measure.time("raster_and_draw")
         try:
-            state = self._state_for(work.raster_id)
+            if state is None:
+                state = self._state_for(work.raster_id)
             result = state.render(work)
             return result
         finally:
@@ -7171,10 +7471,10 @@ class RasterAndDrawRunner:
             self._emit_raster_sample(work, elapsed)
             self.measure.stop("raster_and_draw")
 
-    def render_sync(self, work):
+    def render_sync(self, work, state=None):
         if self.mode != "sync":
             raise RuntimeError("render_sync() is only valid in sync raster mode")
-        return self._render_work(work)
+        return self._render_work(work, state=state)
 
     def run(self):
         if hasattr(self.measure, "thread_name"):
@@ -7246,6 +7546,11 @@ class BrowserWindow:
         # recycles a native window id after close().
         self.raster_id = app.allocate_raster_window_id()
         self.scene_epoch = 0
+        self.frame_counter = 0
+        self.minimized = False
+        self.owner_thread_id = threading.get_native_id()
+        self.context_lost = False
+        self.query_ring = None
         self.raster_in_flight = False
 
         # One BrowserWindow lock protects every piece of state shared by the
@@ -7277,25 +7582,51 @@ class BrowserWindow:
         self.needs_tab_raster = False
         self.discard_address_bar_edit_on_commit = False
 
+        self.gl_context = None
+        self.skia_context = None
+        self.gpu_raster_state = None
+
+        # GPU startup gate. SDL/WSLg may expose the OpenGL context before the
+        # native window/default framebuffer is fully settled. Do not drive the
+        # first Skia GPU frame from the low-latency animation poll; preserve the
+        # original idle cadence until one real page commit has been presented.
+        self.initial_gpu_frame_presented = False
+
         flags = sdl2.SDL_WINDOW_SHOWN | sdl2.SDL_WINDOW_RESIZABLE
-        self.sdl_window = sdl2.SDL_CreateWindow(
-            b"Tai Gar",
-            sdl2.SDL_WINDOWPOS_CENTERED,
-            sdl2.SDL_WINDOWPOS_CENTERED,
-            self.width,
-            self.height,
-            flags,
-        )
-        if not self.sdl_window:
-            error = sdl2.SDL_GetError()
-            if isinstance(error, bytes):
-                error = error.decode("utf8", errors="replace")
-            raise RuntimeError("SDL_CreateWindow failed: {}".format(error))
+        self.sdl_window = None
+        self.gl_attributes = {}
+        self.drawable_size = (self.width, self.height)
+        try:
+            if RENDER_BACKEND == "gpu":
+                get_opengl_gl()
+                attributes = {
+                    "CONTEXT_MAJOR_VERSION": 3, "CONTEXT_MINOR_VERSION": 3,
+                    "CONTEXT_PROFILE_MASK": sdl2.SDL_GL_CONTEXT_PROFILE_CORE,
+                    "DOUBLEBUFFER": 1, "RED_SIZE": 8, "GREEN_SIZE": 8,
+                    "BLUE_SIZE": 8, "ALPHA_SIZE": 8, "STENCIL_SIZE": 8,
+                    "MULTISAMPLEBUFFERS": 0, "MULTISAMPLESAMPLES": 0,
+                }
+                for name, value in attributes.items():
+                    if sdl2.SDL_GL_SetAttribute(getattr(sdl2, "SDL_GL_" + name), value) != 0:
+                        raise RuntimeError("SDL_GL_SetAttribute failed: " + name)
+                flags |= sdl2.SDL_WINDOW_OPENGL | sdl2.SDL_WINDOW_ALLOW_HIGHDPI
+            self.sdl_window = sdl2.SDL_CreateWindow(
+                b"Tai Gar", sdl2.SDL_WINDOWPOS_CENTERED, sdl2.SDL_WINDOWPOS_CENTERED,
+                self.width, self.height, flags)
+            if not self.sdl_window:
+                raise RuntimeError("SDL_CreateWindow failed: " + str(sdl2.SDL_GetError()))
+            self.window_id = int(sdl2.SDL_GetWindowID(self.sdl_window))
+            if RENDER_BACKEND == "gpu":
+                self.initialize_gpu()
+        except BaseException:
+            self.release_gpu()
+            if self.sdl_window:
+                sdl2.SDL_DestroyWindow(self.sdl_window)
+                self.sdl_window = None
+            raise
 
-        self.window_id = int(sdl2.SDL_GetWindowID(self.sdl_window))
-
-        # All Skia raster surfaces/caches live in RasterWindowState. BrowserWindow
-        # owns only logical browser state plus the native SDL window.
+        # CPU surfaces live in RasterAndDrawRunner. The GPU POC instead owns one
+        # GpuRasterWindowState here because its GL context is current on Browser Thread.
 
         if sdl2.SDL_BYTEORDER == sdl2.SDL_BIG_ENDIAN:
             self.RED_MASK = 0xff000000
@@ -7308,10 +7639,139 @@ class BrowserWindow:
             self.BLUE_MASK = 0x00ff0000
             self.ALPHA_MASK = 0xff000000
 
-        self.chrome = Chrome(self)
+        try:
+            self.chrome = Chrome(self)
+        except BaseException:
+            self.release_gpu()
+            sdl2.SDL_DestroyWindow(self.sdl_window)
+            self.sdl_window = None
+            raise
         self.needs_raster_and_draw = True
         self.needs_chrome_raster = True
         self.needs_tab_raster = True
+
+    def initialize_gpu(self):
+        self.gl_context = sdl2.SDL_GL_CreateContext(self.sdl_window)
+        if not self.gl_context:
+            raise RuntimeError("SDL_GL_CreateContext failed: " + str(sdl2.SDL_GetError()))
+        self.make_gl_current()
+        gl = get_opengl_gl()
+        def text(value):
+            return value.decode("utf8", errors="replace") if isinstance(value, bytes) else str(value or "")
+        for name in ("RED_SIZE", "GREEN_SIZE", "BLUE_SIZE", "ALPHA_SIZE", "STENCIL_SIZE",
+                     "MULTISAMPLEBUFFERS", "MULTISAMPLESAMPLES", "DOUBLEBUFFER"):
+            value = ctypes.c_int()
+            if sdl2.SDL_GL_GetAttribute(getattr(sdl2, "SDL_GL_" + name), ctypes.byref(value)) != 0:
+                raise RuntimeError("SDL_GL_GetAttribute failed: " + name)
+            self.gl_attributes[name] = value.value
+        vendor, renderer, version = [text(gl.glGetString(enum)) for enum in
+                                    (gl.GL_VENDOR, gl.GL_RENDERER, gl.GL_VERSION)]
+        self.refresh_drawable()
+        swap_requested = int(os.environ.get("BROWSER_GPU_SWAP_INTERVAL", "1"))
+        if swap_requested not in (-1, 0, 1):
+            raise ValueError("BROWSER_GPU_SWAP_INTERVAL must be -1, 0 or 1")
+        swap_result = int(sdl2.SDL_GL_SetSwapInterval(swap_requested))
+        classification = classify_renderer(vendor, renderer, version)
+        context_id = "{}:{}".format(self.app.evidence.data["run_id"], self.raster_id)
+        self.app.evidence.window(self.window_id, context_id=context_id,
+            owner_thread_id=self.owner_thread_id, gl_vendor=vendor, gl_renderer=renderer,
+            gl_version=version, renderer_classification=classification,
+            video_driver=text(sdl2.SDL_GetCurrentVideoDriver()),
+            logical_size=[self.width, self.height], drawable_size=list(self.drawable_size),
+            attributes=self.gl_attributes, swap_interval_requested=swap_requested,
+            swap_interval_actual=int(sdl2.SDL_GL_GetSwapInterval()), swap_set_result=swap_result,
+            actual_backend="gpu")
+        print("OpenGL renderer: {} [{}]".format(renderer, classification["classification"]))
+        self.app.evidence.write()
+        if RENDER_CONFIG.strict and classification["classification"] != "hardware_candidate":
+            self.app.evidence.fail("strict hardware mode rejected renderer", kind="policy",
+                                   classification=classification, window_id=self.window_id)
+            self.app.evidence.write()
+            raise RuntimeError("Strict GPU mode rejected " + classification["classification"] + " renderer: " + renderer)
+        self.skia_context = skia.GrDirectContext.MakeGL()
+        if self.skia_context is None:
+            raise RuntimeError("Skia GrDirectContext.MakeGL failed")
+        if self.skia_context.backend() != skia.GrBackendApi.kOpenGL:
+            raise RuntimeError("Skia context backend is not OpenGL")
+        self.gpu_raster_state = GpuRasterWindowState(self.skia_context, self.drawable_size,
+            samples=self.gl_attributes["MULTISAMPLESAMPLES"], stencil=self.gl_attributes["STENCIL_SIZE"])
+        self.app.evidence.window(self.window_id, skia_backend=str(self.skia_context.backend()))
+        self.app.evidence.data["gates"]["l0"] = "PASS"
+        if os.environ.get("BROWSER_GPU_QUERY", "0") == "1":
+            from gpu_query import GLTimerQueryRing
+            self.query_ring = GLTimerQueryRing(gl, emit=lambda name, payload:
+                self.app.evidence.event(name, window_id=self.window_id, **payload))
+
+    def refresh_drawable(self):
+        if RENDER_BACKEND != "gpu" or not self.sdl_window:
+            return
+        width, height = ctypes.c_int(), ctypes.c_int()
+        sdl2.SDL_GL_GetDrawableSize(self.sdl_window, ctypes.byref(width), ctypes.byref(height))
+        size = (width.value, height.value)
+        self.minimized = width.value <= 0 or height.value <= 0
+        if size != self.drawable_size:
+            self.drawable_size = size
+            if self.gpu_raster_state is not None:
+                self.make_gl_current()
+                self.check_gpu_context()
+                self.gpu_raster_state.drawable_size = size
+                self.gpu_raster_state.release()
+                self.set_needs_raster_and_draw(chrome=True, tab=True)
+        if hasattr(self.app, "evidence") and hasattr(self, "window_id"):
+            self.app.evidence.window(self.window_id, drawable_size=list(size),
+                                     logical_size=[self.width, self.height])
+
+    def make_gl_current(self):
+        if RENDER_BACKEND != "gpu":
+            return True
+        if threading.get_native_id() != self.owner_thread_id:
+            raise RuntimeError("OpenGL context owner thread mismatch")
+        if not self.sdl_window or not self.gl_context:
+            return False
+        if sdl2.SDL_GL_MakeCurrent(self.sdl_window, self.gl_context) != 0:
+            error = sdl2.SDL_GetError()
+            if isinstance(error, bytes):
+                error = error.decode("utf8", errors="replace")
+            raise RuntimeError("SDL_GL_MakeCurrent failed: {}".format(error))
+        return True
+
+    def release_gpu(self):
+        """Release live GL resources, or abandon lost resources without GL calls."""
+        if not self.gl_context:
+            return
+        if threading.get_native_id() != self.owner_thread_id:
+            raise RuntimeError("OpenGL cleanup owner thread mismatch")
+        if self.context_lost:
+            if self.skia_context is not None:
+                self.skia_context.abandonContext()
+        else:
+            try:
+                self.make_gl_current()
+            except RuntimeError:
+                self.context_lost = True
+                if self.skia_context is not None:
+                    self.skia_context.abandonContext()
+        if self.query_ring is not None:
+            self.query_ring.close(context_lost=self.context_lost)
+            self.query_ring = None
+        if self.gpu_raster_state is not None:
+            self.gpu_raster_state.release()
+            self.gpu_raster_state = None
+        if self.skia_context is not None:
+            if not self.context_lost:
+                self.skia_context.releaseResourcesAndAbandonContext()
+            self.skia_context = None
+        sdl2.SDL_GL_DeleteContext(self.gl_context)
+        self.gl_context = None
+
+    def check_gpu_context(self):
+        if self.skia_context is not None and self.skia_context.abandoned():
+            self.context_lost = True
+            self.app.running = False
+            if hasattr(self.app, "evidence"):
+                self.app.evidence.fail("OpenGL context lost", window_id=self.window_id)
+                self.app.evidence.write()
+            raise RuntimeError("OpenGL context lost; stopping GPU process")
 
     def close(self):
         with self.lock:
@@ -7341,6 +7801,8 @@ class BrowserWindow:
         # finish in isolation, but RasterAndDrawRunner will discard its result.
         self.app.raster.discard_window(self.raster_id)
         self.app.unregister_window(self)
+
+        self.release_gpu()
 
         if self.sdl_window:
             sdl2.SDL_DestroyWindow(self.sdl_window)
@@ -7414,6 +7876,16 @@ class BrowserWindow:
             return False
         if clear_pending:
             tab.task_runner.clear_pending_tasks()
+        input_id = self.app.current_input_id
+        if input_id is not None:
+            original = task_code
+            def applied(*task_args):
+                before = (tab.scroll, tab.visual_effect_revision)
+                result = original(*task_args)
+                if tab.scroll != before[0] or tab.visual_effect_revision != before[1]:
+                    tab.applied_input_ids.append(input_id)
+                return result
+            task_code = applied
         return tab.task_runner.schedule_task(
             Task(
                 task_code,
@@ -7470,12 +7942,44 @@ class BrowserWindow:
         self.schedule_load(url, tab=new_tab)
         return new_tab
 
+    def needs_low_latency_browser_poll(self):
+        """Return True while Browser Thread latency can affect a visible frame.
+
+        GPU startup deliberately stays on the original idle polling cadence until
+        the first committed page frame has been presented. BrowserWindow starts
+        with needs_animation_frame=True and later marks itself dirty before the
+        page commit exists; treating those startup flags as "active animation"
+        caused the modified loop to enter 1 ms polling immediately and could race
+        WSLg/Mesa's default framebuffer setup.
+
+        After the first real GPU frame, animation_timer remains non-None while a
+        RAF task is in flight, so active animation still gets the low-latency poll.
+        """
+        with self.lock:
+            if self._closed:
+                return False
+
+            if (
+                RENDER_BACKEND == "gpu"
+                and not self.initial_gpu_frame_presented
+            ):
+                return False
+
+            return bool(
+                self.needs_animation_frame
+                or self.animation_timer is not None
+                or self.armed_frame_deadline is not None
+                or self.needs_raster_and_draw
+                or self.raster_in_flight
+            )
+
     def commit(self, tab, data):
         """Accept one Main-Thread CommitData snapshot as quickly as possible."""
         self.measure.time("commit")
         try:
             with self.lock:
-                if self._closed or tab not in self.tabs:
+                if (self._closed or tab not in self.tabs
+                    or data.navigation_generation != tab.navigation_generation):
                     return False
 
                 old_state = self.committed_states.get(tab)
@@ -7700,10 +8204,25 @@ class BrowserWindow:
         with self.lock:
             if (
                 self._closed
+                or self.minimized
                 or self.raster_in_flight
                 or not self.needs_raster_and_draw
             ):
                 return None
+
+            # In GPU mode, avoid an eager blank-frame raster immediately after
+            # SDL_GL_CreateContext(). The window starts dirty before the initial
+            # page load has committed, so page_state can still be None here.
+            # Waiting for the first real CommitData makes GPU startup deterministic
+            # instead of depending on whether the Main Thread beats a 1 ms poll.
+            if (
+                RENDER_BACKEND == "gpu"
+                and not self.initial_gpu_frame_presented
+            ):
+                initial_tab = self.active_tab
+                initial_state = self.committed_states.get(initial_tab)
+                if initial_state is None:
+                    return None
 
             chrome_raster = self.needs_chrome_raster
             tab_raster = self.needs_tab_raster
@@ -7730,7 +8249,11 @@ class BrowserWindow:
             self.pending_frame_raster_tab = None
 
             title = page_state.title if page_state is not None else "Tai Gar"
+            self.frame_counter += 1
             work = RasterWork(
+                frame_id=self.frame_counter,
+                input_ids=(page_state.input_ids if page_state else ()),
+                navigation_generation=(page_state.navigation_generation if page_state else 0),
                 raster_id=self.raster_id,
                 window_id=self.window_id,
                 scene_epoch=self.scene_epoch,
@@ -7773,7 +8296,16 @@ class BrowserWindow:
             return False
 
         if RASTER_EXECUTION_MODE == "sync":
-            result = self.app.raster.render_sync(work)
+            if RENDER_BACKEND == "gpu":
+                self.make_gl_current()
+                self.check_gpu_context()
+                if self.query_ring is not None:
+                    self.query_ring.begin(work.frame_id)
+                result = self.app.raster.render_sync(work, state=self.gpu_raster_state)
+                if self.query_ring is not None:
+                    self.query_ring.end(self.skia_context.flushAndSubmit)
+            else:
+                result = self.app.raster.render_sync(work)
             self._accept_raster_result(result)
             return True
 
@@ -7804,6 +8336,8 @@ class BrowserWindow:
                 not self._closed
                 and self.sdl_window is not None
                 and result.scene_epoch == self.scene_epoch
+                and result.active_tab_key == (id(self.active_tab) if self.active_tab else None)
+                and result.navigation_generation == (self.active_tab.navigation_generation if self.active_tab else 0)
                 and result.width == self.width
                 and result.height == self.height
             )
@@ -7821,7 +8355,7 @@ class BrowserWindow:
         return True
 
     def present_raster_result(self, result):
-        """The only post-raster stage: native SDL presentation on Browser Thread."""
+        """Present either a CPU pixel frame or the GPU framebuffer."""
         if self._closed or not self.sdl_window:
             return False
 
@@ -7832,43 +8366,96 @@ class BrowserWindow:
                 result.title.encode("utf8", errors="replace"),
             )
 
-            depth = 32
-            pitch = 4 * result.width
-            sdl_surface = sdl2.SDL_CreateRGBSurfaceFrom(
-                result.pixels,
-                result.width,
-                result.height,
-                depth,
-                pitch,
-                self.RED_MASK,
-                self.GREEN_MASK,
-                self.BLUE_MASK,
-                self.ALPHA_MASK,
-            )
-            if not sdl_surface:
-                raise RuntimeError("SDL_CreateRGBSurfaceFrom failed")
+            if result.backend == "gpu":
+                if result.pixels is not None:
+                    raise RuntimeError("GPU RasterResult unexpectedly contains pixels")
+                self.make_gl_current()
+                self.check_gpu_context()
+                present_started_ns = time.perf_counter_ns()
+                sdl2.SDL_GL_SwapWindow(self.sdl_window)
+                returned_ns = time.perf_counter_ns()
 
-            try:
-                window_surface = sdl2.SDL_GetWindowSurface(self.sdl_window)
-                rect = sdl2.SDL_Rect(0, 0, result.width, result.height)
-                sdl2.SDL_BlitSurface(
-                    sdl_surface,
-                    ctypes.byref(rect),
-                    window_surface,
-                    ctypes.byref(rect),
+                with self.lock:
+                    self.initial_gpu_frame_presented = True
+
+                if TRACE_FRAME_HASH and hasattr(self.measure, "instant"):
+                    # A GPU frame hash requires glReadPixels, which would add the very
+                    # GPU->CPU readback this benchmark is designed to eliminate.
+                    self.measure.instant("frame_hash_skipped", {
+                        "reason": "gpu_readback_disabled",
+                        "scene_epoch": result.scene_epoch,
+                    })
+            else:
+                depth = 32
+                pitch = 4 * result.width
+                sdl_surface = sdl2.SDL_CreateRGBSurfaceFrom(
+                    result.pixels,
+                    result.width,
+                    result.height,
+                    depth,
+                    pitch,
+                    self.RED_MASK,
+                    self.GREEN_MASK,
+                    self.BLUE_MASK,
+                    self.ALPHA_MASK,
                 )
-                sdl2.SDL_UpdateWindowSurface(self.sdl_window)
-            finally:
-                sdl2.SDL_FreeSurface(sdl_surface)
+                if not sdl_surface:
+                    raise RuntimeError("SDL_CreateRGBSurfaceFrom failed")
 
-            if TRACE_FRAME_HASH and hasattr(self.measure, "instant"):
-                self.measure.instant("frame_presented", {
-                    "sha256": hashlib.sha256(result.pixels).hexdigest(),
-                    "scene_epoch": result.scene_epoch,
+                try:
+                    window_surface = sdl2.SDL_GetWindowSurface(self.sdl_window)
+                    rect = sdl2.SDL_Rect(0, 0, result.width, result.height)
+                    sdl2.SDL_BlitSurface(
+                        sdl_surface,
+                        ctypes.byref(rect),
+                        window_surface,
+                        ctypes.byref(rect),
+                    )
+                    present_started_ns = time.perf_counter_ns()
+                    if sdl2.SDL_UpdateWindowSurface(self.sdl_window) != 0:
+                        raise RuntimeError("SDL_UpdateWindowSurface failed")
+                    returned_ns = time.perf_counter_ns()
+                finally:
+                    sdl2.SDL_FreeSurface(sdl_surface)
+
+                if TRACE_FRAME_HASH and hasattr(self.measure, "instant"):
+                    self.measure.instant("frame_presented", {
+                        "sha256": hashlib.sha256(result.pixels).hexdigest(),
+                        "scene_epoch": result.scene_epoch,
+                        "raster_execution": RASTER_EXECUTION_MODE,
+                        "render_backend": result.backend,
+                    })
+
+            if hasattr(self.measure, "instant"):
+                self.measure.instant("present_backend", {
+                    "render_backend": result.backend,
                     "raster_execution": RASTER_EXECUTION_MODE,
+                    "scene_epoch": result.scene_epoch,
                 })
         finally:
             self.measure.stop("sdl_present")
+
+        record = dict(frame_id=result.frame_id, window_id=self.window_id,
+            scene_epoch=result.scene_epoch, navigation_generation=result.navigation_generation,
+            backend=result.backend, renderer_ns=int(result.elapsed_sec * 1e9),
+            present_return_ns=returned_ns, present_ns=returned_ns - present_started_ns,
+            effect_input_ids=list(result.input_ids),
+            native_tid=threading.get_native_id(), readback_count=0)
+        if result.backend == "gpu":
+            if os.environ.get("BROWSER_GPU_RESOURCE_EVIDENCE", "0") == "1":
+                record["resources"] = self.gpu_raster_state.resource_evidence()
+            record["skia_backend"] = str(self.skia_context.backend())
+            record["context_id"] = self.app.evidence.data["windows"][str(self.window_id)]["context_id"]
+            record["submitted"] = True
+            record["swapped"] = True
+        self.app.evidence.frame(**record)
+        self.measure.instant("frame_identity", record)
+        for input_id in result.input_ids:
+            sample = self.app.inputs.get(input_id)
+            if sample is not None and not sample["effect_included"]:
+                sample.update(effect_included=True, frame_id=result.frame_id,
+                              present_return_ns=returned_ns)
+                self.app.evidence.event("input_present", **sample)
 
         return True
 
@@ -9477,7 +10064,11 @@ if __name__ == "__main__":
         url = URL("https://browser.engineering/")
 
     app = BrowserApp()
-    main_window = app.new_window(url)
+    try:
+        main_window = app.new_window(url)
+    except BaseException:
+        app.shutdown()
+        raise
 
     print(
         "Initial page load scheduled on",
