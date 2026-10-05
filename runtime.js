@@ -283,21 +283,60 @@ Object.defineProperty(document, "cookie", {
     }
 });
 
+var NEXT_TIMER_HANDLE = 0;
+var TIMEOUT_CALLBACKS = {};
+var INTERVAL_CALLBACKS = {};
+
+function setTimeout(callback, ms) {
+    var handle = NEXT_TIMER_HANDLE++;
+    TIMEOUT_CALLBACKS[handle] = callback;
+    call_python("setTimeout", handle, ms);
+    return handle;
+}
+
+function runSetTimeout(handle) {
+    if (!Object.prototype.hasOwnProperty.call(TIMEOUT_CALLBACKS, handle)) return;
+    var callback = TIMEOUT_CALLBACKS[handle];
+    // Consume before calling: reentrant dispatch and exceptions cannot replay it.
+    delete TIMEOUT_CALLBACKS[handle];
+    callback();
+}
+
+function setInterval(callback, ms) {
+    var handle = NEXT_TIMER_HANDLE++;
+    INTERVAL_CALLBACKS[handle] = callback;
+    call_python("setInterval", handle, ms);
+    return handle;
+}
+
+function clearInterval(handle) {
+    delete INTERVAL_CALLBACKS[handle];
+    call_python("clearInterval", handle);
+}
+
+function runSetInterval(handle) {
+    if (!Object.prototype.hasOwnProperty.call(INTERVAL_CALLBACKS, handle)) return;
+    var callback = INTERVAL_CALLBACKS[handle];
+    callback();
+}
+
+var NEXT_XHR_HANDLE = 0;
+var XHR_OBJECTS = {};
+
 function XMLHttpRequest() {
+    this.handle = NEXT_XHR_HANDLE++;
+    XHR_OBJECTS[this.handle] = this;
     this.method = null;
     this.url = null;
+    this.is_async = false;
     this.responseText = null;
+    this.onload = null;
 }
 
 XMLHttpRequest.prototype.open = function (method, url, is_async) {
-    if (is_async) {
-        throw Error(
-            "Asynchronous XHR is not supported"
-        );
-    }
-
     this.method = method;
     this.url = url;
+    this.is_async = !!is_async;
 };
 
 XMLHttpRequest.prototype.send = function (body) {
@@ -307,13 +346,29 @@ XMLHttpRequest.prototype.send = function (body) {
         body = null;
     }
 
-    this.responseText = call_python(
+    var response = call_python(
         "XMLHttpRequest_send",
         this.method,
         this.url,
-        body
+        body,
+        this.is_async,
+        this.handle
     );
+
+    if (!this.is_async) {
+        this.responseText = response;
+    }
+    return response;
 };
+
+function runXHROnload(body, handle) {
+    if (!Object.prototype.hasOwnProperty.call(XHR_OBJECTS, handle)) return;
+    var xhr = XHR_OBJECTS[handle];
+    xhr.responseText = body;
+    if (typeof xhr.onload === "function") {
+        xhr.onload.call(xhr, new Event("load"));
+    }
+}
 
 //
 // requestAnimationFrame

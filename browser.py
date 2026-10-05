@@ -4507,6 +4507,9 @@ class JSContext:
         }
 
         with self.interval_lock:
+            # Window close can discard this context while its current JS task runs.
+            if self.discarded:
+                return None
             old_state = self.intervals.pop(handle, None)
             if old_state is not None:
                 old_state["stop_event"].set()
@@ -7328,6 +7331,7 @@ class BrowserWindow:
 
         # Wake every sleeping Tab main thread and ask it to terminate.
         for tab in tabs:
+            tab.discard()
             tab.task_runner.set_needs_quit()
 
         for tab in tabs:
