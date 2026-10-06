@@ -2757,7 +2757,8 @@ def hit_test_paint_commands(commands, x, y):
 
     Blend/Blur nodes preserve coordinates. Scroll nodes first reject points
     outside their clip box, then convert the point into the scrolled child
-    coordinate space. This recursion also handles nested scroll containers.
+    coordinate space. Transform nodes move the point back by their
+    translation. This recursion also handles nested scroll containers.
     """
     x = float(x)
     y = float(y)
@@ -2772,6 +2773,13 @@ def hit_test_paint_commands(commands, x, y):
                 x,
                 y + cmd.scroll_y,
             )
+            if hit is not None:
+                return hit
+            continue
+
+        if isinstance(cmd, Transform):
+            dx, dy = cmd.translation
+            hit = hit_test_paint_commands(cmd.children, x - dx, y - dy)
             if hit is not None:
                 return hit
             continue
@@ -2795,6 +2803,26 @@ def hit_test_paint_commands(commands, x, y):
         return cmd
 
     return None
+
+
+def transformed_overflow_bottom(display_list):
+    """Lowest document y that a translated element paints at, or 0.
+
+    Transforms do not change layout, but CSS counts them in the document's
+    scrollable overflow. Each outermost Transform's rect already contains
+    any nested ones. A Transform inside a Scroll only overflows that
+    scroller, so Scroll subtrees are skipped.
+    """
+    bottom = 0.0
+    stack = list(display_list)
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Transform):
+            if not item.rect.isEmpty():
+                bottom = max(bottom, float(item.rect.bottom()))
+        elif isinstance(item, VisualEffect) and not isinstance(item, Scroll):
+            stack.extend(item.children)
+    return bottom
 
 
 def rects_intersect(a, b):
@@ -2895,6 +2923,17 @@ def collect_touch_candidates(commands, touch_rect, center_x, center_y, out):
                 translate_rect(visible_touch, dy=cmd.scroll_y),
                 clamped_x,
                 clamped_y + cmd.scroll_y,
+                out,
+            )
+            continue
+
+        if isinstance(cmd, Transform):
+            dx, dy = cmd.translation
+            collect_touch_candidates(
+                cmd.children,
+                translate_rect(touch_rect, dx=-dx, dy=-dy),
+                center_x - dx,
+                center_y - dy,
                 out,
             )
             continue
@@ -6249,6 +6288,7 @@ class Tab:
 
         self.display_list = []
         self.display_list_needs_commit = False
+        self.transformed_overflow_bottom = 0.0
         self.scroll = 0
         self.url=None
         self.nodes=None
@@ -6818,7 +6858,7 @@ class Tab:
             self.render()
 
             document_height = (
-                max(1.0, float(self.document.height + 2 * VSTEP))
+                max(1.0, float(self.page_height()))
                 if self.document is not None
                 else 0.0
             )
@@ -6983,7 +7023,19 @@ class Tab:
     def paint_document(self):
         self.display_list=[]
         paint_tree(self.document,self.display_list)
+        self.transformed_overflow_bottom = transformed_overflow_bottom(self.display_list)
         self.display_list_needs_commit = True
+
+    def page_height(self):
+        """Scrollable page height: layout or translated overflow, plus margin.
+
+        Layout starts at y VSTEP, while transformed_overflow_bottom is already
+        a document y, so only the bottom margin is added to it.
+        """
+        return max(
+            self.document.height + 2 * VSTEP,
+            self.transformed_overflow_bottom + VSTEP,
+        )
 
     def scroll_to_fragment(self,fragment):
         if not fragment or not self.document or not self.nodes:
@@ -7030,7 +7082,7 @@ class Tab:
 
         target_y = min(candidate_y)
         max_y = max(
-            self.document.height + 2 * VSTEP - self.tab_height,
+            self.page_height() - self.tab_height,
             0,
         )
         self.scroll = max(0, min(target_y, max_y))
@@ -7073,7 +7125,7 @@ class Tab:
     def scrolldown(self):
         if self.document is None:
             return
-        max_y=max(self.document.height+2*VSTEP-self.tab_height,0)
+        max_y = max(self.page_height() - self.tab_height, 0)
         self.scroll=min(self.scroll+SCROLL_STEP,max_y)
 
     def scrollup(self):
@@ -7097,7 +7149,7 @@ class Tab:
             return changed
 
         old_scroll = self.scroll
-        max_y = max(self.document.height + 2 * VSTEP - self.tab_height, 0)
+        max_y = max(self.page_height() - self.tab_height, 0)
         self.scroll = max(0, min(self.scroll + delta, max_y))
 
         if self.scroll != old_scroll:
@@ -7292,6 +7344,15 @@ class Tab:
     def input_cursor_index_from_x(self, x, input_layout, display_text):
         """Map a click x-coordinate to a text-input caret index."""
         local_x = x - input_layout.x
+        # The click is where the input is drawn, so undo every translation
+        # paint applied to it and its ancestors.
+        node = input_layout.node
+        while node is not None:
+            if isinstance(node, Element):
+                translation = parse_transform(node.style.get("transform", "none"))
+                if translation is not None:
+                    local_x -= translation[0]
+            node = node.parent
 
         if local_x <= 0:
             return 0

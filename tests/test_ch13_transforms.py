@@ -1,6 +1,8 @@
 """Chapter 13 Overlap and Transforms: CSS translate and its compositing."""
 import math
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import skia
@@ -360,6 +362,159 @@ class ScrollClipSurfaceTest(unittest.TestCase):
         for layer in scrolled:
             self.assertLessEqual(layer.surface_rect.height(),
                                  math.ceil(scroller.clip_rect.height()) + 1)
+
+
+def element_id(cmd):
+    node = cmd.layout_object.node if cmd is not None else None
+    while node is not None:
+        if isinstance(node, browser.Element) and "id" in node.attributes:
+            return node.attributes["id"]
+        node = node.parent
+    return None
+
+
+# Moved starts at document (13, 18); translated it covers x 213-, y 118-158.
+HIT_PAGE = (
+    box(40, "background-color:green;transform:translate(200px,100px)").replace(
+        "<div ", '<div id="moved" ')
+    + '<div style="transform:translate(300px,150px)">'
+      '<a id="link" href="/next">link</a></div>'
+)
+
+
+class HitTestTest(unittest.TestCase):
+    def setUp(self):
+        _, self.display_list = paint_html(HIT_PAGE)
+
+    def test_click_hits_translated_position(self):
+        hit = browser.hit_test_paint_commands(self.display_list, 400, 130)
+        self.assertEqual(element_id(hit), "moved")
+
+    def test_click_misses_layout_position(self):
+        hit = browser.hit_test_paint_commands(self.display_list, 100, 30)
+        self.assertNotEqual(element_id(hit), "moved")
+
+    def link_position(self):
+        _, display_list = paint_html(HIT_PAGE.replace("translate(300px,150px)", "none"))
+        text = next(cmd for cmd in draw_list_items(display_list)
+                    if isinstance(cmd, browser.DrawText))
+        return text.rect
+
+    def test_touch_near_translated_link_hits_it(self):
+        layout = self.link_position()
+        x, y = layout.right() + 300 + 10, layout.top() + 150 - 10
+        self.assertIsNone(element_id(browser.hit_test_paint_commands(self.display_list, x, y)),
+                          "the tap is beside the link, not on it")
+        hit = browser.touch_hit_test_paint_commands(self.display_list, x, y)
+        self.assertEqual(element_id(hit), "link")
+
+    def test_touch_near_layout_position_of_link_misses_it(self):
+        layout = self.link_position()
+        hit = browser.touch_hit_test_paint_commands(
+            self.display_list, layout.right() + 10, layout.top() - 10)
+        self.assertNotEqual(element_id(hit), "link")
+
+    def test_transform_inside_scroll_maps_both(self):
+        target = rect(0, 100, 30, 130, "green")
+        target.layout_object = SimpleNamespace(node=None)
+        scroller = browser.Scroll(skia.Rect.MakeLTRB(0, 0, 100, 100), 50,
+                                  [browser.Transform((20.0, 0.0), [target])])
+        self.assertIs(browser.hit_test_paint_commands([scroller], 30, 60), target)
+        self.assertIsNone(browser.hit_test_paint_commands([scroller], 10, 60))
+        self.assertIsNone(browser.hit_test_paint_commands([scroller], 30, 110),
+                          "outside the scroll box")
+        self.assertIs(browser.touch_hit_test_paint_commands([scroller], 55, 60), target)
+        self.assertIsNone(browser.touch_hit_test_paint_commands([scroller], 85, 60))
+
+
+class TranslatedInputCaretTest(unittest.TestCase):
+    def test_caret_lands_where_the_click_is_drawn(self):
+        page = ('<div style="transform:translate(100px,0px)">'
+                '<input id="field" value="abcdef"></div>')
+        document, _ = paint_html(page)
+        layouts = []
+        browser.tree_to_list(document, layouts)
+        field = next(obj for obj in layouts if isinstance(obj, browser.InputLayout))
+        drawn_x = field.x + 100 + field.font.measureText("abc")
+        index = browser.Tab.input_cursor_index_from_x(None, drawn_x, field, "abcdef")
+        self.assertEqual(index, 3)
+
+
+class TransformedOverflowTest(unittest.TestCase):
+    def test_outermost_transform_bottoms(self):
+        down = browser.Transform((0.0, 300.0), [rect(0, 0, 10, 20)])
+        nested = browser.Transform((0.0, 10.0), [browser.Transform((0.0, 100.0),
+                                                                   [rect(0, 0, 10, 20)])])
+        up = browser.Transform((0.0, -50.0), [rect(0, 0, 10, 20)])
+        self.assertEqual(browser.transformed_overflow_bottom([faded(down, nested, up)]), 320)
+        self.assertEqual(browser.transformed_overflow_bottom([nested]), 130)
+        self.assertEqual(browser.transformed_overflow_bottom([rect(0, 0, 10, 900)]), 0)
+
+    def test_transform_inside_scroll_overflows_only_the_scroller(self):
+        inner = browser.Transform((0.0, 900.0), [rect(0, 0, 10, 20)])
+        scroller = browser.Scroll(skia.Rect.MakeLTRB(0, 0, 100, 100), 0, [inner])
+        self.assertEqual(browser.transformed_overflow_bottom([scroller]), 0)
+
+
+class TabPageHeightTest(unittest.TestCase):
+    TAB_HEIGHT = 100
+
+    def setUp(self):
+        self.commits = []
+        host = SimpleNamespace(
+            measure=SimpleNamespace(time=lambda name: None, stop=lambda name: None),
+            set_needs_animation_frame=lambda tab: None,
+            commit=lambda tab, data: self.commits.append(data) or True,
+            finish_animation_frame=lambda tab: None,
+        )
+        self.tab = browser.Tab(host, 800, self.TAB_HEIGHT, set(), [])
+        self.tab.url = browser.URL("https://example.test/page")
+        self.tab.rules = sorted(browser.DEFAULT_STYLE_SHEET, key=browser.cascade_priority)
+
+    def load(self, html):
+        self.tab.nodes = browser.HTMLParser(html).parse()
+        self.tab.animated_nodes = set()
+        self.tab.set_needs_render()
+        self.tab.run_animation_frame()
+
+    def scroll_to_bottom(self):
+        for _ in range(100):
+            self.tab.scrolldown()
+        return self.tab.scroll
+
+    def test_translated_box_extends_committed_height_and_scroll(self):
+        self.load(box(40, "background-color:green;transform:translate(0px,300px)"))
+        # The box is laid out at y 18-58 and painted at y 318-358.
+        expected = 358 + browser.VSTEP
+        self.assertEqual(self.tab.page_height(), expected)
+        self.assertEqual(self.commits[-1].document_height, expected)
+        self.assertEqual(self.scroll_to_bottom(), expected - self.TAB_HEIGHT)
+
+    def test_untransformed_and_upward_pages_keep_layout_height(self):
+        for style in ["", "transform:translate(0px,-10px)"]:
+            with self.subTest(style=style):
+                self.load(box(40, "background-color:green;" + style))
+                self.assertEqual(self.tab.page_height(), 58 + browser.VSTEP)
+                self.assertEqual(self.scroll_to_bottom(), 0)
+
+    def test_translated_page_renders_below_layout_height(self):
+        html = box(40, "background-color:green;transform:translate(0px,300px)")
+        self.load(html)
+        _, display_list = paint_html(html)
+        page = browser.CommitData("about:test", 0, self.tab.page_height(), display_list,
+                                  width=800, tab_height=500)
+        work = browser.RasterWork(
+            raster_id=1, window_id=1, scene_epoch=1, active_tab_key=1,
+            page_state=page, chrome_display_list=(), width=800, height=600,
+            chrome_bottom=100, chrome_raster=True, tab_raster=True,
+            estimator_tab=None, title="overflow",
+        )
+        for compositing in (True, False):
+            with self.subTest(compositing=compositing):
+                state = browser.RasterWindowState()
+                with patch.object(browser, "COMPOSITING_ENABLED", compositing):
+                    pixels = np.frombuffer(state.render(work).pixels, np.uint8).astype(int)
+                self.assertEqual(page_pixel(pixels, 400, 330), GREEN_RGBA)
 
 
 if __name__ == "__main__":
