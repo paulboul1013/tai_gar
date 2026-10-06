@@ -4537,6 +4537,8 @@ class Text:
         self.children=[]
         self.parent=parent
         self.is_focused=False
+        # Chapter 13 CSS transitions: running animations keyed by property.
+        self.animations={}
     def __repr__(self):
         return repr(self.text)
 
@@ -4547,6 +4549,8 @@ class Element:
         self.children=[]
         self.parent=parent
         self.is_focused=False
+        # Chapter 13 CSS transitions: running animations keyed by property.
+        self.animations={}
 
         # checkbox status
         # checkbox attribute only decide page just loading init status
@@ -5987,8 +5991,15 @@ class Tab:
         self.history_index=-1
 
         self.task_runner = TaskRunner(self)
-        self.needs_render = False
+        # Chapter 13: per-phase dirty flags. A dirty phase also reruns every
+        # later phase, so CSS animation frames can skip style but not layout.
+        self.needs_style = False
+        self.needs_layout = False
+        self.needs_paint = False
         self.visual_effect_revision = 0
+        # Nodes with running CSS transitions, and the clock driving them.
+        self.animated_nodes = set()
+        self.animation_clock = time.perf_counter
         self.js = None
         self.pending_fragment = None
 
@@ -6001,9 +6012,25 @@ class Tab:
         self.navigation_generation = 0
         self.applied_input_ids = []
 
+    @property
+    def needs_render(self):
+        return self.needs_style or self.needs_layout or self.needs_paint
+
+    @needs_render.setter
+    def needs_render(self, value):
+        if value:
+            self.needs_style = True
+        else:
+            self.needs_style = self.needs_layout = self.needs_paint = False
+
     def set_needs_render(self):
         self.visual_effect_revision += 1
-        self.needs_render = True
+        self.needs_style = True
+        self.browser.set_needs_animation_frame(self)
+
+    def set_needs_layout(self):
+        """Rerun layout and paint (not style) on the next frame."""
+        self.needs_layout = True
         self.browser.set_needs_animation_frame(self)
 
     def discard(self):
@@ -6302,6 +6329,7 @@ class Tab:
             self.nodes = HTMLParser(highlighted_body).parse()
         else:
             self.nodes = HTMLParser(body).parse()
+        self.animated_nodes = set()
 
         self.referrer_policy = normalize_referrer_policy(headers)
 
@@ -6465,7 +6493,7 @@ class Tab:
             return
 
         self.mark_visited_links()
-        style(self.nodes,self.rules)
+        style(self.nodes,self.rules,self)
 
     def blur(self):
         # Keyboard scrolling focus is independent of text-input focus.
@@ -6493,6 +6521,8 @@ class Tab:
                 except dukpy.JSRuntimeError as e:
                     print("requestAnimationFrame callback crashed", e)
 
+            # CSS transitions advance right after RAF callbacks, as in the book.
+            self.run_css_animations()
             self.render()
 
             document_height = (
@@ -6567,16 +6597,51 @@ class Tab:
             self.browser.finish_animation_frame(self)
 
 
+    def run_css_animations(self):
+        """Advance every running CSS transition to the current time."""
+        if not self.animated_nodes:
+            return
+
+        now = self.animation_clock()
+        for node in list(self.animated_nodes):
+            for prop, animation in list(node.animations.items()):
+                node.style[prop] = animation.animate(now)
+                if animation.finished:
+                    del node.animations[prop]
+            if not node.animations:
+                self.animated_nodes.discard(node)
+
+        # The new values bypass style, so restyling must not run: it would see
+        # them as fresh changes and restart the transition.
+        self.set_needs_layout()
+
     def render(self):
         """Update style, layout, and paint when the Tab is dirty; never commit."""
         if not self.needs_render:
             return False
 
-        self.browser.measure.time("render")
+        measure = self.browser.measure
+        measure.time("render")
         try:
-            self.restyle()
-            self.relayout()
-            self.needs_render = False
+            if self.needs_style:
+                measure.time("style")
+                self.restyle()
+                measure.stop("style")
+                self.needs_layout = True
+                self.needs_style = False
+
+            if self.needs_layout:
+                measure.time("layout")
+                self.layout_document()
+                measure.stop("layout")
+                self.needs_paint = True
+                self.needs_layout = False
+
+            if self.needs_paint:
+                measure.time("paint")
+                self.paint_document()
+                measure.stop("paint")
+                self.needs_paint = False
 
             if self.pending_fragment:
                 fragment = self.pending_fragment
@@ -6585,12 +6650,17 @@ class Tab:
 
             return True
         finally:
-            self.browser.measure.stop("render")
+            measure.stop("render")
 
     def relayout(self):
+        self.layout_document()
+        self.paint_document()
+
+    def layout_document(self):
         self.document=DocumentLayout(self.nodes,self.width)
         self.document.layout()
 
+    def paint_document(self):
         self.display_list=[]
         paint_tree(self.document,self.display_list)
         self.display_list_needs_commit = True
@@ -10182,6 +10252,122 @@ DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()
 IMPORTANT_OFFSET = 10000
 INLINE_STYLE_PRIORITY = 1000
 
+# Chapter 13 CSS transitions. Only opacity is animated, as in the book; other
+# properties listed in `transition` still change instantly.
+TRANSITION_PROPERTIES = {"opacity"}
+
+
+def parse_css_time(value):
+    """Parse a CSS <time> such as 2s or 250ms into seconds, else None."""
+    raw = str(value).strip().casefold()
+    try:
+        if raw.endswith("ms"):
+            seconds = float(raw[:-2]) / 1000.0
+        elif raw.endswith("s"):
+            seconds = float(raw[:-1])
+        else:
+            return None
+    except ValueError:
+        return None
+    return seconds if seconds >= 0.0 else None
+
+
+def parse_transition(value):
+    """Map each property in a `transition` value to its duration in seconds.
+
+    `transition: opacity 2s, width 500ms` -> {"opacity": 2.0, "width": 0.5}.
+    Timing functions and delays after the duration are ignored.
+    """
+    properties = {}
+    if not value:
+        return properties
+    for item in str(value).split(","):
+        parts = item.split()
+        if len(parts) < 2:
+            continue
+        duration = parse_css_time(parts[1])
+        if duration is None:
+            continue
+        properties[parts[0].casefold()] = duration
+    return properties
+
+
+class NumericAnimation:
+    """Linear interpolation of a numeric property over wall-clock time.
+
+    The book counts frames at a fixed REFRESH_RATE_SEC, but this browser's
+    frame cadence adapts to load (33 -> 66 ms, ...). Interpolating by elapsed
+    time keeps a 2s transition at 2s whatever the cadence is.
+    """
+
+    def __init__(self, old_value, new_value, duration, start_time):
+        self.old_value = parse_opacity(old_value)
+        self.new_value = parse_opacity(new_value)
+        # The computed value the transition is heading to, compared verbatim
+        # on restyle to tell "still the same target" from "retargeted".
+        self.target = new_value
+        self.duration = duration
+        self.start_time = start_time
+        self.finished = False
+        self.current_value = str(self.old_value)
+
+    def animate(self, now):
+        progress = 1.0
+        if self.duration > 0:
+            progress = (now - self.start_time) / self.duration
+        if progress >= 1.0:
+            self.finished = True
+            self.current_value = self.target
+        else:
+            progress = max(0.0, progress)
+            value = self.old_value + (self.new_value - self.old_value) * progress
+            self.current_value = str(value)
+        return self.current_value
+
+
+def update_transitions(node, old_style, tab):
+    """Start, keep, or drop node's CSS transitions after its style is recomputed.
+
+    style() rebuilds node.style from rules, so a running animation's value is
+    overwritten by the transition's target. If the target is unchanged the
+    animation keeps running and its current value is restored; a new target
+    starts a fresh animation from the value currently on screen.
+    """
+    durations = parse_transition(node.style.get("transition"))
+
+    for prop in list(node.animations):
+        if prop not in durations:
+            # The transition was removed: jump straight to the computed value.
+            del node.animations[prop]
+
+    for prop, duration in durations.items():
+        if prop not in TRANSITION_PROPERTIES:
+            continue
+
+        target = node.style.get(prop)
+        animation = node.animations.get(prop)
+        if animation is not None and animation.target == target:
+            node.style[prop] = animation.current_value
+            continue
+        node.animations.pop(prop, None)
+
+        if not old_style or prop not in old_style or target is None:
+            continue
+        old_value = old_style[prop]
+        if duration <= 0 or parse_opacity(old_value) == parse_opacity(target):
+            continue
+
+        animation = NumericAnimation(
+            old_value, target, duration, tab.animation_clock()
+        )
+        node.animations[prop] = animation
+        node.style[prop] = animation.current_value
+        tab.animated_nodes.add(node)
+        # Restyle already forces layout and paint for this frame; this asks the
+        # browser for the next frame so the animation keeps advancing.
+        tab.set_needs_layout()
+
+
 def apply_style(node,prop,value,priority):
     old_priority=node.style_priority.get(prop,-1)
 
@@ -10190,7 +10376,9 @@ def apply_style(node,prop,value,priority):
         node.style[prop]=value
         node.style_priority[prop]=priority
 
-def style(node,rules):
+def style(node,rules,tab=None):
+    # Kept for CSS transitions: the value on screen before this restyle.
+    old_style=getattr(node,"style",None)
     node.style={}
     node.style_priority={}
     
@@ -10271,10 +10459,13 @@ def style(node,rules):
         parent_px = float(parent_font_size[:-2])
         node.style["font-size"] = str(node_pct * parent_px) + "px"
 
+    if tab is not None and isinstance(node,Element):
+        update_transitions(node,old_style,tab)
+
     # finally recursively DOM tree
     # because child need inhertied parent already computed style
     for child in node.children:
-        style(child,rules)
+        style(child,rules,tab)
 
 def print_tree(node,indent=0):
     print(" "*indent,node)
