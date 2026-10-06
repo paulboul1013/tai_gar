@@ -1860,6 +1860,40 @@ def parse_blur_filter(value):
     return max(0.0, sigma)
 
 
+def parse_transform(value):
+    """Parse the subset of CSS transform supported here: translate(X[, Y]).
+
+    Returns the (x, y) translation in pixels, or None for `none` and for
+    anything unsupported, which then behaves like transform: none.
+    """
+    raw = str(value if value is not None else "none").strip().casefold()
+
+    if not raw.startswith("translate(") or not raw.endswith(")"):
+        return None
+
+    arguments = [part.strip() for part in raw[len("translate("):-1].split(",")]
+    if len(arguments) not in (1, 2):
+        return None
+
+    translation = []
+    for argument in arguments:
+        if argument.endswith("px"):
+            argument = argument[:-2].strip()
+        elif argument not in ["0", "+0", "-0", "0.0", "+0.0", "-0.0"]:
+            return None
+        try:
+            offset = float(argument)
+        except ValueError:
+            return None
+        if not math.isfinite(offset):
+            return None
+        translation.append(offset)
+
+    if len(translation) == 1:
+        translation.append(0.0)
+    return tuple(translation)
+
+
 def make_skia_surface(width, height):
     """Create the existing CPU-backed Skia raster surface."""
     width = max(1, int(width))
@@ -2221,6 +2255,38 @@ class Scroll(VisualEffect):
         canvas.restore()
 
 
+class Transform(VisualEffect):
+    """Display-list node for CSS transform: translate(X, Y).
+
+    Unlike the book, rect is the translated bounds: like Blur's padded rect,
+    an effect's rect is where its pixels land in its parent's coordinates,
+    which layer bounds, culling, and parent effects all read.
+    """
+    def __init__(self, translation, children, node=None):
+        self.translation = translation
+        self.node = node
+        self.children = list(children)
+
+        self.rect = skia.Rect.MakeEmpty()
+        for cmd in self.children:
+            if hasattr(cmd, "rect"):
+                self.rect.join(cmd.rect)
+        if not self.rect.isEmpty():
+            self.rect = self.rect.makeOffset(*translation)
+
+        self.init_compositing()
+
+    def execute(self, canvas):
+        if not self.children:
+            return
+
+        canvas.save()
+        canvas.translate(*self.translation)
+        for cmd in self.children:
+            cmd.execute(canvas)
+        canvas.restore()
+
+
 # A leaf is merged at most this many layers back, which bounds composite's
 # cost on pages with many separately composited elements.
 MERGE_SCAN_LIMIT = 32
@@ -2241,7 +2307,8 @@ def map_to_document(rect, ancestors):
     """Map a rect in a leaf's local coordinates out to document coordinates.
 
     Walks the draw-phase ancestors from the innermost out: a Blur spreads
-    pixels 3 sigma, a Scroll shifts up by scroll_y and clips to its box.
+    pixels 3 sigma, a Scroll shifts up by scroll_y and clips to its box, a
+    Transform shifts by its translation.
     Returns a new rect; the input rect is never modified.
     """
     rect = skia.Rect.MakeLTRB(rect.left(), rect.top(), rect.right(), rect.bottom())
@@ -2255,6 +2322,26 @@ def map_to_document(rect, ancestors):
             # intersect() leaves rect unchanged when the two are disjoint.
             if not rect.intersect(effect.clip_rect):
                 return skia.Rect.MakeEmpty()
+        elif isinstance(effect, Transform):
+            rect = rect.makeOffset(*effect.translation)
+    return rect
+
+
+def map_from_document(rect, ancestors):
+    """Map a document rect into a leaf's local coordinates.
+
+    Walks the draw-phase ancestors from the outermost in, undoing each
+    Scroll's scroll_y and each Transform's translation. Clips and blur
+    spread are not undone: the result is used only for culling and surface
+    clipping, where a slightly larger rect is still correct.
+    """
+    rect = skia.Rect.MakeLTRB(rect.left(), rect.top(), rect.right(), rect.bottom())
+    for effect in ancestors:
+        if isinstance(effect, Scroll):
+            rect = rect.makeOffset(0, effect.scroll_y)
+        elif isinstance(effect, Transform):
+            x, y = effect.translation
+            rect = rect.makeOffset(-x, -y)
     return rect
 
 
@@ -2286,16 +2373,26 @@ class CompositedLayer:
     DrawCompositedLayer under one set of effect clones draws them all.
     The surface covers only the items' bounds (plus a 1px antialiasing
     margin), clipped to the part of the interest region that the items can
-    reach. Items keep their local coordinates (document coordinates shifted
-    by any composited Scroll above them), not document coordinates; raster
-    shifts the canvas so the surface's top-left pixel lines up with
-    surface_rect.
+    reach and to every ancestor Scroll's box. Items keep their local
+    coordinates (document coordinates shifted by any composited Scroll or
+    Transform above them), not document coordinates; raster shifts the
+    canvas so the surface's top-left pixel lines up with surface_rect.
     """
 
     def __init__(self, items, local_interest=None, ancestors=()):
         self.items = []
         self.local_interest = local_interest
         self.ancestors = tuple(ancestors)
+        self.local_clip = None
+        for i, effect in enumerate(self.ancestors):
+            if isinstance(effect, Scroll):
+                # clip_rect is outside the Scroll, so its own scroll_y is
+                # undone too, along with every effect below it.
+                clip = map_from_document(effect.clip_rect, self.ancestors[i:])
+                if self.local_clip is None:
+                    self.local_clip = clip
+                elif not self.local_clip.intersect(clip):
+                    self.local_clip = skia.Rect.MakeEmpty()
         # DrawCompositedLayer keeps a reference to this rect, so add() grows
         # it in place rather than replacing it.
         self.bounds = skia.Rect.MakeEmpty()
@@ -2339,15 +2436,15 @@ class CompositedLayer:
         # Snap to whole pixels so drawing the cached surface back is an exact
         # pixel copy instead of a resampled one.
         rect = pixel_footprint(self.bounds)
-        if self.local_interest is not None:
-            if not rect.intersect(self.local_interest):
+        for limit in (self.local_interest, self.local_clip):
+            if limit is not None and not rect.intersect(limit):
                 return None
-            rect = skia.Rect.MakeLTRB(
-                math.floor(rect.left()),
-                math.floor(rect.top()),
-                math.ceil(rect.right()),
-                math.ceil(rect.bottom()),
-            )
+        rect = skia.Rect.MakeLTRB(
+            math.floor(rect.left()),
+            math.floor(rect.top()),
+            math.ceil(rect.right()),
+            math.ceil(rect.bottom()),
+        )
         if rect.isEmpty():
             return None
         return rect
@@ -2421,8 +2518,9 @@ def composite_display_list(display_list, interest_rect=None):
     draw-list entry: their layer is already attached under the same clones.
 
     interest_rect is in document coordinates. Leaves under a composited
-    Scroll are offset by its scroll_y, so the interest rect is mapped into
-    each leaf's own coordinate space before culling and surface clipping.
+    Scroll or Transform are offset by it, so the interest rect is mapped
+    through each leaf's ancestor chain into the leaf's own coordinates
+    before culling and surface clipping.
     """
     layers = []
     draw_list = []
@@ -2439,12 +2537,10 @@ def composite_display_list(display_list, interest_rect=None):
             node = twin
         draw_list.append(node)
 
-    def visit(item, ancestors, scroll_offset):
+    def visit(item, ancestors):
         if isinstance(item, VisualEffect) and item.needs_compositing:
-            if isinstance(item, Scroll):
-                scroll_offset += item.scroll_y
             for child in item.children:
-                visit(child, ancestors + (item,), scroll_offset)
+                visit(child, ancestors + (item,))
             return
 
         # Invisible hit-test regions draw nothing; a surface would be waste.
@@ -2453,12 +2549,7 @@ def composite_display_list(display_list, interest_rect=None):
 
         local_interest = None
         if interest_rect is not None:
-            local_interest = skia.Rect.MakeLTRB(
-                interest_rect.left(),
-                interest_rect.top() + scroll_offset,
-                interest_rect.right(),
-                interest_rect.bottom() + scroll_offset,
-            )
+            local_interest = map_from_document(interest_rect, ancestors)
             rect = getattr(item, "rect", None)
             if rect is not None and not rects_intersect(rect, local_interest):
                 return
@@ -2477,7 +2568,7 @@ def composite_display_list(display_list, interest_rect=None):
         attach(DrawCompositedLayer(layer), ancestors)
 
     for item in display_list:
-        visit(item, (), 0.0)
+        visit(item, ())
 
     return layers, draw_list
 
@@ -2536,7 +2627,8 @@ def paint_visual_effects(node, cmds, rect=None):
       1. paint the element subtree;
       2. filter: blur() the complete subtree;
       3. apply overflow clipping;
-      4. apply opacity and mix-blend-mode while compositing to the backdrop.
+      4. apply opacity and mix-blend-mode while compositing to the backdrop;
+      5. translate the result by transform: translate().
 
     Blur cannot be merged into the final Blend layer because it moves pixels.
     It therefore owns an inner saveLayer, while opacity and blend mode continue
@@ -2606,7 +2698,13 @@ def paint_visual_effects(node, cmds, rect=None):
         force_compositing="opacity" in node.animations,
     )
     node.blend_op = blend
-    return [blend]
+
+    # TRANSFORM STAGE. The translation moves the whole element, including its
+    # opacity result. Untransformed elements get no Transform node at all.
+    translation = parse_transform(node.style.get("transform", "none"))
+    if translation is None:
+        return [blend]
+    return [Transform(translation, [blend], node=node)]
 
 def paint_tree(layout_object, display_list):
     """Build the tree-shaped display list with descendant effects.
@@ -10546,6 +10644,7 @@ NON_INHERITED_PROPERTIES = {
     "opacity": "1.0",
     "mix-blend-mode": "normal",
     "filter": "none",
+    "transform": "none",
 }
 
 DEFAULT_STYLE_SHEET=CSSParser(open("browser.css").read()).parse()
