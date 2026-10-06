@@ -14,7 +14,7 @@ commit: 142608b
 
 GPU Acceleration 已在 AMD 硬體實測；第 12 章 API 回退已由 `6dc441e` 補回。
 
-opacity 的 CSS Transitions 與 Composited Animations 已實作；下一個實作階段是 Optimizing Compositing。
+opacity 的 CSS Transitions 與 Composited Animations 已實作；Optimizing Compositing 已有 layer 合併，layer 跨幀重用未實作。下一個實作階段是 Overlap and Transforms。
 
 依[第 13 章正文順序](https://browser.engineering/animations.html)對照：
 
@@ -26,7 +26,7 @@ opacity 的 CSS Transitions 與 Composited Animations 已實作；下一個實�
 | [Compositing Leaves](https://browser.engineering/animations.html#compositing-leaves) | ok 已有 | `CompositedLayer`、`DrawCompositedLayer`、`composite_display_list`；需合成的 effect 複製進 draw list。 |
 | [CSS Transitions](https://browser.engineering/animations.html#css-transitions) | ok 已有 | `parse_transition`、`NumericAnimation`、`update_transitions`；Tab 拆成 needs_style／needs_layout／needs_paint，動畫幀跳過 style。 |
 | [Composited Animations](https://browser.engineering/animations.html#composited-animations) | ok 已有 | Blend 帶節點鍵；`CommitData.composited_updates`；動畫中間幀只跑 paint，raster thread 以 `refresh_draw_list` 沿用 layer，只 draw。 |
-| [Optimizing Compositing](https://browser.engineering/animations.html#optimizing-compositing) | no 未實作 | 無 layer 合併（`can_merge`）與 layer 跨幀重用。 |
+| [Optimizing Compositing](https://browser.engineering/animations.html#optimizing-compositing) | warn layer 合併已有；layer 跨幀重用未實作 | `CompositedLayer.can_merge`／`add`：祖先鏈相同的 leaf 合併進同一個 layer；以文件座標的足跡判斷重疊，不改變 draw 順序。完整路徑仍每次重新 raster 所有 layer。 |
 | [Overlap and Transforms](https://browser.engineering/animations.html#overlap-and-transforms) | no 未實作 | 無 CSS translate 與圖層 overlap 處理。 |
 
 正文只實作 opacity transition。
@@ -35,6 +35,8 @@ transform transition 屬 Exercise 13-3。
 相關設定：`BROWSER_COMPOSITING=0` 退回直接 raster 路徑做 A/B 比對；
 `BROWSER_SHOW_LAYER_BORDERS=1` 以紅框標出每個 layer。
 `BROWSER_COMPOSITED_ANIMATIONS=0` 保留合成，但每幀都重新 composite／raster，用來量測 Composited Animations 的效益。
+`BROWSER_LAYER_MERGING=0` 關閉 layer 合併，每個 compositing leaf 各自一個 layer，用來量測 Optimizing Compositing 的效益。
+如果 `BROWSER_COMPOSITING=0`，則這個開關沒有作用。它與 `BROWSER_COMPOSITED_ANIMATIONS` 互相獨立。
 
 `142608b` 同時修正 LineLayout 與所屬 block 共用 node，
 造成 opacity、blend、filter、clip 在每個 line box 重複套用的問題。
@@ -72,7 +74,7 @@ transform transition 屬 Exercise 13-3。
 | 10 隱私與安全 | ok 主要功能已有 | cookies、SameSite/HttpOnly、CSP、CORS；測試伺服器有 CSRF nonce。 |
 | 11 視覺效果 | ok 正文主要功能已有 | SDL/Skia、Blend、rounded clipping、surface 快取。另有 blur、overflow scrolling、touch。 |
 | 12 排程與執行緒 | ok 主要功能已有 | task queue、RAF、timers、async XHR、profiling、commit、threaded scrolling；另有 priority、network、raster threads 與 adaptive cadence。 |
-| 13 動畫與合成 | warn 進行中 | RAF、GPU、Compositing／Leaves、CSS Transitions、Composited Animations 已有；Optimizing Compositing 之後未實作（見 A）。 |
+| 13 動畫與合成 | warn 進行中 | RAF、GPU、Compositing／Leaves、CSS Transitions、Composited Animations 已有；Optimizing Compositing 只有 layer 合併；之後未實作（見 A）。 |
 | 14 無障礙 | no 未見章節核心實作 | 有基本 input focus；缺 zoom、dark mode、Tab 導覽、accessibility tree、screen reader。 |
 | 15 嵌入內容 | no 未見章節核心實作 | DrawImage 用於 emoji；未見一般 img 載入／layout、iframe、Frame、postMessage。 |
 | 16 增量計算 | no 未見章節核心實作 | 使用單一 needs_render；無 protected fields、依賴追蹤或 contenteditable。 |
@@ -93,7 +95,8 @@ transform transition 屬 Exercise 13-3。
 4. ~~實作 Compositing Leaves 的 layer 與 draw list。~~ 已由 `142608b` 完成。
 5. ~~實作 opacity CSS Transitions（transition 解析與逐幀插值）。~~ 已完成。
 6. ~~實作 Composited Animations：opacity 變更只更新 draw list，跳過 layout 與 layer 重新 raster。~~ 已完成。
-7. Optimizing Compositing（layer 合併與跨幀重用），再做 Overlap and Transforms。
+7. ~~Optimizing Compositing 的 layer 合併。~~ 已完成；layer 跨幀重用未實作。
+8. Overlap and Transforms。
 
 目前預設為 CPU＋threaded raster，合成預設開啟。
 GPU 原型要求以下設定。在這台 WSL2 上一定要加 `GALLIUM_DRIVER=d3d12`，
@@ -135,8 +138,8 @@ GPU 吞吐數據量測於合成功能加入之前（`cb9fa45`），尚未以合�
 
 CSS opacity transition 的中間幀現在只跑 paint 與 draw：layout、composite、raster 只在動畫開始與結束各跑一次。
 在 120 段文字的頁面上，main thread 每幀約由 44 ms 降到 10 ms，raster thread 約由 28 ms 降到 12 ms（CPU）；
-1 秒動畫的實際幀數 CPU 由 14 增為 22、GPU 由 7 增為 18。剩下的 CPU draw 成本來自每段文字各自一個 layer，
-要靠 Optimizing Compositing 合併 layer。
+1 秒動畫的實際幀數 CPU 由 14 增為 22、GPU 由 7 增為 18。剩下的 CPU draw 成本來自每段文字各自一個 layer；
+Optimizing Compositing 的 layer 合併把這類頁面合成約 3 個 layer（量測見 [驗證流程](chapter-13-optimizing-compositing-verification.md)）。
 JS 修改 opacity 的路徑仍是 `setAttribute → set_needs_render → render`（style、layout、paint 全跑）。
 
 現有未追蹤的 `browser.trace`（2026-10-05 22:02）是 GPU sync 執行紀錄，

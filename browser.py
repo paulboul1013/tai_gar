@@ -421,6 +421,9 @@ COMPOSITING_ENABLED = _env_flag("BROWSER_COMPOSITING", "1")
 # BROWSER_COMPOSITED_ANIMATIONS=0 keeps compositing but recomposites and
 # rerasters every frame, to measure what composited animations save.
 COMPOSITED_ANIMATIONS_ENABLED = _env_flag("BROWSER_COMPOSITED_ANIMATIONS", "1")
+# BROWSER_LAYER_MERGING=0 gives every compositing leaf its own layer again,
+# to measure what merging leaves with the same draw-phase ancestors saves.
+LAYER_MERGING_ENABLED = _env_flag("BROWSER_LAYER_MERGING", "1")
 SHOW_COMPOSITED_LAYER_BORDERS = _env_flag("BROWSER_SHOW_LAYER_BORDERS", "0")
 
 # Let validation runs write separate trace files without moving/renaming them.
@@ -2218,37 +2221,124 @@ class Scroll(VisualEffect):
         canvas.restore()
 
 
+# A leaf is merged at most this many layers back, which bounds composite's
+# cost on pages with many separately composited elements.
+MERGE_SCAN_LIMIT = 32
+
+
+def pixel_footprint(rect):
+    """Whole-pixel rect around rect plus 1px, for antialiased strokes that
+    reach past it. Zero-height lines still get a 2px tall footprint."""
+    return skia.Rect.MakeLTRB(
+        math.floor(rect.left()) - 1,
+        math.floor(rect.top()) - 1,
+        math.ceil(rect.right()) + 1,
+        math.ceil(rect.bottom()) + 1,
+    )
+
+
+def map_to_document(rect, ancestors):
+    """Map a rect in a leaf's local coordinates out to document coordinates.
+
+    Walks the draw-phase ancestors from the innermost out: a Blur spreads
+    pixels 3 sigma, a Scroll shifts up by scroll_y and clips to its box.
+    Returns a new rect; the input rect is never modified.
+    """
+    rect = skia.Rect.MakeLTRB(rect.left(), rect.top(), rect.right(), rect.bottom())
+    for effect in reversed(ancestors):
+        if isinstance(effect, Blur) and effect.sigma > 0.0:
+            pad = 3.0 * effect.sigma
+            rect = skia.Rect.MakeLTRB(rect.left() - pad, rect.top() - pad,
+                                      rect.right() + pad, rect.bottom() + pad)
+        elif isinstance(effect, Scroll):
+            rect = rect.makeOffset(0, -effect.scroll_y)
+            # intersect() leaves rect unchanged when the two are disjoint.
+            if not rect.intersect(effect.clip_rect):
+                return skia.Rect.MakeEmpty()
+    return rect
+
+
+def leaf_document_footprint(item, ancestors):
+    rect = getattr(item, "rect", None)
+    if rect is None:
+        return None
+    return map_to_document(pixel_footprint(rect), ancestors)
+
+
+def footprints_overlap(a, b):
+    """Whether two document footprints overlap; touching edges count.
+
+    None (an item without a rect) overlaps everything. An empty footprint
+    overlaps nothing; it is checked first because rects_intersect() treats
+    an empty rect as a point at its origin.
+    """
+    if a is None or b is None:
+        return True
+    if a.isEmpty() or b.isEmpty():
+        return False
+    return rects_intersect(a, b)
+
+
 class CompositedLayer:
     """A group of display items rastered once into their own surface.
 
+    All items in a layer share the same draw-phase ancestors, so one
+    DrawCompositedLayer under one set of effect clones draws them all.
     The surface covers only the items' bounds (plus a 1px antialiasing
     margin), clipped to the part of the interest region that the items can
-    reach. Items keep their document coordinates; raster shifts the canvas so
-    the surface's top-left pixel lines up with surface_rect.
+    reach. Items keep their local coordinates (document coordinates shifted
+    by any composited Scroll above them), not document coordinates; raster
+    shifts the canvas so the surface's top-left pixel lines up with
+    surface_rect.
     """
 
-    def __init__(self, items, local_interest=None):
-        self.items = list(items)
+    def __init__(self, items, local_interest=None, ancestors=()):
+        self.items = []
         self.local_interest = local_interest
+        self.ancestors = tuple(ancestors)
+        # DrawCompositedLayer keeps a reference to this rect, so add() grows
+        # it in place rather than replacing it.
         self.bounds = skia.Rect.MakeEmpty()
-        for item in self.items:
-            rect = getattr(item, "rect", None)
-            if rect is not None:
-                self.bounds.join(rect)
+        self._document_footprint = None
+        for item in items:
+            self.add(item)
         self.surface = None
         self.surface_rect = None
+
+    def can_merge(self, ancestors):
+        """A leaf can join this layer only under the very same effects."""
+        return len(ancestors) == len(self.ancestors) and all(
+            a is b for a, b in zip(ancestors, self.ancestors)
+        )
+
+    def add(self, item):
+        self.items.append(item)
+        rect = getattr(item, "rect", None)
+        if rect is not None:
+            self.bounds.join(rect)
+        self._document_footprint = None
+
+    def document_footprint(self):
+        """Where this layer's pixels can land, in document coordinates.
+
+        Cached until add() grows the bounds; effect parameters do not change
+        during one composite.
+        """
+        if self._document_footprint is None:
+            if self.bounds.isEmpty():
+                self._document_footprint = skia.Rect.MakeEmpty()
+            else:
+                self._document_footprint = map_to_document(
+                    pixel_footprint(self.bounds), self.ancestors
+                )
+        return self._document_footprint
 
     def _surface_rect(self):
         if self.bounds.isEmpty():
             return None
         # Snap to whole pixels so drawing the cached surface back is an exact
         # pixel copy instead of a resampled one.
-        rect = skia.Rect.MakeLTRB(
-            math.floor(self.bounds.left()) - 1,
-            math.floor(self.bounds.top()) - 1,
-            math.ceil(self.bounds.right()) + 1,
-            math.ceil(self.bounds.bottom()) + 1,
-        )
+        rect = pixel_footprint(self.bounds)
         if self.local_interest is not None:
             if not rect.intersect(self.local_interest):
                 return None
@@ -2322,6 +2412,14 @@ def composite_display_list(display_list, interest_rect=None):
     sibling leaves share one clone of their common ancestors, so the draw
     list reproduces the original stacking and effect grouping.
 
+    A leaf whose draw-phase ancestors are the same objects as an existing
+    layer's joins that layer instead of getting its own, unless that would
+    draw it before a later layer it overlaps. The scan goes back from the
+    newest layer, stops at the first overlapping layer it cannot merge with,
+    and gives up after MERGE_SCAN_LIMIT layers; overlap is checked on pixel
+    footprints mapped to document coordinates. Merged leaves need no new
+    draw-list entry: their layer is already attached under the same clones.
+
     interest_rect is in document coordinates. Leaves under a composited
     Scroll are offset by its scroll_y, so the interest rect is mapped into
     each leaf's own coordinate space before culling and surface clipping.
@@ -2365,7 +2463,16 @@ def composite_display_list(display_list, interest_rect=None):
             if rect is not None and not rects_intersect(rect, local_interest):
                 return
 
-        layer = CompositedLayer([item], local_interest)
+        if LAYER_MERGING_ENABLED:
+            leaf = leaf_document_footprint(item, ancestors)
+            for layer in reversed(layers[-MERGE_SCAN_LIMIT:]):
+                if layer.can_merge(ancestors):
+                    layer.add(item)
+                    return
+                if footprints_overlap(leaf, layer.document_footprint()):
+                    break
+
+        layer = CompositedLayer([item], local_interest, ancestors)
         layers.append(layer)
         attach(DrawCompositedLayer(layer), ancestors)
 
@@ -7689,11 +7796,18 @@ class RasterWindowState:
 
     def _trace_layers(self, mode, rastered):
         if self.measure is not None and hasattr(self.measure, "instant"):
+            layers = self.composited_layers
             self.measure.instant("composited_layers", {
                 "mode": mode,
-                "layers": len(self.composited_layers),
+                "layers": len(layers),
                 "rastered": rastered,
                 "draw_list_roots": len(self.draw_list),
+                # Leaves that joined an existing layer instead of their own.
+                "merged": sum(len(layer.items) for layer in layers) - len(layers),
+                "layer_pixels": sum(
+                    int(layer.surface_rect.width() * layer.surface_rect.height())
+                    for layer in layers if layer.surface_rect is not None
+                ),
                 "backend": self.backend,
             })
 

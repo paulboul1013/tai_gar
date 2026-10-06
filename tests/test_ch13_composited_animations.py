@@ -172,6 +172,9 @@ class DrawOnlyRaster(CommittingTestCase):
             '<div id="box" style="transition: opacity 2s; opacity: 1;'
             'background-color:orange">box <b>text</b></div>')
 
+    # Two blocks before the box share the body's ancestors and merge.
+    MERGING_PAGE = '<div style="background-color:pink">second</div>' + PAGE
+
     def setUp(self):
         super().setUp()
         self.load(self.PAGE)
@@ -250,6 +253,37 @@ class DrawOnlyRaster(CommittingTestCase):
         with patch.object(browser, "COMPOSITED_ANIMATIONS_ENABLED", False):
             self.raster(self.frame(101.0), tab_composite=False)
         self.assertEqual(self.modes(), ["full", "full"])
+
+    def layer_events(self):
+        return [c.args[1] for c in self.measure_raster.instant.call_args_list
+                if c.args[0] == "composited_layers"]
+
+    def test_draw_only_path_reuses_merged_layers(self):
+        self.load(self.MERGING_PAGE)
+        self.start()
+        layers = list(self.state.composited_layers)
+        self.assertTrue(any(len(layer.items) > 1 for layer in layers), "a layer was merged")
+        surfaces = [layer.surface for layer in layers]
+        self.raster(self.frame(101.0), tab_composite=False)
+        self.assertEqual(self.modes(), ["full", "draw_only"])
+        self.assertEqual(self.layer_events()[-1]["rastered"], 0)
+        self.assertEqual(self.state.composited_layers, layers)
+        self.assertEqual([layer.surface for layer in layers], surfaces)
+
+    def test_trace_reports_merged_and_layer_pixels(self):
+        self.load(self.MERGING_PAGE)
+        self.start()
+        self.raster(self.frame(101.0), tab_composite=False)
+        full, draw_only = self.layer_events()
+        layers = self.state.composited_layers
+        self.assertEqual(full["merged"],
+                         sum(len(layer.items) for layer in layers) - len(layers))
+        self.assertGreater(full["merged"], 0)
+        self.assertEqual(full["layer_pixels"], sum(
+            int(layer.surface_rect.width()) * int(layer.surface_rect.height())
+            for layer in layers if layer.surface_rect is not None))
+        self.assertEqual(draw_only["merged"], full["merged"])
+        self.assertEqual(draw_only["layer_pixels"], full["layer_pixels"])
 
 
 if __name__ == "__main__":
