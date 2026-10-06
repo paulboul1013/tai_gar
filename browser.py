@@ -9,6 +9,7 @@ from html import unescape,escape
 import webbrowser
 import os
 import math
+import copy
 from gpu_evidence import load_config, EvidenceRecorder, classify_renderer
 
 RENDER_CONFIG = load_config(os.environ)
@@ -405,6 +406,19 @@ def get_opengl_gl():
 RASTER_TEST_DELAY_SEC = _scheduler_env_float(
     "BROWSER_RASTER_TEST_DELAY_MS", 0.0
 ) / 1000.0
+
+def _env_flag(name, default):
+    return (
+        os.environ.get(name, default).strip().casefold()
+        in ["1", "true", "yes", "on"]
+    )
+
+
+# Chapter 13 compositing. BROWSER_COMPOSITING=0 restores the direct raster
+# path for A/B checks; BROWSER_SHOW_LAYER_BORDERS=1 outlines every cached
+# layer surface in red so the split is visible on screen.
+COMPOSITING_ENABLED = _env_flag("BROWSER_COMPOSITING", "1")
+SHOW_COMPOSITED_LAYER_BORDERS = _env_flag("BROWSER_SHOW_LAYER_BORDERS", "0")
 
 # Let validation runs write separate trace files without moving/renaming them.
 BROWSER_TRACE_FILE = os.environ.get("BROWSER_TRACE_FILE", "browser.trace")
@@ -2021,7 +2035,43 @@ def build_icon_path(icon_name, rect):
     return None
 
 
-class Blur:
+class PaintCommand:
+    """Leaf display-list item that draws shapes, text, or images.
+
+    Subclasses set self.rect (document coordinates) and implement execute().
+    Paint commands are the expensive part of raster, so compositing caches
+    their pixels in CompositedLayer surfaces instead of redrawing every frame.
+    """
+    rect = None
+
+
+class VisualEffect:
+    """Display-list item that changes how its children's pixels are drawn.
+
+    needs_compositing is True when this effect, or any effect below it, must
+    run in the draw phase on top of cached layer surfaces rather than being
+    baked into a layer during raster. Subclasses call init_compositing() after
+    self.children is set.
+    """
+    needs_compositing = False
+
+    def own_needs_compositing(self):
+        return False
+
+    def init_compositing(self):
+        self.needs_compositing = self.own_needs_compositing() or any(
+            getattr(child, "needs_compositing", False)
+            for child in self.children
+        )
+
+    def clone(self, children):
+        """Copy this effect's parameters around a new list of children."""
+        twin = copy.copy(self)
+        twin.children = list(children)
+        return twin
+
+
+class Blur(VisualEffect):
     """Display-list effect node for CSS filter: blur().
 
     Blur is a pixel-moving effect, so it must rasterize the whole element
@@ -2049,6 +2099,8 @@ class Blur:
                 self.rect.bottom() + pad,
             )
 
+        self.init_compositing()
+
     def execute(self, canvas):
         if not self.children:
             return
@@ -2070,7 +2122,7 @@ class Blur:
         canvas.restore()
 
 
-class Blend:
+class Blend(VisualEffect):
     """Display-list effect node for opacity and blend/compositing.
 
     The important optimization is that opacity and blend mode share one
@@ -2097,6 +2149,14 @@ class Blend:
             if hasattr(cmd, "rect"):
                 self.rect.join(cmd.rect)
 
+        self.init_compositing()
+
+    def own_needs_compositing(self):
+        # Only an isolating Blend (opacity < 1 or a real blend mode) changes
+        # how cached pixels combine with the backdrop, so only it must stay
+        # in the draw phase. A pass-through Blend is baked into its layer.
+        return self.should_save
+
     def execute(self, canvas):
         if not self.children:
             return
@@ -2116,7 +2176,7 @@ class Blend:
             canvas.restore()
 
 
-class Scroll:
+class Scroll(VisualEffect):
     """Display-list node for a scrollable element's child content.
 
     Child commands remain in document/layout coordinates. During rasterization
@@ -2131,6 +2191,7 @@ class Scroll:
         # The visible bounds of a scrolling subtree are the container bounds,
         # not the full (possibly very tall) layout-overflow bounds.
         self.rect = rect
+        self.init_compositing()
 
     def execute(self, canvas):
         if not self.children:
@@ -2142,6 +2203,163 @@ class Scroll:
         for cmd in self.children:
             cmd.execute(canvas)
         canvas.restore()
+
+
+class CompositedLayer:
+    """A group of display items rastered once into their own surface.
+
+    The surface covers only the items' bounds (plus a 1px antialiasing
+    margin), clipped to the part of the interest region that the items can
+    reach. Items keep their document coordinates; raster shifts the canvas so
+    the surface's top-left pixel lines up with surface_rect.
+    """
+
+    def __init__(self, items, local_interest=None):
+        self.items = list(items)
+        self.local_interest = local_interest
+        self.bounds = skia.Rect.MakeEmpty()
+        for item in self.items:
+            rect = getattr(item, "rect", None)
+            if rect is not None:
+                self.bounds.join(rect)
+        self.surface = None
+        self.surface_rect = None
+
+    def _surface_rect(self):
+        if self.bounds.isEmpty():
+            return None
+        # Snap to whole pixels so drawing the cached surface back is an exact
+        # pixel copy instead of a resampled one.
+        rect = skia.Rect.MakeLTRB(
+            math.floor(self.bounds.left()) - 1,
+            math.floor(self.bounds.top()) - 1,
+            math.ceil(self.bounds.right()) + 1,
+            math.ceil(self.bounds.bottom()) + 1,
+        )
+        if self.local_interest is not None:
+            if not rect.intersect(self.local_interest):
+                return None
+            rect = skia.Rect.MakeLTRB(
+                math.floor(rect.left()),
+                math.floor(rect.top()),
+                math.ceil(rect.right()),
+                math.ceil(rect.bottom()),
+            )
+        if rect.isEmpty():
+            return None
+        return rect
+
+    def raster(self, make_surface):
+        rect = self._surface_rect()
+        self.surface_rect = rect
+        if rect is None:
+            self.surface = None
+            return False
+
+        self.surface = make_surface(int(rect.width()), int(rect.height()))
+        canvas = self.surface.getCanvas()
+        canvas.clear(skia.ColorTRANSPARENT)
+        canvas.save()
+        canvas.translate(-rect.left(), -rect.top())
+        for item in self.items:
+            item.execute(canvas)
+        canvas.restore()
+        return True
+
+
+class DrawCompositedLayer:
+    """Draw-list item that copies a CompositedLayer's cached pixels."""
+
+    def __init__(self, layer):
+        self.layer = layer
+        self.rect = layer.bounds
+
+    def execute(self, canvas):
+        layer = self.layer
+        if layer.surface is None:
+            return
+        left = layer.surface_rect.left()
+        top = layer.surface_rect.top()
+        layer.surface.draw(canvas, left, top)
+        if SHOW_COMPOSITED_LAYER_BORDERS:
+            canvas.drawRect(
+                skia.Rect.MakeXYWH(
+                    left + 0.5,
+                    top + 0.5,
+                    layer.surface_rect.width() - 1,
+                    layer.surface_rect.height() - 1,
+                ),
+                skia.Paint(
+                    Color=skia.ColorRED,
+                    Style=skia.Paint.kStroke_Style,
+                    StrokeWidth=1,
+                ),
+            )
+
+
+def composite_display_list(display_list, interest_rect=None):
+    """Split a display list into cached layers plus a draw list.
+
+    Walking down the tree, effects that need compositing stay in the draw
+    list; the first item below them that does not (a paint command, or an
+    effect subtree with nothing to composite) is a compositing leaf and gets
+    its own CompositedLayer. The draw list mirrors the composited effects,
+    cloned so the committed display list is never mutated, with each leaf
+    replaced by a DrawCompositedLayer. Leaves are visited in paint order and
+    sibling leaves share one clone of their common ancestors, so the draw
+    list reproduces the original stacking and effect grouping.
+
+    interest_rect is in document coordinates. Leaves under a composited
+    Scroll are offset by its scroll_y, so the interest rect is mapped into
+    each leaf's own coordinate space before culling and surface clipping.
+    """
+    layers = []
+    draw_list = []
+    clones = {}
+
+    def attach(node, ancestors):
+        for effect in reversed(ancestors):
+            twin = clones.get(id(effect))
+            if twin is not None:
+                twin.children.append(node)
+                return
+            twin = effect.clone([node])
+            clones[id(effect)] = twin
+            node = twin
+        draw_list.append(node)
+
+    def visit(item, ancestors, scroll_offset):
+        if isinstance(item, VisualEffect) and item.needs_compositing:
+            if isinstance(item, Scroll):
+                scroll_offset += item.scroll_y
+            for child in item.children:
+                visit(child, ancestors + (item,), scroll_offset)
+            return
+
+        # Invisible hit-test regions draw nothing; a surface would be waste.
+        if isinstance(item, DrawHitTest):
+            return
+
+        local_interest = None
+        if interest_rect is not None:
+            local_interest = skia.Rect.MakeLTRB(
+                interest_rect.left(),
+                interest_rect.top() + scroll_offset,
+                interest_rect.right(),
+                interest_rect.bottom() + scroll_offset,
+            )
+            rect = getattr(item, "rect", None)
+            if rect is not None and not rects_intersect(rect, local_interest):
+                return
+
+        layer = CompositedLayer([item], local_interest)
+        layers.append(layer)
+        attach(DrawCompositedLayer(layer), ancestors)
+
+    for item in display_list:
+        visit(item, (), 0.0)
+
+    return layers, draw_list
 
 
 def paint_visual_effects(node, cmds, rect=None):
@@ -2924,7 +3142,7 @@ class BrowserApp:
         self.evidence.write()
 
 
-class DrawText:
+class DrawText(PaintCommand):
     def __init__(self, x1, y1, text, font, color):
         self.text = text
         self.font = font
@@ -2955,7 +3173,7 @@ class DrawText:
         )
 
 
-class DrawRect:
+class DrawRect(PaintCommand):
     def __init__(self, rect, color):
         self.rect = rect
         self.color = color
@@ -2965,7 +3183,7 @@ class DrawRect:
         canvas.drawRect(self.rect, paint)
 
 
-class DrawHitTest:
+class DrawHitTest(PaintCommand):
     """Invisible display-list leaf used only to expose a layout hit region."""
     def __init__(self, rect):
         self.rect = rect
@@ -2974,7 +3192,7 @@ class DrawHitTest:
         pass
 
 
-class DrawRRect:
+class DrawRRect(PaintCommand):
     def __init__(self, rect, radius, color):
         self.rect = rect
         self.radius = max(0.0, float(radius))
@@ -2986,7 +3204,7 @@ class DrawRRect:
         canvas.drawRRect(rrect, paint)
 
 
-class DrawLine:
+class DrawLine(PaintCommand):
     def __init__(self, x1, y1, x2, y2, color, thickness):
         # Keep the real endpoints because a line may slope upward. The rect is
         # only its bounding box for clipping and hit testing.
@@ -3018,7 +3236,7 @@ class DrawLine:
         canvas.drawPath(path, paint)
 
 
-class DrawOutline:
+class DrawOutline(PaintCommand):
     def __init__(self, rect, color, thickness):
         self.rect = rect
         self.color = color
@@ -3034,7 +3252,7 @@ class DrawOutline:
         canvas.drawRect(self.rect, paint)
 
 
-class DrawRRectOutline:
+class DrawRRectOutline(PaintCommand):
     def __init__(self, rect, radius, color, thickness):
         self.rect = rect
         self.radius = max(0.0, float(radius))
@@ -3052,7 +3270,7 @@ class DrawRRectOutline:
         canvas.drawRRect(rrect, paint)
 
 
-class DrawVectorIcon:
+class DrawVectorIcon(PaintCommand):
     """A semantic Chrome icon rasterized from a Skia Path."""
     def __init__(
         self,
@@ -3086,7 +3304,7 @@ class DrawVectorIcon:
         canvas.drawPath(path, paint)
 
 
-class DrawImage:
+class DrawImage(PaintCommand):
     def __init__(self, x, y, img):
         self.img = img
         self.rect = skia.Rect.MakeXYWH(
@@ -3215,6 +3433,12 @@ class LineLayout:
 
     def paint(self):
         return []
+
+    def paint_effects(self, own_cmds, child_cmds):
+        # A line box shares its block's node, but it is not that element's
+        # box: the block already applies the element's opacity, blend mode,
+        # filter, and clip. Applying them here too would double them.
+        return own_cmds + child_cmds
 
 class TextLayout:
     def __init__(self,node,word,parent,previous,
@@ -7025,12 +7249,30 @@ class RasterWindowState:
         self.interest_start = 0
         self.interest_height = 1
         self.backend = "cpu"
+        self.measure = None
+        self.composited_layers = []
+        self.draw_list = []
 
     def _make_root_surface(self, width, height):
         return make_skia_surface(width, height)
 
     def _make_offscreen_surface(self, width, height):
         return make_skia_surface(width, height)
+
+    def _make_layer_surface(self, width, height):
+        # Layers are drawn over other pixels, so they need real (premultiplied)
+        # transparency rather than the opaque tab/chrome surface format.
+        return skia.Surface.MakeRaster(
+            skia.ImageInfo.MakeN32Premul(max(1, int(width)), max(1, int(height)))
+        )
+
+    def _trace_time(self, name):
+        if self.measure is not None:
+            self.measure.time(name)
+
+    def _trace_stop(self, name):
+        if self.measure is not None:
+            self.measure.stop(name)
 
     def _sync_scene(self, work):
         resized = self.width != work.width or self.height != work.height
@@ -7167,20 +7409,56 @@ class RasterWindowState:
             region_end,
         )
 
+        if COMPOSITING_ENABLED:
+            items = self._composite_and_raster_layers(
+                state.display_list, document_interest_rect
+            )
+        else:
+            self.composited_layers = []
+            self.draw_list = []
+            items = [
+                item for item in state.display_list
+                if not (
+                    hasattr(item, "rect")
+                    and (
+                        item.rect.bottom() <= document_interest_rect.top()
+                        or item.rect.top() >= document_interest_rect.bottom()
+                    )
+                )
+            ]
+
+        self._trace_time("draw")
         canvas.save()
         canvas.clipRect(surface_clip)
         canvas.translate(0, -self.interest_start)
-
-        for item in state.display_list:
-            if hasattr(item, "rect"):
-                if (
-                    item.rect.bottom() <= document_interest_rect.top()
-                    or item.rect.top() >= document_interest_rect.bottom()
-                ):
-                    continue
+        for item in items:
             item.execute(canvas)
-
         canvas.restore()
+        self._trace_stop("draw")
+
+    def _composite_and_raster_layers(self, display_list, interest_rect):
+        """Composite and raster phases; returns the draw list to execute."""
+        self._trace_time("composite")
+        layers, draw_list = composite_display_list(display_list, interest_rect)
+        self._trace_stop("composite")
+
+        self._trace_time("raster_layers")
+        rastered = 0
+        for layer in layers:
+            if layer.raster(self._make_layer_surface):
+                rastered += 1
+        self._trace_stop("raster_layers")
+
+        self.composited_layers = layers
+        self.draw_list = draw_list
+        if self.measure is not None and hasattr(self.measure, "instant"):
+            self.measure.instant("composited_layers", {
+                "layers": len(layers),
+                "rastered": rastered,
+                "draw_list_roots": len(draw_list),
+                "backend": self.backend,
+            })
+        return draw_list
 
     def _draw_scrollbar(self, canvas, work):
         state = work.page_state
@@ -7346,6 +7624,9 @@ class GpuRasterWindowState(RasterWindowState):
     def _make_offscreen_surface(self, width, height):
         return make_gpu_render_target(self.skia_context, width, height)
 
+    def _make_layer_surface(self, width, height):
+        return make_gpu_render_target(self.skia_context, width, height)
+
     def _compose_pixels(self, work):
         # Compose directly into the OpenGL framebuffer. Never snapshot/read back
         # to CPU memory; that copy is precisely what the GPU path is meant to avoid.
@@ -7370,6 +7651,8 @@ class GpuRasterWindowState(RasterWindowState):
         self.root_surface = None
         self.chrome_surface = None
         self.tab_surface = None
+        self.composited_layers = []
+        self.draw_list = []
 
 
 class RasterAndDrawRunner:
@@ -7462,6 +7745,7 @@ class RasterAndDrawRunner:
         try:
             if state is None:
                 state = self._state_for(work.raster_id)
+            state.measure = self.measure
             result = state.render(work)
             return result
         finally:
