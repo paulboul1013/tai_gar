@@ -1,3 +1,5 @@
 *.html
 __pycache__
 *.png
+.verify-runs/
+!.claude/skills/verify/fixtures/*.html
