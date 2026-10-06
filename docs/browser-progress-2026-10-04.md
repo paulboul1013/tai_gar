@@ -14,7 +14,7 @@ commit: 142608b
 
 GPU Acceleration 已在 AMD 硬體實測；第 12 章 API 回退已由 `6dc441e` 補回。
 
-opacity 的 CSS Transitions 已實作；下一個實作階段是 Composited Animations。
+opacity 的 CSS Transitions 與 Composited Animations 已實作；下一個實作階段是 Optimizing Compositing。
 
 依[第 13 章正文順序](https://browser.engineering/animations.html)對照：
 
@@ -25,7 +25,7 @@ opacity 的 CSS Transitions 已實作；下一個實作階段是 Composited Anim
 | [Compositing](https://browser.engineering/animations.html#compositing) | ok 已有 | Raster-and-draw 分成 composite → raster_layers → draw 三階段，各自有 trace。 |
 | [Compositing Leaves](https://browser.engineering/animations.html#compositing-leaves) | ok 已有 | `CompositedLayer`、`DrawCompositedLayer`、`composite_display_list`；需合成的 effect 複製進 draw list。 |
 | [CSS Transitions](https://browser.engineering/animations.html#css-transitions) | ok 已有 | `parse_transition`、`NumericAnimation`、`update_transitions`；Tab 拆成 needs_style／needs_layout／needs_paint，動畫幀跳過 style。 |
-| [Composited Animations](https://browser.engineering/animations.html#composited-animations) | no 未實作 | 無 composited_updates；動畫幀仍跑 layout／paint，且每幀重建並重新 raster 所有 layer。 |
+| [Composited Animations](https://browser.engineering/animations.html#composited-animations) | ok 已有 | Blend 帶節點鍵；`CommitData.composited_updates`；動畫中間幀只跑 paint，raster thread 以 `refresh_draw_list` 沿用 layer，只 draw。 |
 | [Optimizing Compositing](https://browser.engineering/animations.html#optimizing-compositing) | no 未實作 | 無 layer 合併（`can_merge`）與 layer 跨幀重用。 |
 | [Overlap and Transforms](https://browser.engineering/animations.html#overlap-and-transforms) | no 未實作 | 無 CSS translate 與圖層 overlap 處理。 |
 
@@ -34,6 +34,7 @@ transform transition 屬 Exercise 13-3。
 
 相關設定：`BROWSER_COMPOSITING=0` 退回直接 raster 路徑做 A/B 比對；
 `BROWSER_SHOW_LAYER_BORDERS=1` 以紅框標出每個 layer。
+`BROWSER_COMPOSITED_ANIMATIONS=0` 保留合成，但每幀都重新 composite／raster，用來量測 Composited Animations 的效益。
 
 `142608b` 同時修正 LineLayout 與所屬 block 共用 node，
 造成 opacity、blend、filter、clip 在每個 line box 重複套用的問題。
@@ -71,7 +72,7 @@ transform transition 屬 Exercise 13-3。
 | 10 隱私與安全 | ok 主要功能已有 | cookies、SameSite/HttpOnly、CSP、CORS；測試伺服器有 CSRF nonce。 |
 | 11 視覺效果 | ok 正文主要功能已有 | SDL/Skia、Blend、rounded clipping、surface 快取。另有 blur、overflow scrolling、touch。 |
 | 12 排程與執行緒 | ok 主要功能已有 | task queue、RAF、timers、async XHR、profiling、commit、threaded scrolling；另有 priority、network、raster threads 與 adaptive cadence。 |
-| 13 動畫與合成 | warn 進行中 | RAF、GPU、Compositing／Leaves、CSS Transitions 已有；Composited Animations 之後未實作（見 A）。 |
+| 13 動畫與合成 | warn 進行中 | RAF、GPU、Compositing／Leaves、CSS Transitions、Composited Animations 已有；Optimizing Compositing 之後未實作（見 A）。 |
 | 14 無障礙 | no 未見章節核心實作 | 有基本 input focus；缺 zoom、dark mode、Tab 導覽、accessibility tree、screen reader。 |
 | 15 嵌入內容 | no 未見章節核心實作 | DrawImage 用於 emoji；未見一般 img 載入／layout、iframe、Frame、postMessage。 |
 | 16 增量計算 | no 未見章節核心實作 | 使用單一 needs_render；無 protected fields、依賴追蹤或 contenteditable。 |
@@ -82,7 +83,7 @@ transform transition 屬 Exercise 13-3。
 - JS／表單：`browser.py:4686`（JSContext）、`6881`（submit_form）。
 - 第 11 章：`browser.py:2125`（Blend）、`2179`（Scroll）、`2365`（paint_visual_effects）、`2436`（paint_tree）。
 - 第 12 章：`browser.py:653`（MeasureTime）、`889`（TaskRunner）、`5901`（CommitData）、`7658`（RasterAndDrawRunner）、`7816`（BrowserWindow）。
-- 第 13 章：`browser.py:2208`（CompositedLayer）、`2270`（DrawCompositedLayer）、`2300`（composite_display_list）、`7439`（_composite_and_raster_layers）、`7884`（GPU context）。
+- 第 13 章：`browser.py:2221`（CompositedLayer）、`2283`（DrawCompositedLayer）、`2313`（composite_display_list）、`2396`（refresh_draw_list）、`7654`（_composite_and_raster_layers）、`7672`（_refresh_draw_list）、`8179`（GPU context）。
 
 ## D 建議接續順序
 
@@ -91,7 +92,7 @@ transform transition 屬 Exercise 13-3。
 3. ~~閱讀 Compositing 的圖層快取原理。~~
 4. ~~實作 Compositing Leaves 的 layer 與 draw list。~~ 已由 `142608b` 完成。
 5. ~~實作 opacity CSS Transitions（transition 解析與逐幀插值）。~~ 已完成。
-6. 實作 Composited Animations：opacity 變更只更新 draw list，跳過 layout／paint 與 layer 重新 raster。
+6. ~~實作 Composited Animations：opacity 變更只更新 draw list，跳過 layout 與 layer 重新 raster。~~ 已完成。
 7. Optimizing Compositing（layer 合併與跨幀重用），再做 Overlap and Transforms。
 
 目前預設為 CPU＋threaded raster，合成預設開啟。
@@ -110,7 +111,7 @@ GPU context 與 raster 目前留在 Browser Thread。
 
 | 檢查 | 結果 |
 | --- | --- |
-| 自動測試 `python3 -m pytest tests` | ok 2026-10-06：162 項全數通過 |
+| 自動測試 `python3 -m pytest tests` | ok 2026-10-06：183 項全數通過 |
 | 第 12 章 timers／async XHR | ok `test_ch12_js_api.py` 26 項 |
 | 合成 layer 切分 | ok 無效果頁面為單一 layer；opacity／blend 切出多個 layer |
 | 合成後畫面一致性 | ok 重組 layer 的結果與直接 raster 相同 |
@@ -118,7 +119,8 @@ GPU context 與 raster 目前留在 Browser Thread。
 | interest region | ok 範圍外 leaf 被剔除；composited Scroll 會換算捲動座標 |
 | line box 效果 | ok 元素效果只套用一次，不再逐 line box 重複 |
 | trace 階段 | ok 記錄 composite、raster_layers、draw |
-| transition:opacity | ok `test_ch13_transitions.py` 19 項；headless 實測 1s transition 為 1 次 style 後接 31 幀只跑 layout／paint |
+| transition:opacity | ok `test_ch13_transitions.py` 20 項；1s transition 中間幀只跑 paint，只有開始與結束跑 layout |
+| composited animations | ok `test_ch13_composited_animations.py` 20 項；只 draw 路徑像素與完整路徑完全相同；CPU threaded／CPU sync／GPU sync 實測 33 幀中 30 幀走 `draw_only` |
 | GPU 硬體 context | ok 2026-10-05：AMD driver 31.0.21925.1001，renderer 為 D3D12 (AMD Radeon) |
 | GPU 吞吐（描述性） | ok 4 場景 × 10 blocks，相對 CPU sync 幾何平均 1.33×（95% CI 1.30–1.36） |
 | 捲動／RAF 場景 | warn 1.01×，沒有變快；原因見結果文件 |
@@ -131,10 +133,11 @@ GPU 吞吐數據量測於合成功能加入之前（`cb9fa45`），尚未以合�
 速度資料見[驗證結果](chapter-13-gpu-verification-results.md)。
 這些是描述性結果，正式 `performance_status` 仍為 PENDING（缺畫面校準與 freeze）。
 
-合成已把 display list 切成 layer，CSS transition 的動畫幀也已跳過 style，
-但每幀仍重新 layout／paint、重新 composite 並重新 raster 全部 layer，所以尚未帶來動畫效益。
+CSS opacity transition 的中間幀現在只跑 paint 與 draw：layout、composite、raster 只在動畫開始與結束各跑一次。
+在 120 段文字的頁面上，main thread 每幀約由 44 ms 降到 10 ms，raster thread 約由 28 ms 降到 12 ms（CPU）；
+1 秒動畫的實際幀數 CPU 由 14 增為 22、GPU 由 7 增為 18。剩下的 CPU draw 成本來自每段文字各自一個 layer，
+要靠 Optimizing Compositing 合併 layer。
 JS 修改 opacity 的路徑仍是 `setAttribute → set_needs_render → render`（style、layout、paint 全跑）。
-要等 Composited Animations 只更新 draw list、重用 layer surface，GPU 與合成的效益才會在動畫與捲動上顯現。
 
 現有未追蹤的 `browser.trace`（2026-10-05 22:02）是 GPU sync 執行紀錄，
 有 408 次 `present_backend`（`render_backend=gpu`），

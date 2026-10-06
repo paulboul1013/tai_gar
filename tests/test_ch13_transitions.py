@@ -139,10 +139,17 @@ class OpacityTransition(TransitionTestCase):
         self.frame_at(100.25)
         self.assertAlmostEqual(self.opacity(), 0.5)
 
-    def test_animation_frames_skip_style(self):
+    def test_animation_frames_skip_style_and_layout(self):
         self.set_style("transition: opacity 2s; opacity: 0.1")
         self.measure.phases.clear()
         self.frame_at(100.5)
+        self.assertEqual(self.measure.phases, ["render", "paint"])
+
+    def test_last_animation_frame_reruns_layout(self):
+        self.set_style("transition: opacity 2s; opacity: 0.1")
+        self.frame_at(101.0)
+        self.measure.phases.clear()
+        self.frame_at(102.5)
         self.assertEqual(self.measure.phases, ["render", "layout", "paint"])
 
     def test_restyle_mid_animation_does_not_restart_it(self):

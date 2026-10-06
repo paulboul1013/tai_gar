@@ -418,6 +418,9 @@ def _env_flag(name, default):
 # path for A/B checks; BROWSER_SHOW_LAYER_BORDERS=1 outlines every cached
 # layer surface in red so the split is visible on screen.
 COMPOSITING_ENABLED = _env_flag("BROWSER_COMPOSITING", "1")
+# BROWSER_COMPOSITED_ANIMATIONS=0 keeps compositing but recomposites and
+# rerasters every frame, to measure what composited animations save.
+COMPOSITED_ANIMATIONS_ENABLED = _env_flag("BROWSER_COMPOSITED_ANIMATIONS", "1")
 SHOW_COMPOSITED_LAYER_BORDERS = _env_flag("BROWSER_SHOW_LAYER_BORDERS", "0")
 
 # Let validation runs write separate trace files without moving/renaming them.
@@ -2129,8 +2132,18 @@ class Blend(VisualEffect):
     temporary layer. If neither effect needs isolation, child commands are
     drawn directly into the current canvas without saveLayer().
     """
-    def __init__(self, opacity, blend_mode, children):
+    def __init__(self, opacity, blend_mode, children, node=None,
+                 force_compositing=False):
         self.opacity = parse_opacity(opacity)
+        # The element whose opacity/mix-blend-mode this Blend applies. Nodes
+        # outlive display lists, so the raster thread uses them as keys to
+        # match a new frame's Blend to the cached draw list's clone. It must
+        # never read node attributes: nodes belong to the main thread.
+        self.node = node
+        # An opacity animation keeps its Blend in the draw phase even at
+        # opacity 1, so the draw list's structure is stable for the whole
+        # animation and its frames only change effect parameters.
+        self.force_compositing = bool(force_compositing)
 
         raw_blend_mode = str(blend_mode or "").strip().casefold()
         # Treat CSS's ordinary compositing values as "no special blend mode".
@@ -2155,7 +2168,7 @@ class Blend(VisualEffect):
         # Only an isolating Blend (opacity < 1 or a real blend mode) changes
         # how cached pixels combine with the backdrop, so only it must stay
         # in the draw phase. A pass-through Blend is baked into its layer.
-        return self.should_save
+        return self.should_save or self.force_compositing
 
     def execute(self, canvas):
         if not self.children:
@@ -2362,6 +2375,53 @@ def composite_display_list(display_list, interest_rect=None):
     return layers, draw_list
 
 
+def latest_blends(display_list):
+    """Map each node to its keyed Blend among a display list's draw-phase effects.
+
+    Only effects that need compositing can appear in a draw list, so subtrees
+    baked into layers are not walked.
+    """
+    latest = {}
+    stack = list(display_list)
+    while stack:
+        item = stack.pop()
+        if not (isinstance(item, VisualEffect) and item.needs_compositing):
+            continue
+        if isinstance(item, Blend) and item.node is not None:
+            latest[item.node] = item
+        stack.extend(item.children)
+    return latest
+
+
+def refresh_draw_list(draw_list, latest):
+    """Copy a draw list with each keyed Blend's parameters taken from latest.
+
+    The layer references are kept, so the copy redraws the cached pixels with
+    new opacity and blend mode. Returns None if the old draw list no longer
+    matches latest (a Blend vanished or left the draw phase); the caller must
+    then recomposite. Nodes are used only as dictionary keys.
+    """
+    stale = False
+
+    def refresh(item):
+        nonlocal stale
+        if not isinstance(item, VisualEffect):
+            return item
+        twin = item.clone([refresh(child) for child in item.children])
+        if isinstance(item, Blend) and item.node is not None:
+            new = latest.get(item.node)
+            if new is None:
+                stale = True
+            else:
+                twin.opacity = new.opacity
+                twin.blend_mode = new.blend_mode
+                twin.should_save = new.should_save
+        return twin
+
+    refreshed = [refresh(item) for item in draw_list]
+    return None if stale else refreshed
+
+
 def paint_visual_effects(node, cmds, rect=None):
     """Apply filter, clipping, opacity, and blending in CSS rendering order.
 
@@ -2431,7 +2491,15 @@ def paint_visual_effects(node, cmds, rect=None):
     # COMPOSITING STAGE. Opacity and mix-blend-mode still share one outer
     # layer. If neither effect nor clipping needs isolation, Blend.execute()
     # simply forwards the children without creating another surface.
-    return [Blend(opacity, blend_mode, filtered_cmds)]
+    blend = Blend(
+        opacity,
+        blend_mode,
+        filtered_cmds,
+        node=node,
+        force_compositing="opacity" in node.animations,
+    )
+    node.blend_op = blend
+    return [blend]
 
 def paint_tree(layout_object, display_list):
     """Build the tree-shaped display list with descendant effects.
@@ -5917,6 +5985,7 @@ class CommitData:
         "tab_height",
         "navigation_generation",
         "input_ids",
+        "composited_updates",
     )
 
     def __init__(
@@ -5933,6 +6002,7 @@ class CommitData:
         tab_height=0,
         navigation_generation=0,
         input_ids=(),
+        composited_updates=None,
     ):
         # Everything needed by the Browser Thread is captured before commit().
         # display_list is intentionally not copied: ownership moves across the
@@ -5949,6 +6019,12 @@ class CommitData:
         self.tab_height = int(tab_height)
         self.navigation_generation = int(navigation_generation)
         self.input_ids = tuple(input_ids)
+        # Chapter 13 composited animations:
+        #   None            -> display list structure changed; recomposite.
+        #   {}              -> no new display list (scroll-only frame).
+        #   {node: Blend}   -> same structure; only these Blends' parameters
+        #                      changed, so cached layers can be redrawn as is.
+        self.composited_updates = composited_updates
 
     @property
     def url_string(self):
@@ -5997,6 +6073,12 @@ class Tab:
         self.needs_layout = False
         self.needs_paint = False
         self.visual_effect_revision = 0
+        # Composited animations: True once layout has run since the last
+        # accepted commit, meaning the display list structure may differ from
+        # the one the raster thread composited. Nodes whose opacity animation
+        # advanced without layout are collected in composited_updates.
+        self.needs_composite = True
+        self.composited_updates = []
         # Nodes with running CSS transitions, and the clock driving them.
         self.animated_nodes = set()
         self.animation_clock = time.perf_counter
@@ -6031,6 +6113,11 @@ class Tab:
     def set_needs_layout(self):
         """Rerun layout and paint (not style) on the next frame."""
         self.needs_layout = True
+        self.browser.set_needs_animation_frame(self)
+
+    def set_needs_paint(self):
+        """Rerun only paint on the next frame."""
+        self.needs_paint = True
         self.browser.set_needs_animation_frame(self)
 
     def discard(self):
@@ -6540,6 +6627,16 @@ class Tab:
                 else None
             )
 
+            if committed_display_list is None:
+                composited_updates = {}
+            elif self.needs_composite:
+                composited_updates = None
+            else:
+                composited_updates = {
+                    node: getattr(node, "blend_op", None)
+                    for node in self.composited_updates
+                }
+
             data = CommitData(
                 self.url,
                 self.scroll,
@@ -6553,11 +6650,14 @@ class Tab:
                 tab_height=self.tab_height,
                 navigation_generation=self.navigation_generation,
                 input_ids=self.applied_input_ids,
+                composited_updates=composited_updates,
             )
 
             accepted = self.browser.commit(self, data)
 
             if accepted and committed_display_list is not None:
+                self.needs_composite = False
+                self.composited_updates = []
                 # Ownership moved only after BrowserWindow accepted this snapshot.
                 # If the window rejects a commit (for example during shutdown), keep
                 # the local list so it is not silently lost.
@@ -6603,17 +6703,29 @@ class Tab:
             return
 
         now = self.animation_clock()
+        any_finished = False
         for node in list(self.animated_nodes):
             for prop, animation in list(node.animations.items()):
                 node.style[prop] = animation.animate(now)
                 if animation.finished:
                     del node.animations[prop]
+                    any_finished = True
+                elif node not in self.composited_updates:
+                    self.composited_updates.append(node)
             if not node.animations:
                 self.animated_nodes.discard(node)
 
         # The new values bypass style, so restyling must not run: it would see
         # them as fresh changes and restart the transition.
-        self.set_needs_layout()
+        if any_finished:
+            # Finishing drops force_compositing, so the Blend may move back
+            # into a layer: the draw list structure changes and must be
+            # recomposited, which layout_document() signals.
+            self.set_needs_layout()
+        else:
+            # Opacity only changes Blend parameters: layout is unchanged and
+            # the raster thread can redraw its cached layers.
+            self.set_needs_paint()
 
     def render(self):
         """Update style, layout, and paint when the Tab is dirty; never commit."""
@@ -6659,6 +6771,9 @@ class Tab:
     def layout_document(self):
         self.document=DocumentLayout(self.nodes,self.width)
         self.document.layout()
+        # Set here rather than from the dirty flags: relayout() callers such
+        # as scroll_focused_element() bypass needs_layout entirely.
+        self.needs_composite = True
 
     def paint_document(self):
         self.display_list=[]
@@ -7193,6 +7308,7 @@ class RasterWork:
         "chrome_bottom",
         "chrome_raster",
         "tab_raster",
+        "tab_composite",
         "estimator_tab",
         "title",
     )
@@ -7216,6 +7332,7 @@ class RasterWork:
         frame_id=0,
         input_ids=(),
         navigation_generation=0,
+        tab_composite=True,
     ):
         self.raster_id = int(raster_id)
         self.window_id = int(window_id)
@@ -7231,6 +7348,10 @@ class RasterWork:
         self.chrome_bottom = max(0.0, float(chrome_bottom))
         self.chrome_raster = bool(chrome_raster)
         self.tab_raster = bool(tab_raster)
+        # False only when every commit in this batch changed nothing but
+        # composited effect parameters: the tab may be redrawn from its
+        # cached layers without composite or raster.
+        self.tab_composite = bool(tab_composite)
         self.estimator_tab = estimator_tab
         self.title = str(title or "Tai Gar")
 
@@ -7322,6 +7443,9 @@ class RasterWindowState:
         self.measure = None
         self.composited_layers = []
         self.draw_list = []
+        # Interest region the cached layers were rastered for, or None when
+        # there are no reusable layers.
+        self.layers_interest = None
 
     def _make_root_surface(self, width, height):
         return make_skia_surface(width, height)
@@ -7364,6 +7488,12 @@ class RasterWindowState:
             self.active_tab_key = work.active_tab_key
             self.tab_surface = None
             self.interest_start = 0
+
+        if resized or tab_changed:
+            # Cached layers belong to the old tab or the old width.
+            self.composited_layers = []
+            self.draw_list = []
+            self.layers_interest = None
 
         if self.root_surface is None:
             self.root_surface = self._make_root_surface(work.width, work.height)
@@ -7451,6 +7581,7 @@ class RasterWindowState:
         if state is None or state.document_height <= 0:
             self.tab_surface = None
             self.interest_start = 0
+            self.layers_interest = None
             return
 
         if not self._viewport_inside_interest_region(work):
@@ -7479,13 +7610,27 @@ class RasterWindowState:
             region_end,
         )
 
-        if COMPOSITING_ENABLED:
+        # Draw-only path: the layers cached for this exact interest region
+        # are reused when the batch changed nothing but effect parameters.
+        interest = (self.interest_start, region_height, work.width)
+        items = None
+        if (
+            COMPOSITING_ENABLED
+            and COMPOSITED_ANIMATIONS_ENABLED
+            and not work.tab_composite
+            and self.layers_interest == interest
+        ):
+            items = self._refresh_draw_list(state.display_list)
+
+        if items is None and COMPOSITING_ENABLED:
             items = self._composite_and_raster_layers(
                 state.display_list, document_interest_rect
             )
-        else:
+            self.layers_interest = interest
+        elif items is None:
             self.composited_layers = []
             self.draw_list = []
+            self.layers_interest = None
             items = [
                 item for item in state.display_list
                 if not (
@@ -7521,14 +7666,36 @@ class RasterWindowState:
 
         self.composited_layers = layers
         self.draw_list = draw_list
+        self._trace_layers("full", rastered)
+        return draw_list
+
+    def _refresh_draw_list(self, display_list):
+        """Draw-only path: reuse cached layers, update effect parameters.
+
+        Returns the refreshed draw list, or None when it cannot be reused.
+        """
+        self._trace_time("draw_list_refresh")
+        try:
+            draw_list = refresh_draw_list(
+                self.draw_list, latest_blends(display_list)
+            )
+        finally:
+            self._trace_stop("draw_list_refresh")
+        if draw_list is None:
+            return None
+        self.draw_list = draw_list
+        self._trace_layers("draw_only", 0)
+        return draw_list
+
+    def _trace_layers(self, mode, rastered):
         if self.measure is not None and hasattr(self.measure, "instant"):
             self.measure.instant("composited_layers", {
-                "layers": len(layers),
+                "mode": mode,
+                "layers": len(self.composited_layers),
                 "rastered": rastered,
-                "draw_list_roots": len(draw_list),
+                "draw_list_roots": len(self.draw_list),
                 "backend": self.backend,
             })
-        return draw_list
 
     def _draw_scrollbar(self, canvas, work):
         state = work.page_state
@@ -7723,6 +7890,7 @@ class GpuRasterWindowState(RasterWindowState):
         self.tab_surface = None
         self.composited_layers = []
         self.draw_list = []
+        self.layers_interest = None
 
 
 class RasterAndDrawRunner:
@@ -7934,6 +8102,9 @@ class BrowserWindow:
         self.needs_raster_and_draw = False
         self.needs_chrome_raster = False
         self.needs_tab_raster = False
+        # Only meaningful with needs_tab_raster: False means the tab can be
+        # redrawn from cached layers (composited animation frame).
+        self.needs_tab_composite = False
         self.discard_address_bar_edit_on_commit = False
 
         self.gl_context = None
@@ -8003,6 +8174,7 @@ class BrowserWindow:
         self.needs_raster_and_draw = True
         self.needs_chrome_raster = True
         self.needs_tab_raster = True
+        self.needs_tab_composite = True
 
     def initialize_gpu(self):
         self.gl_context = sdl2.SDL_GL_CreateContext(self.sdl_window)
@@ -8216,6 +8388,7 @@ class BrowserWindow:
             self.needs_raster_and_draw = True
             self.needs_chrome_raster = True
             self.needs_tab_raster = True
+            self.needs_tab_composite = True
 
     def schedule_tab_task(
         self,
@@ -8388,6 +8561,13 @@ class BrowserWindow:
                     self.needs_chrome_raster = True
                 if has_new_display_list:
                     self.needs_tab_raster = True
+                    # OR-merge: if the raster thread is busy, several commits
+                    # share one RasterWork, and one structural change among
+                    # them makes the whole batch take the full path. The
+                    # updates themselves are not merged: the newest display
+                    # list already carries every Blend's latest parameters.
+                    if data.composited_updates is None:
+                        self.needs_tab_composite = True
 
                 return True
         finally:
@@ -8400,6 +8580,7 @@ class BrowserWindow:
                 self.needs_chrome_raster = True
             if tab:
                 self.needs_tab_raster = True
+                self.needs_tab_composite = True
 
 
     def set_needs_animation_frame(self, tab):
@@ -8580,12 +8761,14 @@ class BrowserWindow:
 
             chrome_raster = self.needs_chrome_raster
             tab_raster = self.needs_tab_raster
+            tab_composite = self.needs_tab_composite
 
             # Consume only the batch that becomes this RasterWork. New commits/input
             # arriving after this point set fresh dirty bits for the next batch.
             self.needs_raster_and_draw = False
             self.needs_chrome_raster = False
             self.needs_tab_raster = False
+            self.needs_tab_composite = False
 
             if self.discard_address_bar_edit_on_commit:
                 self.chrome.discard_address_bar_edit()
@@ -8619,6 +8802,7 @@ class BrowserWindow:
                 chrome_bottom=self.chrome.bottom,
                 chrome_raster=chrome_raster,
                 tab_raster=tab_raster,
+                tab_composite=tab_composite,
                 estimator_tab=estimator_tab,
                 title=title,
             )
@@ -8636,6 +8820,9 @@ class BrowserWindow:
                 self.needs_chrome_raster or work.chrome_raster
             )
             self.needs_tab_raster = self.needs_tab_raster or work.tab_raster
+            self.needs_tab_composite = self.needs_tab_composite or (
+                work.tab_raster and work.tab_composite
+            )
             if work.estimator_tab is not None and self.pending_frame_raster_tab is None:
                 self.pending_frame_raster_tab = work.estimator_tab
 
