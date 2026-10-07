@@ -1661,6 +1661,7 @@ NAMED_COLORS = {
     "lightgreen": (144, 238, 144, 255),
     "orange": (255, 165, 0, 255),
     "orangered": (255, 69, 0, 255),
+    "purple": (128, 0, 128, 255),
     "transparent": (0, 0, 0, 0),
 }
 
