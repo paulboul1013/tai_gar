@@ -19,8 +19,10 @@ pip install dukpy PySDL2 skia-python PyOpenGL
 ### Quick Start
 
 ```bash
-python3 browser.py https://browser.engineering/
+python3 browser.py
 ```
+
+With no URL, the browser opens the Tai Gar start page (`about:home`). New tabs and new windows open https://browser.engineering/.
 
 Or open any URL:
 
@@ -59,8 +61,10 @@ pip install dukpy PySDL2 skia-python PyOpenGL
 ### 快速開始
 
 ```bash
-python3 browser.py https://browser.engineering/
+python3 browser.py
 ```
+
+不帶網址時，瀏覽器會開啟 Tai Gar 起始頁（`about:home`）。新分頁和新視窗會開啟 https://browser.engineering/。
 
 或開啟任意網址：
 

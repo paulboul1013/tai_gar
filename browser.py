@@ -34,6 +34,7 @@ from enum import IntEnum
 # key: character (e.g. "😀")
 # value: SkiaImageAsset object
 emoji_cache={}
+image_cache={}
 
 # socket cache
 #key:(scheme,host,port)
@@ -1575,6 +1576,23 @@ class SkiaImageAsset:
         return self._height
 
 
+def load_image_asset(file_path, target_width):
+    image = skia.Image.open(file_path)
+    if image is None:
+        return None
+
+    source_width = max(1, image.width())
+    source_height = max(1, image.height())
+    if target_width is None:
+        return SkiaImageAsset(image, source_width, source_height)
+
+    target_height = max(
+        1,
+        round(source_height * target_width / source_width),
+    )
+    return SkiaImageAsset(image, target_width, target_height)
+
+
 def get_emoji(char):
     if char in emoji_cache:
         return emoji_cache[char]
@@ -1590,23 +1608,9 @@ def get_emoji(char):
             continue
 
         try:
-            image = skia.Image.open(file_path)
-            if image is None:
+            asset = load_image_asset(file_path, 22)
+            if asset is None:
                 continue
-
-            target_width = 22
-            source_width = max(1, image.width())
-            source_height = max(1, image.height())
-            target_height = max(
-                1,
-                round(source_height * target_width / source_width),
-            )
-
-            asset = SkiaImageAsset(
-                image,
-                target_width,
-                target_height,
-            )
             emoji_cache[char] = asset
             return asset
         except Exception as e:
@@ -1614,6 +1618,31 @@ def get_emoji(char):
             return None
 
     return None
+
+
+def get_image(src, width):
+    key = (src, width)
+    if key in image_cache:
+        return image_cache[key]
+
+    # Only bundled browser assets load, so a web page cannot read
+    # arbitrary local files through <img>.
+    if (
+        not src
+        or "/" in src
+        or ":" in src
+        or ".." in src
+        or not os.path.isfile(src)
+    ):
+        return None
+
+    try:
+        asset = load_image_asset(src, width)
+    except Exception as e:
+        print(f"Error loading image {src}: {e}")
+        asset = None
+    image_cache[key] = asset
+    return asset
 
 
 NAMED_COLORS = {
@@ -4140,7 +4169,7 @@ class ButtonLayout:
             DrawOutline(rect, "black", 1),
         ]
 
-class EmojiLayout:
+class ImageLayout:
     def __init__(self,node,img,parent, previous, space_after):
         self.node=node
         self.img=img
@@ -4161,7 +4190,7 @@ class EmojiLayout:
         self.width=self.img.width()
         self.height=self.img.height()
 
-        # let emoji bottom close to baseline
+        # let image bottom close to baseline
         self.ascent=self.height
         self.descent=0
 
@@ -4621,6 +4650,10 @@ class BlockLayout: # layout for block level elements
                 self.input(tree)
                 return
 
+            if tree.tag == "img":
+                self.image(tree)
+                return
+
             self.open_tag(tree.tag)
 
             for child in tree.children:
@@ -4757,18 +4790,7 @@ class BlockLayout: # layout for block level elements
             img=get_emoji(word)
         
         if img:
-            w=img.width()
-            
-            if self.cursor_x+w>self.width and self.children[-1].children:
-                self.new_line()
-
-            line=self.children[-1]
-            previous=line.children[-1] if line.children else None
-
-            emoji=EmojiLayout(node,img,line,previous,space_w)
-            line.children.append(emoji)
-
-            self.cursor_x+=w+space_w
+            self.append_image(node,img,space_w)
             return
         
         if self.cursor_x+w > self.width and self.children[-1].children:
@@ -4782,6 +4804,28 @@ class BlockLayout: # layout for block level elements
         line.children.append(text)
 
         self.cursor_x+=w+space_w
+
+    def append_image(self,node,img,space_after):
+        w=img.width()
+
+        if self.cursor_x+w>self.width and self.children[-1].children:
+            self.new_line()
+
+        line=self.children[-1]
+        previous=line.children[-1] if line.children else None
+
+        line.children.append(ImageLayout(node,img,line,previous,space_after))
+
+        self.cursor_x+=w+space_after
+
+    def image(self,node):
+        width=node.attributes.get("width")
+        img=get_image(
+            node.attributes.get("src",""),
+            int(width) if width and width.isdigit() else None,
+        )
+        if img:
+            self.append_image(node,img,self.font_helper(node).measureText(" "))
 
     def input(self,node):
         if node.tag=="button":
@@ -6380,11 +6424,14 @@ class Tab:
         self.task_runner.clear_tasks()
 
     def is_internal_page(self,url):
-        return url.scheme=="about" and url.path=="bookmarks"
+        return url.scheme=="about" and url.path in ["bookmarks","home"]
 
     def request_internal_page(self,url):
         if url.path=="bookmarks":
             return self.bookmarks_page()
+        if url.path=="home":
+            with open("home.html", encoding="utf-8") as f:
+                return f.read()
         
         return ""
 
@@ -9285,7 +9332,7 @@ class BrowserWindow:
 
     def current_url_string(self):
         url = self.active_url_string()
-        if not url or url in ["about:blank", "about:bookmarks"]:
+        if not url or url in ["about:blank", "about:bookmarks", "about:home"]:
             return None
         return url
 
@@ -10997,7 +11044,7 @@ if __name__ == "__main__":
     if args:
         url = URL(args[0])
     else:
-        url = URL("https://browser.engineering/")
+        url = URL("about:home")
 
     app = BrowserApp()
     try:

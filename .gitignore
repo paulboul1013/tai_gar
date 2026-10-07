@@ -3,3 +3,4 @@ __pycache__
 *.png
 .verify-runs/
 !.claude/skills/verify/fixtures/*.html
+!home.html
