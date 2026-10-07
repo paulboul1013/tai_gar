@@ -8,6 +8,7 @@ from urllib.parse import unquote, quote_plus, quote
 from html import unescape,escape
 import webbrowser
 import os
+import re
 import math
 import copy
 from gpu_evidence import load_config, EvidenceRecorder, classify_renderer
@@ -10419,7 +10420,8 @@ class HTMLParser:
 
 class CSSParser:
     def __init__(self,s):
-        self.s=s
+        # An unterminated comment runs to the end of the input.
+        self.s=re.sub(r"/\*.*?(\*/|$)"," ",s,flags=re.DOTALL)
         self.i=0
 
     def whitespace(self):
