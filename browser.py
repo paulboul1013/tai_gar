@@ -10428,9 +10428,11 @@ class HTMLParser:
 class MediaQuery:
     """An @media query list, matched against the viewport width.
 
-    Supports media types all/screen and (min-width|max-width: Npx) joined by
-    "and"; a comma means any query may match. A query using anything else
-    (print, em units, prefers-color-scheme, not) never matches.
+    Supports media types all/screen, (min-width|max-width: Npx), and
+    (prefers-color-scheme: light), joined by "and"; a comma means any query
+    may match. Tai Gar has no dark mode, so the light scheme always matches.
+    A query using anything else (print, em units, the dark scheme, not)
+    never matches.
     """
 
     def __init__(self,text):
@@ -10441,7 +10443,8 @@ class MediaQuery:
         conditions=[]
         for part in query.casefold().split(" and "):
             part=part.strip()
-            if part in ["","all","screen","only screen"]:
+            if part in ["","all","screen","only screen"] or \
+                    re.fullmatch(r"\(\s*prefers-color-scheme\s*:\s*light\s*\)",part):
                 continue
 
             match=re.fullmatch(r"\(\s*(min|max)-width\s*:\s*(\d+(?:\.\d+)?)px\s*\)",part)

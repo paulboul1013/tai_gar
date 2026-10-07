@@ -50,6 +50,13 @@ class MediaQueryTests(unittest.TestCase):
         )
         self.assertEqual(font_size(css, "<p>x</p>", "p", 400), "16px")
 
+    def test_light_color_scheme_matches(self):
+        css = (
+            "@media (prefers-color-scheme: light) { p { font-size: 30px } }"
+            "@media (prefers-color-scheme: dark) { p { font-size: 31px } }"
+        )
+        self.assertEqual(font_size(css, "<p>x</p>", "p", 800), "30px")
+
     def test_rules_after_media_block_still_parse(self):
         rules = browser.CSSParser(BOOK_CSS).parse()
         self.assertEqual(rules[-1][1], {"color": ("red", False)})
