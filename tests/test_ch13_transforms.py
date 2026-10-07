@@ -8,6 +8,7 @@ import numpy as np
 import skia
 
 import browser
+import test_ch13_composited_animations as animations
 from test_ch13_compositing import (
     draw_list_items, paint_html, raster_composited, raster_direct, rect, render_page,
 )
@@ -515,6 +516,68 @@ class TabPageHeightTest(unittest.TestCase):
                 with patch.object(browser, "COMPOSITING_ENABLED", compositing):
                     pixels = np.frombuffer(state.render(work).pixels, np.uint8).astype(int)
                 self.assertEqual(page_pixel(pixels, 400, 330), GREEN_RGBA)
+
+
+STATIC = '<div style="background-color:lightblue">static</div>'
+ANIMATED = ('<div id="box" style="transition: opacity 2s; opacity: 1;'
+            'background-color:orange{}">box <b>text</b></div>')
+
+
+class MatchesUncompositedRaster:
+    def test_draw_only_pixels_match_uncomposited_raster(self):
+        self.start()
+        middle = self.frame(101.0)
+        draw_only = self.raster(middle, tab_composite=False)
+        self.assertEqual(self.modes()[-1], "draw_only")
+        with patch.object(browser, "COMPOSITING_ENABLED", False):
+            direct = self.raster(middle, tab_composite=True,
+                                 state=browser.RasterWindowState())
+        self.assertLessEqual(np.abs(draw_only - direct).max(), 2)
+
+
+class AnimationUnderTransform(MatchesUncompositedRaster, animations.DrawOnlyRaster):
+    """Every draw-only test, with the animated box inside a translated parent."""
+    PAGE = (STATIC + '<div style="transform:translate(30px,0px)">'
+            + ANIMATED.format("") + "</div>")
+    MERGING_PAGE = '<div style="background-color:pink">second</div>' + PAGE
+
+    def test_translated_parent_stays_in_the_draw_list(self):
+        self.start()
+        drawn = list(draw_list_items(self.state.draw_list))
+        self.assertTrue(any(isinstance(item, browser.Transform) for item in drawn))
+
+
+class AnimationOnTranslatedElement(MatchesUncompositedRaster, animations.DrawOnlyRaster):
+    """Every draw-only test, with the animated box itself translated."""
+    MOVE = "; transform:translate(30px,0px)"
+    PAGE = STATIC + ANIMATED.format(MOVE)
+    MERGING_PAGE = '<div style="background-color:pink">second</div>' + PAGE
+
+    def start(self):
+        self.set_style("transition: opacity 2s; opacity: 0.1; background-color:orange"
+                       + self.MOVE)
+        first = self.frame(100.0)
+        self.raster(first, tab_composite=True)
+
+
+class BookExampleAnimation(MatchesUncompositedRaster, animations.DrawOnlyRaster):
+    """The book's example: green is translated over part of the fading box."""
+    PAGE = (STATIC + ANIMATED.format("")
+            + '<div style="background-color:green;transform:translate(-500px,-18px)">'
+              "cover</div>")
+    MERGING_PAGE = '<div style="background-color:pink">second</div>' + PAGE
+
+    def test_green_stays_on_top_through_the_animation(self):
+        self.start()
+        for now in (100.5, 101.0, 101.5, 102.0):
+            with self.subTest(now=now):
+                frame = self.frame(now)
+                pixels = self.raster(frame, tab_composite=False)
+                self.assertEqual(self.modes()[-1], "draw_only")
+                self.assertEqual(page_pixel(pixels, 100, 45), GREEN_RGBA)
+                full = self.raster(frame, tab_composite=True,
+                                   state=browser.RasterWindowState())
+                self.assertEqual(np.abs(pixels - full).max(), 0)
 
 
 if __name__ == "__main__":
