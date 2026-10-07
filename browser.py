@@ -3668,6 +3668,10 @@ class DrawImage(PaintCommand):
     def execute(self, canvas):
         canvas.drawImageRect(self.img.image, self.rect)
 
+def is_display_none(node):
+    return isinstance(node,Element) and node.style.get("display")=="none"
+
+
 class DocumentLayout:
     def __init__(self,node,viewport_width=None):#build root of layout tree
         self.node=node
@@ -4354,6 +4358,8 @@ class BlockLayout: # layout for block level elements
                 for child in node.children:
                     if isinstance(child, Element) and child.tag == "head":
                         continue
+                    if is_display_none(child):
+                        continue
                     all_children.append(child)
 
         i = 0
@@ -4636,7 +4642,7 @@ class BlockLayout: # layout for block level elements
         
         else:
             # if is script tag,just skip not render that child nodes(it's js code)
-            if tree.tag in ["script","style"]:
+            if tree.tag in ["script","style"] or is_display_none(tree):
                 return
 
             if tree.tag == "br":
