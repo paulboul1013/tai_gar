@@ -5038,7 +5038,7 @@ class DescendantSelector:
         return selector_index < 0
 
 def cascade_priority(rule):
-    selector, body=rule
+    selector, body, media=rule
     return selector.priority
 
 RUNTIME_PATH = os.path.join(
@@ -10418,6 +10418,42 @@ class HTMLParser:
         return tag,attributes  
 
 
+class MediaQuery:
+    """An @media query list, matched against the viewport width.
+
+    Supports media types all/screen and (min-width|max-width: Npx) joined by
+    "and"; a comma means any query may match. A query using anything else
+    (print, em units, prefers-color-scheme, not) never matches.
+    """
+
+    def __init__(self,text):
+        self.queries=[self.parse_query(query) for query in text.split(",")]
+
+    @staticmethod
+    def parse_query(query):
+        conditions=[]
+        for part in query.casefold().split(" and "):
+            part=part.strip()
+            if part in ["","all","screen","only screen"]:
+                continue
+
+            match=re.fullmatch(r"\(\s*(min|max)-width\s*:\s*(\d+(?:\.\d+)?)px\s*\)",part)
+            if match is None:
+                return None
+            conditions.append((match.group(1),float(match.group(2))))
+
+        return conditions
+
+    def matches(self,width):
+        return any(
+            conditions is not None and all(
+                width>=px if kind=="min" else width<=px
+                for kind,px in conditions
+            )
+            for conditions in self.queries
+        )
+
+
 class CSSParser:
     def __init__(self,s):
         # An unterminated comment runs to the end of the input.
@@ -10575,6 +10611,37 @@ class CSSParser:
 
         return None
 
+    def at_rule(self,media):
+        self.literal("@")
+        name=self.identifier().casefold()
+        start=self.i
+        why=self.ignore_until(["{",";"])
+        if why is None:
+            return []
+
+        prelude=self.s[start:self.i]
+        self.literal(why)
+        if why==";":
+            return []
+
+        if name=="media" and media is None:
+            rules=self.parse(MediaQuery(prelude))
+            self.literal("}")
+            return rules
+
+        self.skip_block()
+        return []
+
+    # skip the rest of a block whose "{" was already read, nested blocks included
+    def skip_block(self):
+        depth=1
+        while self.i < len(self.s) and depth > 0:
+            if self.s[self.i]=="{":
+                depth+=1
+            elif self.s[self.i]=="}":
+                depth-=1
+            self.i+=1
+
     def body(self):
         pairs={}
 
@@ -10715,17 +10782,28 @@ class CSSParser:
         else:
             return DescendantSelector(selectors)
 
-    def parse(self):
+    # media is the enclosing @media query; its block ends at the next "}"
+    def parse(self,media=None):
         rules=[]
         while self.i < len(self.s):
             try:
                 self.whitespace()
+                if self.i >= len(self.s):
+                    break
+
+                if media is not None and self.s[self.i]=="}":
+                    break
+
+                if self.s[self.i]=="@":
+                    rules.extend(self.at_rule(media))
+                    continue
+
                 selector=self.selector()
                 self.literal("{")
                 self.whitespace()
                 body=self.body()
                 self.literal("}")
-                rules.append((selector,body))
+                rules.append((selector,body,media))
             except Exception:
                 why=self.ignore_until(["}"])
                 if why=="}":
@@ -10910,8 +10988,13 @@ def style(node,rules,tab=None):
 
     # If is element, picked by CSS selector
     if isinstance(node,Element):
+        viewport_width=tab.width if tab is not None else WIDTH
+
         # first deal with stylesheet rules
-        for selector, body in rules:
+        for selector, body, media in rules:
+            if media is not None and not media.matches(viewport_width):
+                continue
+
             if not selector.matches(node):
                 continue
 

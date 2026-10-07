@@ -24,7 +24,7 @@ class CSSCommentTests(unittest.TestCase):
 
     def test_rule_after_comment_is_kept(self):
         rules = browser.CSSParser("/* note */ p { color: red; }").parse()
-        self.assertEqual([body for _, body in rules], [{"color": ("red", False)}])
+        self.assertEqual([body for _, body, _ in rules], [{"color": ("red", False)}])
 
     def test_comments_inside_rules_are_ignored(self):
         rules = browser.CSSParser(
@@ -37,7 +37,7 @@ class CSSCommentTests(unittest.TestCase):
 
     def test_unterminated_comment_runs_to_end(self):
         rules = browser.CSSParser("p { color: red } /* open q { color: blue }").parse()
-        self.assertEqual([body for _, body in rules], [{"color": ("red", False)}])
+        self.assertEqual([body for _, body, _ in rules], [{"color": ("red", False)}])
 
 
 if __name__ == "__main__":
