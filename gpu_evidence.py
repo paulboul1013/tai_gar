@@ -47,6 +47,9 @@ class RenderConfig:
     evidence_path: str | None
     run_id: str
     requested: dict
+    # True until gpu_probe.resolve_backend picks GPU or CPU for an unset backend.
+    auto: bool = False
+    selection: dict | None = None
 
     @classmethod
     def from_env(cls, env=None):
@@ -60,8 +63,12 @@ class RenderConfig:
         evidence_path = requested["evidence_path"] or None
         run_id = requested["run_id"] or str(uuid.uuid4())
         try:
-            backend = cls._mode(requested, "backend", "cpu", ("cpu", "gpu"))
+            backend = cls._mode(requested, "backend", "auto", ("auto", "cpu", "gpu"))
             raster_mode = cls._mode(requested, "raster_mode", "threaded", ("sync", "threaded"))
+            # GPU raster dictates sync mode, so any explicit raster mode keeps the CPU backend.
+            auto = backend == "auto" and requested["raster_mode"] is None
+            if backend == "auto":
+                backend = "cpu"
             raw_strict = requested["strict"]
             if raw_strict is None:
                 strict = False
@@ -84,7 +91,7 @@ class RenderConfig:
                 except OSError as write_error:
                     error.add_note(f"Unable to save configuration evidence: {write_error}")
             raise
-        return cls(backend, raster_mode, strict, evidence_path, run_id, requested)
+        return cls(backend, raster_mode, strict, evidence_path, run_id, requested, auto)
 
     @staticmethod
     def _mode(requested, field, default, allowed):
@@ -212,7 +219,7 @@ class EvidenceRecorder:
                          "machine": platform.machine()},
             "config": {"requested": dict(config.requested),
                        "actual": {"backend": config.backend, "raster_mode": config.raster_mode},
-                       "strict": config.strict},
+                       "strict": config.strict, "selection": config.selection},
             "windows": {}, "frames": [], "events": [], "failures": [],
             "gates": {gate: "PENDING" for gate in GATE_NAMES},
             "gl_path_status": "PENDING", "hardware_status": "PENDING", "performance_status": "PENDING",

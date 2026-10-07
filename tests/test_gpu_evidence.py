@@ -12,14 +12,23 @@ from gpu_evidence import ConfigError, EvidenceRecorder, RenderConfig, classify_r
 
 
 class RenderConfigTests(unittest.TestCase):
-    def test_unset_configuration_defaults_to_cpu_threaded(self):
+    def test_unset_configuration_is_automatic_with_cpu_threaded_until_probed(self):
         config = RenderConfig.from_env({})
+        self.assertTrue(config.auto)
         self.assertEqual((config.backend, config.raster_mode), ("cpu", "threaded"))
         self.assertFalse(config.strict)
         self.assertIsNone(config.evidence_path)
         self.assertIsNone(config.requested["backend"])
         self.assertIsNone(config.requested["raster_mode"])
         self.assertTrue(config.run_id)
+
+    def test_explicit_backend_or_raster_mode_is_not_automatic(self):
+        for env in ({"BROWSER_RENDER_BACKEND": "cpu"},
+                    {"BROWSER_RENDER_BACKEND": "gpu", "BROWSER_RASTER_MODE": "sync"},
+                    {"BROWSER_RASTER_MODE": "threaded"},
+                    {"BROWSER_RENDER_BACKEND": "auto", "BROWSER_RASTER_MODE": "sync"}):
+            with self.subTest(env=env):
+                self.assertFalse(RenderConfig.from_env(env).auto)
 
     def test_raw_requested_values_survive_normalization(self):
         config = RenderConfig.from_env({

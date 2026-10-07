@@ -11,8 +11,13 @@ import os
 import math
 import copy
 from gpu_evidence import load_config, EvidenceRecorder, classify_renderer
+import gpu_probe
 
 RENDER_CONFIG = load_config(os.environ)
+_PENDING_GPU_PROBES = (
+    gpu_probe.PendingProbes(os.environ)
+    if __name__ == "__main__" and RENDER_CONFIG.auto else None
+)
 
 import dukpy
 from datetime import datetime, timezone
@@ -377,6 +382,10 @@ if FRAME_REARM_MODE not in ["browser_loop", "direct"]:
 #     Exercise 12-8 implementation. Raster + Skia composition run on one
 #     process-wide Raster-and-draw Thread; Browser Thread only prepares snapshots
 #     and performs SDL presentation.
+if _PENDING_GPU_PROBES is not None:
+    RENDER_CONFIG = gpu_probe.resolve_backend(
+        RENDER_CONFIG, _PENDING_GPU_PROBES.results(), os.environ)
+    print(gpu_probe.describe_selection(RENDER_CONFIG.selection))
 RASTER_EXECUTION_MODE = RENDER_CONFIG.raster_mode
 RENDER_BACKEND = RENDER_CONFIG.backend
 
@@ -8397,16 +8406,7 @@ class BrowserWindow:
         try:
             if RENDER_BACKEND == "gpu":
                 get_opengl_gl()
-                attributes = {
-                    "CONTEXT_MAJOR_VERSION": 3, "CONTEXT_MINOR_VERSION": 3,
-                    "CONTEXT_PROFILE_MASK": sdl2.SDL_GL_CONTEXT_PROFILE_CORE,
-                    "DOUBLEBUFFER": 1, "RED_SIZE": 8, "GREEN_SIZE": 8,
-                    "BLUE_SIZE": 8, "ALPHA_SIZE": 8, "STENCIL_SIZE": 8,
-                    "MULTISAMPLEBUFFERS": 0, "MULTISAMPLESAMPLES": 0,
-                }
-                for name, value in attributes.items():
-                    if sdl2.SDL_GL_SetAttribute(getattr(sdl2, "SDL_GL_" + name), value) != 0:
-                        raise RuntimeError("SDL_GL_SetAttribute failed: " + name)
+                gpu_probe.set_gl_attributes(sdl2)
                 flags |= sdl2.SDL_WINDOW_OPENGL | sdl2.SDL_WINDOW_ALLOW_HIGHDPI
             self.sdl_window = sdl2.SDL_CreateWindow(
                 b"Tai Gar", sdl2.SDL_WINDOWPOS_CENTERED, sdl2.SDL_WINDOWPOS_CENTERED,
